@@ -1,0 +1,3 @@
+# Clippy-настройки MDWF (спец. §2.13.2 п.2, §2.13.1).
+# В CI: cargo clippy --workspace -- -D warnings -D clippy::pedantic.
+msrv = "1.75"

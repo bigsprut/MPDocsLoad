@@ -1,0 +1,20 @@
+[package]
+name = "mdwf-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "MDWF scheduler: cron + очередь задач (гл. 08)"
+
+[dependencies]
+mdwf-core.workspace = true
+mdwf-storage.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true

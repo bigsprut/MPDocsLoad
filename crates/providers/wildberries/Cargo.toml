@@ -1,0 +1,24 @@
+[package]
+name = "mdwf-providers-wildberries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "MDWF provider: Wildberries OpenAPI (гл. 12)"
+
+[dependencies]
+mdwf-core.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+base64 = "0.22"

@@ -1,0 +1,115 @@
+# =============================================================================
+# Marketplace Downloader Framework (MDWF) — корневой manifest workspace.
+# Спецификация v1.4, гл. 03 «Структура проекта», гл. 17 «Порядок разработки».
+# =============================================================================
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/storage",
+    "crates/secrets",
+    "crates/scheduler",
+    "crates/providers/ozon",
+    "crates/providers/wildberries",
+    "crates/cli",
+    "crates/gui",
+    "crates/api",
+]
+default-members = ["crates/gui", "crates/cli"]
+
+# -----------------------------------------------------------------------------
+# Общие зависимости для всех крейтов (см. §2.4.1).
+# Подкрейты ссылаются на них через `dep.workspace = true`.
+#
+# ВАЖНО по версиям gtk-rs (исправление опечатки спеки §2.4.1):
+#   gtk4 = "0.9" требует glib/gio = "0.20" (в спеке указано 0.19 — несовместимо).
+# -----------------------------------------------------------------------------
+[workspace.package]
+version = "1.4.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://example.invalid/mdwf"
+authors = ["MDWF Team"]
+
+[workspace.dependencies]
+# --- async runtime / базовые утилиты ---
+tokio = { version = "1.38", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# --- ошибки ---
+thiserror = "1.0"
+anyhow = "1.0"
+
+# --- сериализация ---
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# --- HTTP / сеть ---
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+
+# --- логирование ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# --- время ---
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.9"
+
+# --- синхронизация / concurrency ---
+parking_lot = "0.12"
+arc-swap = "1.7"
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# --- крипто / хеши ---
+sha2 = "0.10"
+
+# --- БД ---
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# --- секреты ---
+keyring = "2.3"
+
+# --- CLI ---
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# --- отмена задач ---
+tokio-util-cancellation = "0.1"
+
+# --- GUI (GTK4 + libadwaita), ADR-002 ---
+gtk4 = "0.9"
+libadwaita = { version = "0.7", features = ["v1_5"] }
+glib = "0.20"
+gio = "0.20"
+cairo = "0.18"
+
+# --- REST API (опциональный крейт mdwf-api) ---
+axum = { version = "0.7" }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace"] }
+
+# --- тестирование (mock HTTP) ---
+wiremock = "0.6"
+tokio-test = "0.4"
+
+# --- внутренние крейты ---
+mdwf-core = { path = "crates/core", version = "1.4.0" }
+mdwf-storage = { path = "crates/storage", version = "1.4.0" }
+mdwf-secrets = { path = "crates/secrets", version = "1.4.0" }
+mdwf-scheduler = { path = "crates/scheduler", version = "1.4.0" }
+mdwf-providers-ozon = { path = "crates/providers/ozon", version = "1.4.0" }
+mdwf-providers-wildberries = { path = "crates/providers/wildberries", version = "1.4.0" }
+mdwf-api = { path = "crates/api", version = "1.4.0" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true

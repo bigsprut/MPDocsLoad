@@ -1,0 +1,28 @@
+[package]
+name = "mdwf-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "MDWF CLI (гл. 05)"
+
+[[bin]]
+name = "mdwf"
+path = "src/main.rs"
+
+[dependencies]
+mdwf-core.workspace = true
+mdwf-storage.workspace = true
+mdwf-secrets.workspace = true
+mdwf-scheduler.workspace = true
+mdwf-providers-ozon.workspace = true
+mdwf-providers-wildberries.workspace = true
+clap.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true

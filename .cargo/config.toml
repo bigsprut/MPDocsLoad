@@ -1,0 +1,11 @@
+# Конфигурация сборки MDWF.
+# PKG_CONFIG_PATH зафиксирован здесь, чтобы gtk-rs находил GTK4/libadwaita
+# из MSYS2/MinGW без ручного экспорта переменных перед каждым `cargo`.
+# PATH (для pkg-config.exe / gtk DLL) всё равно нужно настраивать через
+# scripts/env.sh или scripts/env.ps1 — см. README.
+[env]
+PKG_CONFIG_PATH = "D:/msys64/mingw64/lib/pkgconfig"
+
+[build]
+# Дублируем пин из rust-toolchain.toml для надёжности (CI, IDE).
+target = "x86_64-pc-windows-gnu"

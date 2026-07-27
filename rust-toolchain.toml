@@ -1,0 +1,7 @@
+# MDWF собирается через gnu-тулчейн: нативные GTK4/libadwaita библиотеки
+# установлены через MSYS2/MinGW (D:\msys64\mingw64) и линкуются только с GNU.
+# См. ADR-002 (GTK4 + libadwaita) и scripts/env.* для подготовки окружения.
+[toolchain]
+channel = "stable-x86_64-pc-windows-gnu"
+components = ["rustfmt", "clippy"]
+profile = "default"
