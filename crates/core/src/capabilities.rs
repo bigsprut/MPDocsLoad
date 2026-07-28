@@ -4,6 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::params::ReportParameter;
+use crate::report::{AcquisitionMode, ReportCategory};
+use crate::downloader::DownloaderKind;
+
 /// Типы авторизации, поддерживаемые провайдерами (спец. §2.3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthType {
@@ -38,13 +42,15 @@ pub struct AuthField {
 
 /// Описание отчёта, который провайдер умеет выгружать.
 ///
-/// Полное наполнение (`AcquisitionMode`, `downloader_kind`, parameters) будет
-/// добавлено на ЭТАПЕ 2 вместе с трейтом `Report`.
+/// Полностью описывает отчёт для построения UI до инстанцирования `Report`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportDescriptor {
     pub type_id: String,
     pub display_name: String,
-    pub category: String,
+    pub category: ReportCategory,
+    pub acquisition_mode: AcquisitionMode,
+    pub downloader_kind: DownloaderKind,
+    pub parameters: Vec<ReportParameter>,
 }
 
 /// Полное самоописание провайдера (спец. §2.3.2 — `Capabilities`).
