@@ -105,11 +105,14 @@ impl MarketplaceProvider for OzonProvider {
 
     async fn health_check(&self, auth: &dyn Authenticator) -> CoreResult<HealthStatus> {
         debug!("Ozon health check via /v1/finance/balance");
-        match self
-            .client
-            .post("/v1/finance/balance", &json!({}), auth)
-            .await
-        {
+        // Дока: /v1/finance/balance требует date_from + date_to (макс. 30 дней).
+        let today = Utc::now();
+        let month_ago = today - chrono::Duration::days(29);
+        let body = json!({
+            "date_from": month_ago.format("%Y-%m-%d").to_string(),
+            "date_to": today.format("%Y-%m-%d").to_string(),
+        });
+        match self.client.post("/v1/finance/balance", &body, auth).await {
             Ok(_) => {
                 // Проверяем срок действия ключа.
                 let days = days_until_expiry(auth.expires_at()).unwrap_or(i64::MAX);
