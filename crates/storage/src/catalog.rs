@@ -252,6 +252,132 @@ impl Catalog {
             .map_err(map_sqlite_err)?;
         Ok(())
     }
+
+    // ----- Расписания (schedules) для планировщика -----
+
+    /// Создаёт или обновляет расписание. Возвращает id.
+    pub fn upsert_schedule(&self, s: &NewSchedule) -> CoreResult<i64> {
+        let reports_json = serde_json::to_string(&s.reports).unwrap_or_else(|_| "[]".into());
+        let conn = self.conn.lock();
+        if let Some(id) = s.id {
+            conn.execute(
+                "UPDATE schedules SET name=?1, profile_id=?2, reports=?3, cron_expr=?4,
+                 period_offset=?5, params=?6, enabled=?7, next_run_at=?8 WHERE id=?9",
+                params![s.name, s.profile_id, reports_json, s.cron_expr, s.period_offset, s.params, s.enabled, s.next_run_at_ts, id],
+            )
+            .map_err(map_sqlite_err)?;
+            Ok(id)
+        } else {
+            conn.execute(
+                "INSERT INTO schedules (name, profile_id, reports, cron_expr, period_offset, params, enabled, next_run_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![s.name, s.profile_id, reports_json, s.cron_expr, s.period_offset, s.params, s.enabled, s.next_run_at_ts],
+            )
+            .map_err(map_sqlite_err)?;
+            Ok(conn.last_insert_rowid())
+        }
+    }
+
+    /// Список всех расписаний.
+    pub fn list_schedules(&self) -> CoreResult<Vec<ScheduleRecord>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT id, name, profile_id, reports, cron_expr, period_offset, params, enabled, next_run_at, last_run_at, last_run_status FROM schedules ORDER BY name")
+            .map_err(map_sqlite_err)?;
+        let rows = stmt
+            .query_map([], row_to_schedule)
+            .map_err(map_sqlite_err)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(map_sqlite_err)?);
+        }
+        Ok(out)
+    }
+
+    /// Расписание по имени.
+    pub fn get_schedule(&self, name: &str) -> CoreResult<Option<ScheduleRecord>> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT id, name, profile_id, reports, cron_expr, period_offset, params, enabled, next_run_at, last_run_at, last_run_status FROM schedules WHERE name=?1",
+            params![name],
+            row_to_schedule,
+        )
+        .optional()
+        .map_err(map_sqlite_err)
+    }
+
+    /// Удаляет расписание.
+    pub fn delete_schedule(&self, name: &str) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM schedules WHERE name=?1", params![name])
+            .map_err(map_sqlite_err)?;
+        Ok(())
+    }
+
+    /// Обновляет статус последнего запуска и следующий запуск.
+    pub fn update_schedule_run(
+        &self,
+        id: i64,
+        last_run_ts: Option<String>,
+        status: &str,
+        next_run_ts: Option<String>,
+    ) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE schedules SET last_run_at=?1, last_run_status=?2, next_run_at=?3 WHERE id=?4",
+            params![last_run_ts, status, next_run_ts, id],
+        )
+        .map_err(map_sqlite_err)?;
+        Ok(())
+    }
+}
+
+/// Новое/обновляемое расписание.
+#[derive(Debug, Clone)]
+pub struct NewSchedule {
+    pub id: Option<i64>,
+    pub name: String,
+    pub profile_id: i64,
+    pub reports: Vec<String>,
+    pub cron_expr: String,
+    pub period_offset: i32,
+    pub params: Option<String>,
+    pub enabled: bool,
+    pub next_run_at_ts: Option<String>,
+}
+
+/// Запись расписания из БД.
+#[derive(Debug, Clone)]
+pub struct ScheduleRecord {
+    pub id: i64,
+    pub name: String,
+    pub profile_id: i64,
+    pub reports: Vec<String>,
+    pub cron_expr: String,
+    pub period_offset: i32,
+    pub params: Option<String>,
+    pub enabled: bool,
+    pub next_run_at: Option<String>,
+    pub last_run_at: Option<String>,
+    pub last_run_status: Option<String>,
+}
+
+fn row_to_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScheduleRecord> {
+    let reports_json: String = row.get(3)?;
+    let reports: Vec<String> = serde_json::from_str(&reports_json).unwrap_or_default();
+    Ok(ScheduleRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        profile_id: row.get(2)?,
+        reports,
+        cron_expr: row.get(4)?,
+        period_offset: row.get(5)?,
+        params: row.get(6)?,
+        enabled: row.get(7)?,
+        next_run_at: row.get(8)?,
+        last_run_at: row.get(9)?,
+        last_run_status: row.get(10)?,
+    })
 }
 
 /// Новая запись о скачивании (для `record_download`).

@@ -8,6 +8,7 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::needless_pass_by_value)]
 
 pub mod catalog;
 pub mod dedup;
@@ -15,7 +16,7 @@ pub mod error;
 pub mod file_store;
 pub mod naming;
 
-pub use catalog::{Catalog, DownloadRecord, NewDownload, SavedFilter, SCHEMA_VERSION};
+pub use catalog::{Catalog, DownloadRecord, NewDownload, NewSchedule, SavedFilter, ScheduleRecord, SCHEMA_VERSION};
 pub use dedup::sha256_hex;
 pub use error::{StorageError, StorageResult};
 pub use file_store::{FileStore, FileStoreConfig, FolderStructure};
