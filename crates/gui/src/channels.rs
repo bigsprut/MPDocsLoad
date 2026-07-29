@@ -145,6 +145,8 @@ pub struct ReportInfo {
     pub display_name: String,
     pub category: String,
     pub is_browsable: bool,
+    /// Какому провайдеру принадлежит отчёт (чтобы не угадывать из префикса type_id).
+    pub provider_id: String,
 }
 
 /// Отправитель команд в tokio-сторону (клонируется для виджетов).

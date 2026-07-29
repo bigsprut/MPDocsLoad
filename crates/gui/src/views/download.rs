@@ -1,9 +1,9 @@
-//! Вкладка «Загрузка» — ядро интерактивного цикла:
-//! фильтры → «Список документов» → выбор чекбоксами → «Скачать выбранные».
+//! Вкладка «Загрузка» — самодостаточный интерактивный цикл:
+//! провайдер → профиль → отчёт → фильтры → список/генерация → скачивание.
 //!
 //! Поддерживает оба режима (спец. AcquisitionMode):
-//!  * Browsable: список → выбор → скачивание выбранных.
-//!  * Period: период → генерация отчёта.
+//!  * Browsable: список → выбор чекбоксами → «Скачать выбранные».
+//!  * Period: период → «Скачать по периоду».
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,43 +11,77 @@ use std::rc::Rc;
 use chrono::NaiveDate;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, CheckButton, ComboBoxText, Entry, Label, ListBox, Orientation, ScrolledWindow,
+    Box as GtkBox, Button, CheckButton, ComboBoxText, Entry, Label, ListBox, Orientation,
+    PolicyType, ScrolledWindow,
 };
 
-use mdwf_core::{DocumentEntry, DocumentFilter, DownloadedFile, ReportParams};
+use mdwf_core::{DocumentEntry, DocumentFilter, DownloadedFile, Profile, ReportParams};
 
-use crate::channels::{CommandSender, ProviderInfo};
+use crate::channels::{CommandSender, ReportInfo};
 
 thread_local! {
-    static REPORT_TYPE: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    static PROVIDERS: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+    static PROFILES: Rc<RefCell<Vec<Profile>>> = Rc::new(RefCell::new(Vec::new()));
+    static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
     static DOCS: Rc<RefCell<Vec<DocumentEntry>>> = Rc::new(RefCell::new(Vec::new()));
-    static LIST_WIDGET: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
-    static RESULT_WIDGET: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     static CHECKS: Rc<RefCell<Vec<(String, CheckButton)>>> = Rc::new(RefCell::new(Vec::new()));
-    static PROFILE_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
+    // Виджеты (сохраняем после build для обновления из событий).
+    static W_PROVIDER: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
+    static W_PROFILE: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
+    static W_REPORT: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
+    static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
+    static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
+    static W_MODE_HINT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
+    static W_LIST_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
+    static W_PERIOD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
+    static W_DOWNLOAD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
+    static W_CATEGORY: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
 }
 
-/// Хук: провайдеры загружены (пока no-op; combo профилей обновляется отдельно).
-pub fn on_providers_loaded(_providers: &[ProviderInfo]) {}
-
-/// Хук: профили загружены — обновляем combo выбора профиля.
-pub fn on_profiles_loaded(profiles: &[mdwf_core::Profile]) {
-    PROFILE_COMBO.with(|pc| {
-        if let Some(combo) = pc.borrow().as_ref() {
+/// Хук: провайдеры загружены.
+pub fn on_providers_loaded(providers: &[crate::channels::ProviderInfo]) {
+    PROVIDERS.with(|p| {
+        *p.borrow_mut() = providers
+            .iter()
+            .map(|pr| (pr.id.clone(), pr.display_name.clone()))
+            .collect();
+    });
+    W_PROVIDER.with(|w| {
+        if let Some(combo) = w.borrow().as_ref() {
             combo.remove_all();
-            for p in profiles {
-                combo.append_text(&format!("{} [{}]", p.name, p.provider_id));
+            for pr in providers {
+                combo.append_text(&format!("{} [{}]", pr.display_name, pr.id));
             }
+            combo.set_active(Some(0));
         }
     });
+    on_provider_changed();
 }
 
-/// Установить текущий тип отчёта (из вкладки «Отчёты»).
-pub fn set_report_type(type_id: &str) {
-    REPORT_TYPE.with(|r| *r.borrow_mut() = type_id.to_string());
-    RESULT_WIDGET.with(|rw| {
-        if let Some(l) = rw.borrow().as_ref() {
-            l.set_text(&format!("Выбран отчёт: {type_id}. Перейдите к фильтрам ниже."));
+/// Хук: профили загружены.
+pub fn on_profiles_loaded(profiles: &[Profile]) {
+    PROFILES.with(|p| *p.borrow_mut() = profiles.to_vec());
+    refresh_profile_combo();
+}
+
+/// Хук: отчёты загружены.
+pub fn on_reports_loaded(reports: &[ReportInfo]) {
+    REPORTS.with(|r| {
+        *r.borrow_mut() = reports
+            .iter()
+            .filter(|r| matches_current_provider(r))
+            .cloned()
+            .collect();
+    });
+    W_REPORT.with(|w| {
+        if let Some(combo) = w.borrow().as_ref() {
+            combo.remove_all();
+            let reps = REPORTS.with(|r| r.borrow().clone());
+            for r in &reps {
+                combo.append_text(&format!("{} — {}", r.type_id, r.display_name));
+            }
+            combo.set_active(Some(0));
+            update_mode_hint();
         }
     });
 }
@@ -59,54 +93,77 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.set_margin_top(16);
     root.set_margin_bottom(16);
 
-    let title = Label::builder()
+    root.append(&Label::builder()
         .label("Загрузка документов")
         .css_classes(["title-2"])
         .halign(gtk4::Align::Start)
-        .build();
-    root.append(&title);
+        .build());
 
     root.append(&Label::builder()
-        .label("Выберите отчёт во вкладке «Отчёты», задайте фильтры и нажмите «Список документов» (Browsable) или «Скачать по периоду» (Period).")
+        .label("Выберите маркетплейс → профиль → отчёт, задайте фильтры и нажмите «Список документов» (для отчётов-списков) или «Скачать по периоду» (для отчётов по периоду).")
         .css_classes(["dim-label"])
         .halign(gtk4::Align::Start)
         .wrap(true)
         .build());
 
-    // --- Панель фильтров ---
-    let filters = GtkBox::new(Orientation::Horizontal, 8);
+    // --- Строка 1: провайдер + профиль + отчёт ---
+    let row1 = GtkBox::new(Orientation::Horizontal, 8);
+
+    let provider_combo = ComboBoxText::new();
+    provider_combo.set_tooltip_text(Some("Маркетплейс"));
+    row1.append(&Label::new(Some("Магазин:")));
+    row1.append(&provider_combo);
 
     let profile_combo = ComboBoxText::new();
-    profile_combo.set_tooltip_text(Some("Профиль (создаётся во вкладке «Профили»)"));
-    let placeholder_profile = Label::new(Some("Профиль:"));
-    filters.append(&placeholder_profile);
-    filters.append(&profile_combo);
+    profile_combo.set_tooltip_text(Some("Профиль учётных данных"));
+    row1.append(&Label::new(Some("Профиль:")));
+    row1.append(&profile_combo);
 
-    let category_entry = Entry::builder().placeholder_text("категория (напр. upd)").width_chars(18).build();
-    filters.append(&Label::new(Some("Категория:")));
-    filters.append(&category_entry);
+    let report_combo = ComboBoxText::new();
+    report_combo.set_tooltip_text(Some("Тип отчёта"));
+    row1.append(&Label::new(Some("Отчёт:")));
+    row1.append(&report_combo);
 
+    let load_reports_btn = Button::builder().label("↻ Обновить").tooltip_text("Перезагрузить список отчётов провайдера").build();
+    row1.append(&load_reports_btn);
+    root.append(&row1);
+
+    // Подсказка о режиме выбранного отчёта.
+    let mode_hint = Label::builder()
+        .label("")
+        .css_classes(["dim-label"])
+        .halign(gtk4::Align::Start)
+        .wrap(true)
+        .build();
+    root.append(&mode_hint);
+
+    // --- Строка 2: фильтры ---
+    let row2 = GtkBox::new(Orientation::Horizontal, 8);
+    let category_entry = Entry::builder().placeholder_text("категория (напр. upd)").width_chars(20).build();
     let date_from = Entry::builder().placeholder_text("с YYYY-MM-DD").width_chars(12).build();
     let date_to = Entry::builder().placeholder_text("по YYYY-MM-DD").width_chars(12).build();
-    filters.append(&Label::new(Some("Период:")));
-    filters.append(&date_from);
-    filters.append(&date_to);
-
     let limit_entry = Entry::builder().placeholder_text("лимит").width_chars(6).build();
-    filters.append(&Label::new(Some("Лимит:")));
-    filters.append(&limit_entry);
-
-    root.append(&filters);
+    let period_entry = Entry::builder().placeholder_text("период YYYY-MM").width_chars(10).build();
+    row2.append(&Label::new(Some("Категория:")));
+    row2.append(&category_entry);
+    row2.append(&Label::new(Some("Период:")));
+    row2.append(&date_from);
+    row2.append(&date_to);
+    row2.append(&Label::new(Some("Лимит:")));
+    row2.append(&limit_entry);
+    row2.append(&Label::new(Some("Месяц:")));
+    row2.append(&period_entry);
+    root.append(&row2);
 
     // --- Кнопки действий ---
-    let actions = GtkBox::new(Orientation::Horizontal, 8);
-    let list_btn = Button::builder().label("📋 Список документов").build();
-    let download_btn = Button::builder().label("⬇ Скачать выбранные").css_classes(["suggested-action"]).build();
-    let period_btn = Button::builder().label("📅 Скачать по периоду").build();
-    actions.append(&list_btn);
-    actions.append(&download_btn);
-    actions.append(&period_btn);
-    root.append(&actions);
+    let row3 = GtkBox::new(Orientation::Horizontal, 8);
+    let list_btn = Button::builder().label("📋 Список документов").tooltip_text("Для отчётов-списков (Browsable)").build();
+    let download_btn = Button::builder().label("⬇ Скачать выбранные").css_classes(["suggested-action"]).tooltip_text("Скачать отмеченные документы").build();
+    let period_btn = Button::builder().label("📅 Скачать по периоду").tooltip_text("Сгенерировать отчёт за период").build();
+    row3.append(&list_btn);
+    row3.append(&download_btn);
+    row3.append(&period_btn);
+    root.append(&row3);
 
     // --- Список документов (с чекбоксами) ---
     let list_box = ListBox::new();
@@ -114,141 +171,240 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     list_box.set_vexpand(true);
     let scroll = ScrolledWindow::builder()
         .child(&list_box)
-        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .hscrollbar_policy(PolicyType::Never)
         .build();
     root.append(&scroll);
 
     // --- Результат ---
     let result_label = Label::builder()
-        .label("Готов к работе.")
+        .label("Готов к работе. Создайте профиль во вкладке «Профили», затем выберите его здесь.")
         .halign(gtk4::Align::Start)
         .css_classes(["dim-label"])
         .wrap(true)
         .build();
     root.append(&result_label);
 
-    // Сохраняем виджеты в thread_local для обработчиков событий.
-    LIST_WIDGET.with(|lw| *lw.borrow_mut() = Some(list_box.clone()));
-    RESULT_WIDGET.with(|rw| *rw.borrow_mut() = Some(result_label.clone()));
-    PROFILE_COMBO.with(|pc| *pc.borrow_mut() = Some(profile_combo.clone()));
+    // Сохраняем виджеты.
+    W_PROVIDER.with(|w| *w.borrow_mut() = Some(provider_combo.clone()));
+    W_PROFILE.with(|w| *w.borrow_mut() = Some(profile_combo.clone()));
+    W_REPORT.with(|w| *w.borrow_mut() = Some(report_combo.clone()));
+    W_LIST.with(|w| *w.borrow_mut() = Some(list_box.clone()));
+    W_RESULT.with(|w| *w.borrow_mut() = Some(result_label.clone()));
+    W_MODE_HINT.with(|w| *w.borrow_mut() = Some(mode_hint.clone()));
+    W_LIST_BTN.with(|w| *w.borrow_mut() = Some(list_btn.clone()));
+    W_PERIOD_BTN.with(|w| *w.borrow_mut() = Some(period_btn.clone()));
+    W_DOWNLOAD_BTN.with(|w| *w.borrow_mut() = Some(download_btn.clone()));
+    W_CATEGORY.with(|w| *w.borrow_mut() = Some(category_entry.clone()));
 
-    // --- Обработчики ---
+    // Смена провайдера → перезагрузка профилей и отчётов.
+    provider_combo.connect_changed(move |_| {
+        on_provider_changed();
+    });
+    // Смена отчёта → обновить подсказку режима + доступность кнопок.
+    report_combo.connect_changed(move |_| {
+        update_mode_hint();
+    });
+    update_mode_hint();
+
+    // «↻ Обновить» — запросить отчёты выбранного провайдера.
+    let cs_rep = cs.clone();
+    let pc = provider_combo.clone();
+    load_reports_btn.connect_clicked(move |_| {
+        if let Some(pid) = current_provider_id(&pc) {
+            cs_rep.send(crate::channels::UiCommand::LoadReports(pid));
+        }
+    });
 
     // «Список документов».
     let cs_list = cs.clone();
-    let pf = profile_combo.clone();
-    let cat = category_entry.clone();
-    let df = date_from.clone();
-    let dt = date_to.clone();
-    let lim = limit_entry.clone();
     list_btn.connect_clicked(move |_| {
-        let (provider_id, profile_name, report_type) = match current_target(&pf) {
-            Some(t) => t,
-            None => {
-                notify("Сначала выберите профиль и отчёт.");
-                return;
-            }
+        let Some((pid, pname, rtype)) = current_target() else {
+            notify("Выберите профиль и отчёт.");
+            return;
         };
-        let filter = build_filter(&cat, &df, &dt, &lim);
+        let filter = build_filter(&category_entry, &date_from, &date_to, &limit_entry);
+        // Для wb.documents категория обязательна.
+        if rtype == "wb.documents" && filter.category.is_none() {
+            notify("Для «Документы (УПД/УКД/акты)» укажите категорию (напр. upd).");
+            return;
+        }
         cs_list.send(crate::channels::UiCommand::ListDocuments {
-            provider_id,
-            profile_name,
-            report_type,
+            provider_id: pid,
+            profile_name: pname,
+            report_type: rtype,
             filter,
         });
         notify("Запрос списка документов…");
     });
 
-    // «Скачать выбранные» (Browsable).
+    // «Скачать выбранные».
     let cs_dl = cs.clone();
-    let pf2 = profile_combo.clone();
     download_btn.connect_clicked(move |_| {
-        let (provider_id, profile_name, report_type) = match current_target(&pf2) {
-            Some(t) => t,
-            None => {
-                notify("Сначала выберите профиль и отчёт.");
-                return;
-            }
+        let Some((pid, pname, rtype)) = current_target() else {
+            notify("Выберите профиль и отчёт.");
+            return;
         };
-        let ids: Vec<String> = CHECKS
-            .with(|c| {
-                c.borrow()
-                    .iter()
-                    .filter(|(_, cb)| cb.is_active())
-                    .map(|(id, _)| id.clone())
-                    .collect()
-            });
+        let ids: Vec<String> = CHECKS.with(|c| {
+            c.borrow()
+                .iter()
+                .filter(|(_, cb)| cb.is_active())
+                .map(|(id, _)| id.clone())
+                .collect()
+        });
         if ids.is_empty() {
-            notify("Не выбран ни один документ.");
+            notify("Отметьте документы в списке выше.");
             return;
         }
-        let count = ids.len();
+        let n = ids.len();
         cs_dl.send(crate::channels::UiCommand::Download {
-            provider_id,
-            profile_name,
-            report_type,
+            provider_id: pid,
+            profile_name: pname,
+            report_type: rtype,
             document_ids: ids,
             params: ReportParams::new(),
         });
-        notify(&format!("Скачивание {count} документов…"));
+        notify(&format!("Скачивание {n} документов…"));
     });
 
-    // «Скачать по периоду» (Period).
+    // «Скачать по периоду».
     let cs_per = cs.clone();
-    let pf3 = profile_combo.clone();
-    let dfp = date_from.clone();
-    dtp_handler(&period_btn, cs_per, pf3, dfp);
-
-    root
-}
-
-fn dtp_handler(btn: &Button, cs: CommandSender, pf: ComboBoxText, date_from: Entry) {
-    btn.connect_clicked(move |_| {
-        let (provider_id, profile_name, report_type) = match current_target(&pf) {
-            Some(t) => t,
-            None => {
-                notify("Сначала выберите профиль и отчёт.");
-                return;
-            }
+    period_btn.connect_clicked(move |_| {
+        let Some((pid, pname, rtype)) = current_target() else {
+            notify("Выберите профиль и отчёт.");
+            return;
         };
-        let period = date_from.text().to_string();
+        let period = period_entry.text().to_string();
+        if period.is_empty() {
+            notify("Укажите период (например, 2026-06).");
+            return;
+        }
         let params = ReportParams {
             period: Some(period.clone()),
             ..Default::default()
         };
-        cs.send(crate::channels::UiCommand::Download {
-            provider_id,
-            profile_name,
-            report_type,
+        cs_per.send(crate::channels::UiCommand::Download {
+            provider_id: pid,
+            profile_name: pname,
+            report_type: rtype,
             document_ids: Vec::new(),
             params,
         });
-        notify(&format!("Генерация отчёта за период {period}…"));
+        notify(&format!("Генерация отчёта за {period}…"));
+    });
+
+    root
+}
+
+// ===== Хелперы =====
+
+/// Возвращает текущий выбранный provider_id (из combo «Магазин»).
+fn current_provider_id(combo: &ComboBoxText) -> Option<String> {
+    let text = combo.active_text()?.to_string();
+    // Формат: "Wildberries [wildberries]".
+    let id = text.split(" [").nth(1)?.trim_end_matches(']').to_string();
+    Some(id)
+}
+
+/// Возвращает текущий выбранный профиль (provider_id, name) из combo «Профиль».
+fn current_profile() -> Option<(String, String)> {
+    let combo = W_PROFILE.with(|w| w.borrow().clone())?;
+    let text = combo.active_text()?.to_string();
+    // Формат: "Имяпрофиля [provider_id]".
+    let name = text.split(" [").next()?.to_string();
+    let pid = text.split(" [").nth(1)?.trim_end_matches(']').to_string();
+    Some((pid, name))
+}
+
+/// Возвращает (provider_id, profile_name, report_type) для текущего выбора.
+fn current_target() -> Option<(String, String, String)> {
+    let (pid, pname) = current_profile()?;
+    let rtype = current_report_type()?;
+    Some((pid, pname, rtype))
+}
+
+/// Возвращает выбранный report_type (без display_name).
+fn current_report_type() -> Option<String> {
+    let combo = W_REPORT.with(|w| w.borrow().clone())?;
+    let text = combo.active_text()?.to_string();
+    // Формат: "wb.documents — Документы ...".
+    text.split(" — ").next().map(str::to_string)
+}
+
+/// True, если отчёт принадлежит текущему выбранному провайдеру.
+fn matches_current_provider(r: &ReportInfo) -> bool {
+    let combo = W_PROVIDER.with(|w| w.borrow().clone());
+    let Some(combo) = combo else {
+        return true;
+    };
+    let Some(pid) = current_provider_id(&combo) else {
+        return true;
+    };
+    r.provider_id == pid
+}
+
+/// Обновить combo профилей под текущего провайдера.
+fn refresh_profile_combo() {
+    let combo = W_PROFILE.with(|w| w.borrow().clone());
+    let Some(combo) = combo else { return };
+    let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
+    let profiles = PROFILES.with(|p| p.borrow().clone());
+    combo.remove_all();
+    let mut any = false;
+    for p in &profiles {
+        if pid.as_deref() == Some(p.provider_id.as_str()) {
+            combo.append_text(&format!("{} [{}]", p.name, p.provider_id));
+            any = true;
+        }
+    }
+    if !any {
+        combo.append_text("(нет профилей — создайте во вкладке «Профили»)");
+    }
+    combo.set_active(Some(0));
+}
+
+/// Смена провайдера: обновить combo профилей + запросить отчёты.
+fn on_provider_changed() {
+    refresh_profile_combo();
+    // Запрос отчётов делегируем через событие — но отправлять команду можно только
+    // из обработчика кнопки. Здесь только помечаем отчёты пустыми; пользователь
+    // нажмёт «↻ Обновить». Альтернативно — запросим сразу:
+    W_REPORT.with(|w| {
+        if let Some(combo) = w.borrow().as_ref() {
+            combo.remove_all();
+            combo.append_text("(нажмите «↻ Обновить»)");
+            combo.set_active(Some(0));
+        }
     });
 }
 
-/// Возвращает (provider_id, profile_name, report_type) из выбранного профиля
-/// и текущего типа отчёта. provider_id определяется по префиксу report_type.
-///
-/// Формат записи в combo: `name [provider]`.
-fn current_target(profile_combo: &ComboBoxText) -> Option<(String, String, String)> {
-    let report_type = REPORT_TYPE.with(|r| r.borrow().clone());
-    if report_type.is_empty() {
-        return None;
-    }
-    let raw = profile_combo.active_text()?.to_string();
-    // "Ozon-1 [ozon]" -> name="Ozon-1", provider из report_type.
-    let profile_name = raw.split(" [").next()?.to_string();
-    let provider_id = report_type.split('.').next()?.to_string();
-    Some((provider_id, profile_name, report_type))
+/// Обновить подсказку режима и доступность кнопок для выбранного отчёта.
+fn update_mode_hint() {
+    let (is_browsable, name) = current_report_type()
+        .and_then(|t| REPORTS.with(|r| r.borrow().iter().find(|x| x.type_id == t).cloned()))
+        .map_or((false, String::new()), |r| (r.is_browsable, r.display_name));
+
+    W_MODE_HINT.with(|w| {
+        if let Some(l) = w.borrow().as_ref() {
+            if name.is_empty() {
+                l.set_text("");
+            } else if is_browsable {
+                l.set_text(&format!("«{name}»: режим списка — нажмите «Список документов», отметьте нужные, затем «Скачать выбранные»."));
+            } else {
+                l.set_text(&format!("«{name}»: режим периода — укажите месяц и нажмите «Скачать по периоду»."));
+            }
+        }
+    });
+
+    // Доступность кнопок по режиму.
+    let list_enabled = is_browsable;
+    let dl_enabled = is_browsable;
+    let period_enabled = !is_browsable;
+    W_LIST_BTN.with(|w| { if let Some(b) = w.borrow().as_ref() { b.set_sensitive(list_enabled); } });
+    W_DOWNLOAD_BTN.with(|w| { if let Some(b) = w.borrow().as_ref() { b.set_sensitive(dl_enabled); } });
+    W_PERIOD_BTN.with(|w| { if let Some(b) = w.borrow().as_ref() { b.set_sensitive(period_enabled); } });
 }
 
-fn build_filter(
-    category: &Entry,
-    date_from: &Entry,
-    date_to: &Entry,
-    limit: &Entry,
-) -> DocumentFilter {
+fn build_filter(category: &Entry, date_from: &Entry, date_to: &Entry, limit: &Entry) -> DocumentFilter {
     let mut f = DocumentFilter::default();
     let cat = category.text().to_string();
     if !cat.is_empty() {
@@ -267,19 +423,19 @@ fn build_filter(
 }
 
 fn notify(msg: &str) {
-    RESULT_WIDGET.with(|rw| {
+    W_RESULT.with(|rw| {
         if let Some(l) = rw.borrow().as_ref() {
             l.set_text(msg);
         }
     });
 }
 
-/// Обработчик: список документов получен — рисуем строки с чекбоксами.
+// ===== События =====
+
+/// Обработчик: список документов получен.
 pub fn on_documents_listed(res: &Result<Vec<DocumentEntry>, String>) {
     match res {
-        Err(e) => {
-            notify(&format!("Ошибка: {e}"));
-        }
+        Err(e) => notify(&format!("Ошибка: {e}")),
         Ok(docs) => {
             DOCS.with(|d| *d.borrow_mut() = docs.clone());
             render_list(docs);
@@ -289,12 +445,11 @@ pub fn on_documents_listed(res: &Result<Vec<DocumentEntry>, String>) {
 }
 
 fn render_list(docs: &[DocumentEntry]) {
-    LIST_WIDGET.with(|lw| {
+    W_LIST.with(|lw| {
         let list_box = match lw.borrow().as_ref() {
             Some(lb) => lb.clone(),
             None => return,
         };
-        // очищаем
         while let Some(child) = list_box.first_child() {
             list_box.remove(&child);
         }
@@ -305,7 +460,6 @@ fn render_list(docs: &[DocumentEntry]) {
             return;
         }
 
-        // Заголовок.
         let header = GtkBox::new(Orientation::Horizontal, 12);
         header.set_margin_start(8);
         header.set_margin_end(8);
@@ -354,9 +508,9 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Обработчик: скачивание успешно завершено.
+/// Обработчик: скачивание завершено.
 pub fn on_download_finished(files: &[DownloadedFile]) {
-    notify(&format!("Скачано файлов: {}. (Запись на диск — ЭТАП 7.)", files.len()));
+    notify(&format!("Скачано файлов: {}. Файлы записаны в папку загрузок.", files.len()));
 }
 
 /// Обработчик: ошибка скачивания.

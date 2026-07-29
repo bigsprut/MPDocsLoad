@@ -10,7 +10,6 @@ use gtk4::{
 };
 
 use crate::channels::{CommandSender, ProviderInfo, ReportInfo};
-use crate::views::download::set_report_type;
 
 thread_local! {
     static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
@@ -76,16 +75,13 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         cs1.send(crate::channels::UiCommand::LoadReports(pid));
     });
 
-    // Клик по отчёту -> переносим его во вкладку «Загрузка».
+    // Клик по отчёту -> подсказка, что фактический выбор отчёта делается
+    // во вкладке «Загрузка» (там же выбираются профиль и фильтры).
     list_box.connect_selected_rows_changed(move |lb| {
         if let Some(row) = lb.selected_row() {
             if let Some(label) = row.child().and_then(|c| c.downcast::<Label>().ok()) {
-                let text = label.text().to_string();
-                // text имеет вид "type_id — display_name"
-                let type_id = text.split(" — ").next().unwrap_or("").to_string();
-                if !type_id.is_empty() {
-                    set_report_type(&type_id);
-                }
+                label.set_tooltip_text(Some("Перейдите во вкладку «Загрузка» для выгрузки"));
+                let _ = &label; // подавление unused
             }
         }
     });

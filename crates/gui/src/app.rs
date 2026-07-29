@@ -302,6 +302,7 @@ async fn load_reports(domain: &Domain, provider_id: &str) -> Result<Vec<ReportIn
             display_name: r.display_name.clone(),
             category: format!("{:?}", r.category),
             is_browsable: r.acquisition_mode.is_browsable(),
+            provider_id: provider_id.to_string(),
         })
         .collect();
     Ok(reports)

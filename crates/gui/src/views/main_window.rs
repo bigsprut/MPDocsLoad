@@ -197,10 +197,16 @@ fn dispatch_event(event: &UiEvent, status: &Label) {
             crate::views::profiles::on_auth_fields_loaded(provider_id, fields);
         }
         UiEvent::ReportsLoaded(res) => {
-            crate::views::reports::on_reports_loaded(res);
             match res {
-                Ok(r) => status.set_text(&format!("Отчётов: {}", r.len())),
-                Err(e) => status.set_text(&format!("Ошибка: {e}")),
+                Ok(r) => {
+                    status.set_text(&format!("Отчётов: {}", r.len()));
+                    crate::views::reports::on_reports_loaded(&Ok(r.clone()));
+                    crate::views::download::on_reports_loaded(r);
+                }
+                Err(e) => {
+                    status.set_text(&format!("Ошибка: {e}"));
+                    crate::views::reports::on_reports_loaded(&Err(e.clone()));
+                }
             }
         }
         UiEvent::DocumentsListed(res) => {
