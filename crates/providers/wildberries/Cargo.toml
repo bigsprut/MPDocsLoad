@@ -22,3 +22,8 @@ anyhow.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
 base64 = "0.22"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+wiremock.workspace = true
+serial_test = "3.1"
