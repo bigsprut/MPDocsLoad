@@ -1824,6 +1824,7 @@ dependencies = [
  "mdwf-core",
  "parking_lot",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
 ]
 
@@ -1833,6 +1834,7 @@ version = "1.4.0"
 dependencies = [
  "chrono",
  "mdwf-core",
+ "parking_lot",
  "rusqlite",
  "serde",
  "serde_json",
