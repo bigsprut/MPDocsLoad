@@ -101,46 +101,21 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             ReportCategory::Penalties,
         ),
         desc_browsable(
-            "wb.warehouse_measurements",
-            "Замеры склада",
-            ReportCategory::Penalties,
-        ),
-        desc_browsable(
-            "wb.goods_labeling",
-            "Маркировка товара",
-            ReportCategory::Penalties,
-        ),
-        desc_browsable(
             "wb.antifraud",
             "Самовыкупы (антифрод)",
             ReportCategory::Penalties,
         ),
-        // --- Возвраты (seller-analytics-api, GET) ---
+        // --- Возвраты (claims) — спека §2.2.2 ---
         desc_browsable(
-            "wb.goods_return",
-            "Возвраты товаров",
+            "wb.claims",
+            "Возвраты (claims)",
             ReportCategory::Returns,
         ),
-        // --- Async-отчёты (seller-analytics-api) ---
-        desc_period(
-            "wb.warehouse_remains",
-            "Остатки на складах (async)",
-            ReportCategory::Operational,
-        ),
+        // --- Async-отчёт приёмки (спека §2.2.2) ---
         desc_period(
             "wb.acceptance_report",
-            "Операции при приёмке (async)",
-            ReportCategory::Operational,
-        ),
-        desc_period(
-            "wb.paid_storage",
-            "Платное хранение (async)",
+            "Аналитический отчёт приёмки (async)",
             ReportCategory::Finance,
-        ),
-        desc_period(
-            "wb.region_sale",
-            "Продажи по регионам",
-            ReportCategory::Analytics,
         ),
     ]
 }
@@ -323,26 +298,6 @@ pub fn make_report(type_id: &str, client: WbHttpClient) -> CoreResult<ReportRef>
             ResponseShape::DataReports,
             client,
         )),
-        "wb.warehouse_measurements" => Arc::new(WbReport::new_get(
-            "wb.warehouse_measurements",
-            "Замеры склада",
-            ReportCategory::Penalties,
-            AcquisitionMode::Browsable,
-            WbDomain::Analytics,
-            "/api/analytics/v1/warehouse-measurements",
-            ResponseShape::DataReports,
-            client,
-        )),
-        "wb.goods_labeling" => Arc::new(WbReport::new_get(
-            "wb.goods_labeling",
-            "Маркировка товара",
-            ReportCategory::Penalties,
-            AcquisitionMode::Browsable,
-            WbDomain::Analytics,
-            "/api/v1/analytics/goods-labeling",
-            ResponseShape::Report,
-            client,
-        )),
         "wb.antifraud" => Arc::new(WbReport::new_get(
             "wb.antifraud",
             "Самовыкупы (антифрод)",
@@ -354,58 +309,26 @@ pub fn make_report(type_id: &str, client: WbHttpClient) -> CoreResult<ReportRef>
             client,
         )),
 
-        // === Возвраты === GET seller-analytics-api
-        "wb.goods_return" => Arc::new(WbReport::new_get(
-            "wb.goods_return",
-            "Возвраты товаров",
+        // === Возвраты === спека §2.2.2: GET /api/v1/claims
+        "wb.claims" => Arc::new(WbReport::new_get(
+            "wb.claims",
+            "Возвраты (claims)",
             ReportCategory::Returns,
             AcquisitionMode::Browsable,
-            WbDomain::Analytics,
-            "/api/v1/analytics/goods-return",
-            ResponseShape::Report,
+            WbDomain::Returns,
+            "/api/v1/claims",
+            ResponseShape::Array,
             client,
         )),
 
-        // === Продажи по регионам === GET seller-analytics-api
-        "wb.region_sale" => Arc::new(WbReport::new_get(
-            "wb.region_sale",
-            "Продажи по регионам",
-            ReportCategory::Analytics,
-            AcquisitionMode::Period,
-            WbDomain::Analytics,
-            "/api/v1/analytics/region-sale",
-            ResponseShape::Report,
-            client,
-        )),
-
-        // === Async-отчёты === (create→poll→download). Пока как Period GET download-фаза.
-        "wb.warehouse_remains" => Arc::new(WbReport::new_get(
-            "wb.warehouse_remains",
-            "Остатки на складах (async)",
-            ReportCategory::Operational,
-            AcquisitionMode::Period,
-            WbDomain::Analytics,
-            "/api/v1/warehouse_remains",
-            ResponseShape::DataArray,
-            client,
-        )),
-        "wb.acceptance_report" => Arc::new(WbReport::new_get(
+        // === Аналитический отчёт приёмки === спека §2.2.2: async
+        "wb.acceptance_report" => Arc::new(WbReport::new_post(
             "wb.acceptance_report",
-            "Операции при приёмке (async)",
-            ReportCategory::Operational,
-            AcquisitionMode::Period,
-            WbDomain::Analytics,
-            "/api/v1/acceptance_report",
-            ResponseShape::DataArray,
-            client,
-        )),
-        "wb.paid_storage" => Arc::new(WbReport::new_get(
-            "wb.paid_storage",
-            "Платное хранение (async)",
+            "Аналитический отчёт приёмки (async)",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Analytics,
-            "/api/v1/paid_storage",
+            "/api/v1/acceptance_report",
             ResponseShape::DataArray,
             client,
         )),
