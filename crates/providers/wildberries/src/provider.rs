@@ -105,7 +105,7 @@ impl MarketplaceProvider for WildberriesProvider {
         debug!("WB health check via /api/v1/account/balance");
         match self
             .client
-            .get(WbDomain::OpenApi, "/api/v1/account/balance", &[], auth)
+            .get(WbDomain::Marketplace, "/api/v1/account/balance", &[], auth)
             .await
         {
             Ok(_) => {

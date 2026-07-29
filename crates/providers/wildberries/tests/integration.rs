@@ -12,7 +12,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn set_wb_base_urls(server_uri: &str) {
     let uri = server_uri.trim_end_matches('/');
-    std::env::set_var("MDWF_WB_BASE_OPENAPI", uri);
+    std::env::set_var("MDWF_WB_BASE_MARKETPLACE", uri);
     std::env::set_var("MDWF_WB_BASE_DOCUMENTS", uri);
     std::env::set_var("MDWF_WB_BASE_FINANCE", uri);
     std::env::set_var("MDWF_WB_BASE_STATISTICS", uri);
