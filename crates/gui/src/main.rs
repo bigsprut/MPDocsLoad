@@ -27,6 +27,7 @@
 #![allow(clippy::while_let_loop)]
 #![allow(clippy::manual_strip)]
 #![allow(clippy::single_match_else)]
+#![allow(clippy::similar_names)]
 #![allow(clippy::struct_field_names)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::manual_let_else)]

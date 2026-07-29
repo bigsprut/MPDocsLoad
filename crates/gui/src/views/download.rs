@@ -135,21 +135,30 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&mode_hint);
 
     // --- Строка 2: фильтры ---
+    // Период по умолчанию: последний год (диапазон) + прошлый месяц (для period-отчётов).
+    let today = chrono::Local::now().date_naive();
+    let year_ago = today - chrono::Duration::days(365);
+    let last_month_date = today - chrono::Duration::days(30);
+    let default_from = year_ago.format("%Y-%m-%d").to_string();
+    let default_to = today.format("%Y-%m-%d").to_string();
+    let default_month = last_month_date.format("%Y-%m").to_string();
+
     let row2 = GtkBox::new(Orientation::Horizontal, 8);
-    let category_entry = Entry::builder().placeholder_text("категория (напр. upd)").width_chars(20).build();
-    let date_from = Entry::builder().placeholder_text("с YYYY-MM-DD").width_chars(12).build();
-    let date_to = Entry::builder().placeholder_text("по YYYY-MM-DD").width_chars(12).build();
+    let category_entry = Entry::builder().placeholder_text("категория (напр. upd)").width_chars(18).build();
+    let date_from = Entry::builder().placeholder_text("с YYYY-MM-DD").width_chars(12).text(&default_from).build();
+    let date_to = Entry::builder().placeholder_text("по YYYY-MM-DD").width_chars(12).text(&default_to).build();
     let limit_entry = Entry::builder().placeholder_text("лимит").width_chars(6).build();
-    let period_entry = Entry::builder().placeholder_text("период YYYY-MM").width_chars(10).build();
+    let period_entry = Entry::builder().placeholder_text("YYYY-MM").width_chars(9).text(&default_month).build();
     row2.append(&Label::new(Some("Категория:")));
     row2.append(&category_entry);
-    row2.append(&Label::new(Some("Период:")));
+    row2.append(&Label::new(Some("Диапазон:")));
     row2.append(&date_from);
+    row2.append(&Label::new(Some("..")));
     row2.append(&date_to);
-    row2.append(&Label::new(Some("Лимит:")));
-    row2.append(&limit_entry);
     row2.append(&Label::new(Some("Месяц:")));
     row2.append(&period_entry);
+    row2.append(&Label::new(Some("Лимит:")));
+    row2.append(&limit_entry);
     root.append(&row2);
 
     // --- Кнопки действий ---
@@ -213,6 +222,11 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         }
     });
 
+    // Клоны полей для period-обработчика (list-обработчик замувит оригиналы).
+    let df_per = date_from.clone();
+    let dt_per = date_to.clone();
+    let period_entry_per = period_entry.clone();
+
     // «Список документов».
     let cs_list = cs.clone();
     list_btn.connect_clicked(move |_| {
@@ -271,15 +285,16 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             notify("Выберите профиль и отчёт.");
             return;
         };
-        let period = period_entry.text().to_string();
-        if period.is_empty() {
-            notify("Укажите период (например, 2026-06).");
-            return;
-        }
-        let params = ReportParams {
+        // Месяц (по умолчанию предзаполнен прошлым месяцем).
+        let period = period_entry_per.text().to_string();
+        let mut params = ReportParams {
             period: Some(period.clone()),
             ..Default::default()
         };
+        // Диапазон дат — на случай, если отчёт требует date_from/date_to.
+        params = params
+            .with("date_from", df_per.text().to_string())
+            .with("date_to", dt_per.text().to_string());
         cs_per.send(crate::channels::UiCommand::Download {
             provider_id: pid,
             profile_name: pname,
@@ -287,7 +302,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             document_ids: Vec::new(),
             params,
         });
-        notify(&format!("Генерация отчёта за {period}…"));
+        notify(&format!("Генерация отчёта за период {period}…"));
     });
 
     root
@@ -377,9 +392,13 @@ fn update_mode_hint() {
             if name.is_empty() {
                 l.set_text("");
             } else if is_browsable {
-                l.set_text(&format!("«{name}»: режим списка — нажмите «Список документов», отметьте нужные, затем «Скачать выбранные»."));
+                l.set_text(&format!(
+                    "«{name}»: режим списка. Задайте диапазон дат и категорию (если нужно), нажмите «Список документов», отметьте нужные, затем «Скачать выбранные»."
+                ));
             } else {
-                l.set_text(&format!("«{name}»: режим периода — укажите месяц и нажмите «Скачать по периоду»."));
+                l.set_text(&format!(
+                    "«{name}»: режим периода. Укажите месяц (по умолчанию — прошлый) и нажмите «Скачать по периоду»."
+                ));
             }
         }
     });
