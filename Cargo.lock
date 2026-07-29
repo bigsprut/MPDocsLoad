@@ -1741,6 +1741,7 @@ name = "mdwf-gui"
 version = "1.4.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "chrono",
  "gio",
  "glib",
@@ -1752,10 +1753,12 @@ dependencies = [
  "mdwf-scheduler",
  "mdwf-secrets",
  "mdwf-storage",
+ "mdwf-test-provider",
  "parking_lot",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

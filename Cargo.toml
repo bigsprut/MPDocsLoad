@@ -63,6 +63,7 @@ chrono-tz = "0.9"
 parking_lot = "0.12"
 arc-swap = "1.7"
 tokio-util = { version = "0.7", features = ["rt"] }
+async-channel = "2.3"
 
 # --- крипто / хеши ---
 sha2 = "0.10"
