@@ -19,7 +19,8 @@ use mdwf_storage::{Catalog, FileStore, FileStoreConfig, FileNameContext, FolderS
 use mdwf_test_provider::TestProvider;
 
 use crate::channels::{
-    CommandSender, EventForwarder, ProviderInfo, ReportInfo, UiCommand, UiEvent,
+    AuthFieldInfo, AuthFieldKindInfo, CommandSender, EventForwarder, ProviderInfo, ReportInfo,
+    UiCommand, UiEvent,
 };
 use crate::theme;
 
@@ -202,6 +203,13 @@ async fn run_command_loop(
                 let outcome = load_reports(&domain, &provider_id).await;
                 fwd.forward(UiEvent::ReportsLoaded(outcome));
             }
+            UiCommand::LoadAuthFields(provider_id) => {
+                let fields = load_auth_fields(&domain, &provider_id);
+                fwd.forward(UiEvent::AuthFieldsLoaded {
+                    provider_id,
+                    fields,
+                });
+            }
             UiCommand::ListDocuments {
                 provider_id,
                 profile_name,
@@ -297,6 +305,34 @@ async fn load_reports(domain: &Domain, provider_id: &str) -> Result<Vec<ReportIn
         })
         .collect();
     Ok(reports)
+}
+
+/// Загружает поля формы авторизации провайдера (для динамической отрисовки).
+fn load_auth_fields(domain: &Domain, provider_id: &str) -> Vec<AuthFieldInfo> {
+    let Ok(provider) = domain.registry.require(provider_id) else {
+        return Vec::new();
+    };
+    provider
+        .capabilities()
+        .auth_fields
+        .iter()
+        .map(|f| AuthFieldInfo {
+            id: f.id.clone(),
+            label: f.label.clone(),
+            kind: match &f.kind {
+                mdwf_core::AuthFieldKind::Text => AuthFieldKindInfo::Text,
+                mdwf_core::AuthFieldKind::Password => AuthFieldKindInfo::Password,
+                mdwf_core::AuthFieldKind::Number => AuthFieldKindInfo::Number,
+                mdwf_core::AuthFieldKind::Select(opts) => {
+                    AuthFieldKindInfo::Select(opts.clone())
+                }
+            },
+            required: f.required,
+            placeholder: f.placeholder.clone(),
+            help_text: f.help_text.clone(),
+            secret: f.secret,
+        })
+        .collect()
 }
 
 async fn list_documents(

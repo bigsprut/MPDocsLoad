@@ -46,6 +46,8 @@ pub enum UiCommand {
     LoadProviders,
     /// Загрузить список профилей.
     LoadProfiles,
+    /// Загрузить поля авторизации провайдера (для динамической формы профиля).
+    LoadAuthFields(String),
     /// Сохранить профиль.
     SaveProfile(Profile),
     /// Удалить профиль.
@@ -82,6 +84,11 @@ pub enum UiEvent {
     ProvidersLoaded(Vec<ProviderInfo>),
     /// Профили загружены.
     ProfilesLoaded(Vec<Profile>),
+    /// Поля авторизации провайдера загружены (для динамической формы профиля).
+    AuthFieldsLoaded {
+        provider_id: String,
+        fields: Vec<AuthFieldInfo>,
+    },
     /// Профиль сохранён.
     ProfileSaved(Result<i64, String>),
     /// Профиль удалён.
@@ -108,6 +115,27 @@ pub enum UiEvent {
 pub struct ProviderInfo {
     pub id: String,
     pub display_name: String,
+}
+
+/// Тип поля формы авторизации (упрощённое отображение для UI).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthFieldKindInfo {
+    Text,
+    Password,
+    Number,
+    Select(Vec<String>),
+}
+
+/// Поле формы авторизации для динамической отрисовки.
+#[derive(Debug, Clone)]
+pub struct AuthFieldInfo {
+    pub id: String,
+    pub label: String,
+    pub kind: AuthFieldKindInfo,
+    pub required: bool,
+    pub placeholder: Option<String>,
+    pub help_text: Option<String>,
+    pub secret: bool,
 }
 
 /// Краткая информация об отчёте для UI.

@@ -15,6 +15,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_wrap)]
 // Pedantic-линты, избыточные для gtk-rs UI-кода (handlers длинные,
 // API часто требует owned-значения и тривиальные обёртки):
 #![allow(clippy::too_many_lines)]

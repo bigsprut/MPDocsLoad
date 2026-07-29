@@ -193,6 +193,9 @@ fn dispatch_event(event: &UiEvent, status: &Label) {
             crate::views::profiles::on_profiles_loaded(list);
             crate::views::download::on_profiles_loaded(list);
         }
+        UiEvent::AuthFieldsLoaded { provider_id, fields } => {
+            crate::views::profiles::on_auth_fields_loaded(provider_id, fields);
+        }
         UiEvent::ReportsLoaded(res) => {
             crate::views::reports::on_reports_loaded(res);
             match res {
