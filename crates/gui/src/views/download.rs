@@ -664,52 +664,50 @@ pub fn on_download_error(err: &str) {
 
 // ===== Кнопка-календарь для выбора дат =====
 
-/// Создаёт кнопку с иконкой календаря. При клике открывает Popover с gtk4::Calendar.
-/// Выбор даты записывает её в `entry` в формате `date_format` (напр. "%Y-%m-%d" или "%Y-%m").
-fn make_date_picker(entry: &Entry, date_format: &str) -> gtk4::Button {
-    let btn = gtk4::Button::builder()
+/// Создаёт кнопку с иконкой календаря (MenuButton + Calendar в Popover).
+/// При клике открывает календарь. Выбор даты записывает её в `entry`
+/// в формате `date_format` (напр. "%Y-%m-%d" или "%Y-%m").
+fn make_date_picker(entry: &Entry, date_format: &str) -> gtk4::MenuButton {
+    let menu_btn = gtk4::MenuButton::builder()
         .icon_name("x-office-calendar-symbolic")
         .tooltip_text("Выбрать дату из календаря")
         .build();
 
+    let calendar = gtk4::Calendar::builder()
+        .show_day_names(true)
+        .show_heading(true)
+        .show_week_numbers(true)
+        .build();
+
+    // Предустановка календаря из текущего значения Entry.
+    let current_text = entry.text().to_string();
+    if let Some(dt) = parse_date_for_calendar(&current_text) {
+        calendar.select_day(&dt);
+    }
+
+    // При выборе даты — записываем в Entry и закрываем popover.
     let entry_clone = entry.clone();
     let fmt = date_format.to_string();
-    btn.connect_clicked(move |_| {
-        let popover = gtk4::Popover::builder().autohide(true).build();
-        let calendar = gtk4::Calendar::builder()
-            .show_day_names(true)
-            .show_heading(true)
-            .show_week_numbers(true)
-            .build();
-
-        // Предустановка календаря из текущего значения Entry (если валидная дата).
-        let current_text = entry_clone.text().to_string();
-        if let Some(dt) = parse_date_for_calendar(&current_text, &fmt) {
-            calendar.select_day(&dt);
+    let popover = gtk4::Popover::builder().build();
+    let popover_clone = popover.clone();
+    calendar.connect_day_selected(move |cal| {
+        let selected = cal.date();
+        if let Ok(formatted) = selected.format(&fmt) {
+            entry_clone.set_text(&formatted);
+            popover_clone.popdown();
         }
-
-        // При выборе даты — записываем в Entry и закрываем popover.
-        let entry_for_select = entry_clone.clone();
-        let fmt_for_select = fmt.clone();
-        let popover_for_select = popover.clone();
-        calendar.connect_day_selected(move |cal| {
-            let selected = cal.date();
-            if let Ok(formatted) = selected.format(&fmt_for_select) {
-                entry_for_select.set_text(&formatted);
-            }
-            popover_for_select.popdown();
-        });
-
-        popover.set_child(Some(&calendar));
-        popover.popup();
     });
 
-    btn
+    // MenuButton управляет popover автоматически.
+    popover.set_child(Some(&calendar));
+    menu_btn.set_popover(Some(&popover));
+
+    menu_btn
 }
 
 /// Парсит текст из Entry в glib::DateTime для предустановки календаря.
 /// Поддерживает форматы YYYY-MM-DD и YYYY-MM.
-fn parse_date_for_calendar(s: &str, _fmt: &str) -> Option<glib::DateTime> {
+fn parse_date_for_calendar(s: &str) -> Option<glib::DateTime> {
     let naive = if s.len() >= 10 {
         chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?
     } else if s.len() == 7 {
