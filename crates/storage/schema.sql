@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS saved_filters (
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Состояние UI между запусками (ключ-значение, JSON).
+-- Используется для автосохранения выбранных провайдера/профиля/отчёта/периода.
+CREATE TABLE IF NOT EXISTS ui_state (
+    key             TEXT PRIMARY KEY,
+    value_json      TEXT NOT NULL,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- История запусков расписаний.
 CREATE TABLE IF NOT EXISTS schedule_runs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -180,6 +180,9 @@ fn dispatch_event(event: &UiEvent, status: &Label) {
         UiEvent::Notify(msg) => {
             status.set_text(msg);
         }
+        UiEvent::DownloadStateLoaded(state) => {
+            crate::views::download::on_download_state_loaded(state.as_ref());
+        }
         UiEvent::Progress { message, .. } => {
             status.set_text(message);
         }

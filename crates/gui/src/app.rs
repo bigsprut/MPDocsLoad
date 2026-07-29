@@ -133,6 +133,8 @@ impl App {
             // После построения окна — загружаем начальные данные.
             cs.send(UiCommand::LoadProviders);
             cs.send(UiCommand::LoadProfiles);
+            // Загружаем сохранённое состояние экрана «Загрузка».
+            cs.send(UiCommand::LoadDownloadState);
         });
 
         Ok(app)
@@ -242,6 +244,22 @@ async fn run_command_loop(
             }
             UiCommand::Cancel => {
                 fwd.forward(UiEvent::Notify("отмена не реализована в этом каркасе".into()));
+            }
+            UiCommand::SaveDownloadState(state) => {
+                if let Some(cat) = domain.catalog.read().as_ref() {
+                    let json = serde_json::to_string(&state).unwrap_or_default();
+                    if let Err(e) = cat.set_ui_state("download_screen", &json) {
+                        tracing::warn!(error = %e, "failed to save download state");
+                    }
+                }
+            }
+            UiCommand::LoadDownloadState => {
+                let state = domain.catalog.read().as_ref().and_then(|cat| {
+                    cat.get_ui_state("download_screen").ok().flatten().and_then(
+                        |json| serde_json::from_str::<crate::channels::DownloadState>(&json).ok(),
+                    )
+                });
+                fwd.forward(UiEvent::DownloadStateLoaded(state));
             }
         }
     }

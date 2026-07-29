@@ -330,6 +330,35 @@ impl Catalog {
         .map_err(map_sqlite_err)?;
         Ok(())
     }
+
+    // ----- Состояние UI (автосохранение между запусками) -----
+
+    /// Сохраняет значение состояния UI по ключу (upsert). Значение — JSON-строка.
+    pub fn set_ui_state(&self, key: &str, value_json: &str) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO ui_state (key, value_json, updated_at)
+             VALUES (?1, ?2, CURRENT_TIMESTAMP)
+             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=CURRENT_TIMESTAMP",
+            params![key, value_json],
+        )
+        .map_err(map_sqlite_err)?;
+        Ok(())
+    }
+
+    /// Читает значение состояния UI по ключу. Возвращает None, если ключа нет.
+    pub fn get_ui_state(&self, key: &str) -> CoreResult<Option<String>> {
+        let conn = self.conn.lock();
+        let v: Option<String> = conn
+            .query_row(
+                "SELECT value_json FROM ui_state WHERE key=?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(map_sqlite_err)?;
+        Ok(v)
+    }
 }
 
 /// Новое/обновляемое расписание.

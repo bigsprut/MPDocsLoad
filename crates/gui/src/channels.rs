@@ -75,6 +75,23 @@ pub enum UiCommand {
     },
     /// Отмена текущей операции.
     Cancel,
+    /// Сохранить состояние экрана «Загрузка» (автосохранение).
+    SaveDownloadState(DownloadState),
+    /// Загрузить сохранённое состояние экрана «Загрузка».
+    LoadDownloadState,
+}
+
+/// Соостояние экрана «Загрузка» для автосохранения между запусками.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct DownloadState {
+    pub provider_id: Option<String>,
+    pub profile_name: Option<String>,
+    pub report_type: Option<String>,
+    pub category: Option<String>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub month: Option<String>,
+    pub limit: Option<String>,
 }
 
 /// События из доменного слоя в UI.
@@ -108,6 +125,8 @@ pub enum UiEvent {
     },
     /// Текстовое уведомление (для статусбара/лога UI).
     Notify(String),
+    /// Сохранённое состояние экрана «Загрузка» загружено (при старте).
+    DownloadStateLoaded(Option<DownloadState>),
 }
 
 /// Краткая информация о провайдере для UI.

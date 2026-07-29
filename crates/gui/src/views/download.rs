@@ -17,7 +17,7 @@ use gtk4::{
 
 use mdwf_core::{DocumentEntry, DocumentFilter, DownloadedFile, Profile, ReportParams};
 
-use crate::channels::{CommandSender, ReportInfo};
+use crate::channels::{CommandSender, DownloadState, ReportInfo};
 
 thread_local! {
     static PROVIDERS: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
@@ -38,6 +38,10 @@ thread_local! {
     static W_PERIOD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_DOWNLOAD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_CATEGORY: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
+    static W_DATE_FROM: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
+    static W_DATE_TO: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
+    static W_MONTH: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
+    static W_LIMIT: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
 }
 
 /// Хук: провайдеры загружены.
@@ -79,7 +83,28 @@ pub fn on_reports_loaded(reports: &[ReportInfo]) {
             combo.append_text(&format!("{} — {}", r.type_id, r.display_name));
         }
     }
-    combo.set_active(Some(0));
+
+    // Восстанавливаем выбранный отчёт из сохранённого состояния (если есть).
+    let pending = PENDING_REPORT.with(|p| p.borrow_mut().take());
+    if let Some(rtype) = pending {
+        // Ищем индекс отчёта с совпадающим type_id.
+        let n = combo.model().map_or(0, |m| m.iter_n_children(None));
+        let mut found = false;
+        for i in 0..n {
+            combo.set_active(Some(i as u32));
+            if let Some(text) = combo.active_text() {
+                if text.to_string().starts_with(&format!("{rtype} —")) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            combo.set_active(Some(0));
+        }
+    } else {
+        combo.set_active(Some(0));
+    }
     update_mode_hint();
 }
 
@@ -202,16 +227,34 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_PERIOD_BTN.with(|w| *w.borrow_mut() = Some(period_btn.clone()));
     W_DOWNLOAD_BTN.with(|w| *w.borrow_mut() = Some(download_btn.clone()));
     W_CATEGORY.with(|w| *w.borrow_mut() = Some(category_entry.clone()));
+    W_DATE_FROM.with(|w| *w.borrow_mut() = Some(date_from.clone()));
+    W_DATE_TO.with(|w| *w.borrow_mut() = Some(date_to.clone()));
+    W_MONTH.with(|w| *w.borrow_mut() = Some(period_entry.clone()));
+    W_LIMIT.with(|w| *w.borrow_mut() = Some(limit_entry.clone()));
 
-    // Смена провайдера → перезагрузка профилей и отчётов.
+    // Смена провайдера → перезагрузка профилей и отчётов + автосохранение.
     provider_combo.connect_changed(move |_| {
         on_provider_changed();
+        schedule_save();
     });
-    // Смена отчёта → обновить подсказку режима + доступность кнопок.
+    profile_combo.connect_changed(move |_| {
+        schedule_save();
+    });
+    // Смена отчёта → обновить подсказку режима + доступность кнопок + автосохранение.
     report_combo.connect_changed(move |_| {
         update_mode_hint();
+        schedule_save();
     });
     update_mode_hint();
+
+    // Автосохранение при изменении полей ввода.
+    for entry in [&category_entry, &date_from, &date_to, &period_entry, &limit_entry] {
+        let e = entry.clone();
+        entry.connect_changed(move |_| {
+            let _ = &e;
+            schedule_save();
+        });
+    }
 
     // «↻ Обновить» — запросить отчёты выбранного провайдера.
     let cs_rep = cs.clone();
@@ -428,6 +471,93 @@ fn build_filter(category: &Entry, date_from: &Entry, date_to: &Entry, limit: &En
         f.limit = Some(n);
     }
     f
+}
+
+// ===== Автосохранение состояния =====
+
+macro_rules! entry_value {
+    ($static_:ident) => {
+        $static_.with(|c| c.borrow().as_ref().map(|e| e.text().to_string()))
+    };
+}
+
+/// Собирает текущее состояние экрана из виджетов.
+fn collect_state() -> DownloadState {
+    let provider_id = W_PROVIDER.with(|w| w.borrow().as_ref().and_then(current_provider_id));
+    let profile_name = current_profile().map(|(_, n)| n);
+    let report_type = current_report_type();
+    DownloadState {
+        provider_id,
+        profile_name,
+        report_type,
+        category: entry_value!(W_CATEGORY),
+        date_from: entry_value!(W_DATE_FROM),
+        date_to: entry_value!(W_DATE_TO),
+        month: entry_value!(W_MONTH),
+        limit: entry_value!(W_LIMIT),
+    }
+}
+
+/// Отправляет команду сохранения состояния (вызывается из обработчиков).
+fn schedule_save() {
+    let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
+        return;
+    };
+    cs.send(crate::channels::UiCommand::SaveDownloadState(collect_state()));
+}
+
+/// Обработчик: сохранённое состояние загружено при старте → восстанавливаем выбор.
+pub fn on_download_state_loaded(state: Option<&DownloadState>) {
+    let Some(state) = state else {
+        return;
+    };
+
+    // 1. Восстанавливаем поля ввода (без триггера автосохранения — через set_text).
+    if let Some(v) = &state.category {
+        W_CATEGORY.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
+    }
+    if let Some(v) = &state.date_from {
+        W_DATE_FROM.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
+    }
+    if let Some(v) = &state.date_to {
+        W_DATE_TO.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
+    }
+    if let Some(v) = &state.month {
+        W_MONTH.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
+    }
+    if let Some(v) = &state.limit {
+        W_LIMIT.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
+    }
+
+    // 2. Восстанавливаем выбор провайдера в combo (по id).
+    if let Some(pid) = &state.provider_id {
+        let combo = W_PROVIDER.with(|w| w.borrow().clone());
+        if let Some(combo) = &combo {
+            let n = combo.model().map_or(0, |m| m.iter_n_children(None));
+            let suffix = format!(" [{pid}]");
+            for i in 0..n {
+                combo.set_active(Some(i as u32));
+                if let Some(text) = combo.active_text() {
+                    if text.to_string().ends_with(&suffix) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // on_provider_changed вызовется автоматически (через connect_changed).
+
+    // 3. Восстанавливаем выбор отчёта (после загрузки списка отчётов).
+    if let Some(rtype) = &state.report_type {
+        // Отложим восстановление: combo отчётов заполнится после LoadReports.
+        // Запоминаем желаемый report_type для on_reports_loaded.
+        PENDING_REPORT.with(|p| *p.borrow_mut() = Some(rtype.clone()));
+    }
+}
+
+thread_local! {
+    /// Желаемый report_type, который нужно выбрать после загрузки списка отчётов.
+    static PENDING_REPORT: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 }
 
 fn notify(msg: &str) {
