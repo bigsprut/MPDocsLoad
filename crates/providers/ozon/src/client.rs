@@ -7,7 +7,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::{debug, warn};
 
@@ -229,69 +229,86 @@ impl OzonHttpClient {
         auth: &dyn Authenticator,
     ) -> CoreResult<Value> {
         let url = format!("{}{path}", self.base_url);
-        self.breaker.check()?;
-        self.limiter.acquire().await;
+        self.post_url(&url, body, auth).await
+    }
 
+    /// Выполняет POST-запрос по полному URL (внутренний, для /v1/report/info).
+    async fn post_url<B: Serialize>(
+        &self,
+        url: &str,
+        body: &B,
+        auth: &dyn Authenticator,
+    ) -> CoreResult<Value> {
+        self.limiter.acquire().await;
         let mut attempt = 0u32;
         loop {
             attempt += 1;
             debug!(%url, attempt, "POST");
-            let req = self.http.post(&url).json(body);
+            let req = self.http.post(url).json(body);
             let req = auth.apply(req);
-
             match req.send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    if RetryPolicy::is_non_retryable(status) {
-                        self.breaker.on_failure();
-                        return Err(map_status_error(status, resp).await);
-                    }
                     if status.is_success() {
                         self.breaker.on_success();
-                        let json = resp
-                            .json::<Value>()
-                            .await
-                            .map_err(CoreError::Network)?;
-                        // Ozon отдаёт ошибки в `{"code":..., "message":...}` даже с 200 иногда.
-                        return Ok(json);
+                        return resp.json::<Value>().await.map_err(CoreError::Network);
                     }
-                    // 429 Too Many Requests: читаем Retry-After (Ozon использует стандартный заголовок).
                     if status == StatusCode::TOO_MANY_REQUESTS {
                         let retry_after = extract_retry_after(&resp)
                             .unwrap_or_else(|| self.retry.delay_for_attempt(attempt));
-                        warn!(%status, attempt, ?retry_after, "rate limited (429) — waiting");
                         self.limiter.backoff(retry_after).await;
                         self.breaker.on_failure();
                         if attempt >= 3 {
                             return Err(CoreError::Internal(format!(
-                                "Ozon API 429 Too Many Requests после {attempt} попыток. \
-                                 Подождите {} сек перед повтором.",
-                                retry_after.as_secs()
+                                "Ozon API 429 после {attempt} попыток"
                             )));
                         }
                         sleep(retry_after).await;
                         continue;
                     }
-                    // Retryable: 5xx.
-                    warn!(%status, attempt, "retryable status");
-                    if attempt > self.retry.max_retries {
+                    if !RetryPolicy::is_non_retryable(status) && attempt <= self.retry.max_retries {
                         self.breaker.on_failure();
-                        return Err(map_status_error(status, resp).await);
+                        sleep(self.retry.delay_for_attempt(attempt)).await;
+                        continue;
                     }
                     self.breaker.on_failure();
-                    sleep(self.retry.delay_for_attempt(attempt)).await;
+                    return Err(map_status_error(status, resp).await);
                 }
                 Err(e) => {
-                    warn!(error = %e, attempt, "network error");
+                    self.breaker.on_failure();
                     if attempt > self.retry.max_retries {
-                        self.breaker.on_failure();
                         return Err(CoreError::Network(e));
                     }
-                    self.breaker.on_failure();
                     sleep(self.retry.delay_for_attempt(attempt)).await;
                 }
             }
         }
+    }
+
+    /// Скачивает файл по прямому URL (для ссылок из /v1/report/info).
+    pub async fn download_file(&self, url: &str) -> CoreResult<Vec<u8>> {
+        debug!(%url, "download_file");
+        self.http
+            .get(url)
+            .send()
+            .await
+            .map_err(CoreError::Network)?
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(CoreError::Network)
+    }
+
+    /// POST к эндпоинтам без авторизации — не нужен, используем post_url.
+    /// Этот метод для /v1/report/info (с авторизацией, но по base_url).
+    pub async fn post_report_info(
+        &self,
+        code: &str,
+        auth: &dyn Authenticator,
+    ) -> CoreResult<Value> {
+        let url = format!("{}/v1/report/info", self.base_url);
+        let body = json!({ "code": code });
+        self.post_url(&url, &body, auth).await
     }
 }
 

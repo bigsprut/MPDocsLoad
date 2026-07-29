@@ -132,19 +132,19 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             ReportCategory::Finance,
             &[],
         ),
-        desc_browsable(
+        desc_period(
             "ozon.compensation",
             "Компенсации",
             ReportCategory::Finance,
             &[param_date_range(true)],
         ),
-        desc_browsable(
+        desc_period(
             "ozon.decompensation",
             "Декомпенсации (штрафы/антифрод)",
             ReportCategory::Penalties,
             &[param_date_range(true)],
         ),
-        desc_browsable(
+        desc_period(
             "ozon.b2b_sales",
             "Продажи юрлицам (PDF)",
             ReportCategory::Documents,
@@ -156,7 +156,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             ReportCategory::Documents,
             &[param_date_range(true)],
         ),
-        desc_browsable(
+        desc_period(
             "ozon.mutual_settlement",
             "Отчёт о взаиморасчётах",
             ReportCategory::Finance,
@@ -329,21 +329,21 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             client,
             "/v1/finance/accrual/types",
         )),
-        "ozon.compensation" => Arc::new(OzonReport::browsable(
+        "ozon.compensation" => Arc::new(OzonAsyncReport::new(
             "ozon.compensation",
             "Компенсации",
             ReportCategory::Finance,
             client,
             "/v1/finance/compensation",
         )),
-        "ozon.decompensation" => Arc::new(OzonReport::browsable(
+        "ozon.decompensation" => Arc::new(OzonAsyncReport::new(
             "ozon.decompensation",
             "Декомпенсации",
             ReportCategory::Penalties,
             client,
             "/v1/finance/decompensation",
         )),
-        "ozon.b2b_sales" => Arc::new(OzonReport::browsable(
+        "ozon.b2b_sales" => Arc::new(OzonAsyncReport::new(
             "ozon.b2b_sales",
             "Продажи юрлицам (PDF)",
             ReportCategory::Documents,
@@ -357,7 +357,7 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             client,
             "/v1/finance/document-b2b-sales/json",
         )),
-        "ozon.mutual_settlement" => Arc::new(OzonReport::browsable(
+        "ozon.mutual_settlement" => Arc::new(OzonAsyncReport::new(
             "ozon.mutual_settlement",
             "Отчёт о взаиморасчётах",
             ReportCategory::Finance,
@@ -570,18 +570,148 @@ pub fn out_of_scope() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+// =========================================================================
+// OzonAsyncReport — 2-шаговый паттерн для отчётов, возвращающих code.
+//
+// По доке Ozon:
+// Шаг 1: POST /v1/finance/... → {result:{code:"..."}} — идентификатор отчёта.
+// Шаг 2: POST /v1/report/info {code} → {result:{file:"<URL>", status:"success"}}.
+// Шаг 3: GET <URL> → скачиваем XLSX-файл.
+//
+// Применяется для: b2b_sales (PDF), mutual_settlement, compensation, decompensation.
+// =========================================================================
+
+pub struct OzonAsyncReport {
+    type_id: String,
+    display_name: String,
+    category: ReportCategory,
+    client: OzonHttpClient,
+    endpoint: &'static str,
+}
+
+impl OzonAsyncReport {
+    #[must_use]
+    pub fn new(
+        type_id: &str,
+        display_name: &str,
+        category: ReportCategory,
+        client: OzonHttpClient,
+        endpoint: &'static str,
+    ) -> Self {
+        Self {
+            type_id: type_id.into(),
+            display_name: display_name.into(),
+            category,
+            client,
+            endpoint,
+        }
+    }
+}
+
+#[async_trait]
+impl Report for OzonAsyncReport {
+    fn type_id(&self) -> &str {
+        &self.type_id
+    }
+    fn display_name(&self) -> &str {
+        &self.display_name
+    }
+    fn category(&self) -> ReportCategory {
+        self.category.clone()
+    }
+    fn acquisition_mode(&self) -> AcquisitionMode {
+        AcquisitionMode::Period
+    }
+    fn downloader_kind(&self) -> DownloaderKind {
+        DownloaderKind::Api
+    }
+    fn parameters(&self) -> &[ReportParameter] {
+        &[]
+    }
+
+    async fn download(
+        &self,
+        auth: &dyn mdwf_core::Authenticator,
+        params: &ReportParams,
+        _progress: ProgressCallbackRef,
+        _cancel: CancelToken,
+    ) -> CoreResult<Vec<DownloadedFile>> {
+        // Шаг 1: запрос отчёта → получаем code.
+        let body = build_download_body(params);
+        let resp = self.client.post(self.endpoint, &body, auth).await?;
+
+        // Извлекаем code: {result:{code:"..."}}.
+        let code = resp
+            .get("result")
+            .and_then(|r| r.get("code"))
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| {
+                CoreError::Internal(format!(
+                    "Ozon {}: ответ не содержит result.code",
+                    self.type_id
+                ))
+            })?;
+
+        // Шаг 2: запрашиваем статус/ссылку через /v1/report/info.
+        let report_info = self.client.post_report_info(code, auth).await?;
+        let result = report_info
+            .get("result")
+            .ok_or_else(|| CoreError::Internal("report/info: нет result".into()))?;
+
+        let status = result
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+
+        match status {
+            "failed" => {
+                let err = result
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("неизвестная ошибка");
+                return Err(CoreError::Internal(format!(
+                    "Ozon {}: генерация отчёта не удалась: {err}",
+                    self.type_id
+                )));
+            }
+            "waiting" | "processing" => {
+                return Err(CoreError::Internal(format!(
+                    "Ozon {}: отчёт ещё генерируется (статус {status}). Повторите позже.",
+                    self.type_id
+                )));
+            }
+            // "success" и неизвестные статусы — продолжаем к скачиванию.
+            _ => {}
+        }
+
+        // Извлекаем ссылку на файл.
+        let file_url = result
+            .get("file")
+            .and_then(|f| f.as_str())
+            .ok_or_else(|| {
+                CoreError::Internal(format!(
+                    "Ozon {}: report/info вернул success, но нет ссылки file",
+                    self.type_id
+                ))
+            })?;
+
+        // Шаг 3: скачиваем файл по ссылке.
+        let bytes = self.client.download_file(file_url).await?;
+        let period = params.period.clone().unwrap_or_else(|| "current".into());
+        Ok(vec![DownloadedFile::with_content(
+            format!("{}_{}.xlsx", self.type_id, period),
+            "xlsx",
+            bytes,
+        )])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn reports_count_is_18_active() {
-        // Спец. §2.2.1 перечисляет 20 строк с ✅, но 2 дублирующих УПД по выкупам
-        // объединены в один buyout-отчёт, поэтому активно 18 дескрипторов.
-        // (realization ×3, buyout, balance, cash_flow, act_discrepancy, analytics,
-        //  transaction_list, transaction_totals, accrual_postings, accrual_by_day,
-        //  accrual_types, compensation, decompensation, b2b_sales, b2b_sales_json,
-        //  mutual_settlement, realization_posting)
         let caps = capabilities();
         assert!(caps.reports.len() >= 18, "got {} reports", caps.reports.len());
     }
@@ -606,5 +736,15 @@ mod tests {
         let caps = capabilities();
         assert!(caps.reports.iter().any(|r| r.acquisition_mode == AcquisitionMode::Period));
         assert!(caps.reports.iter().any(|r| r.acquisition_mode == AcquisitionMode::Browsable));
+    }
+
+    #[test]
+    fn async_reports_are_period() {
+        let caps = capabilities();
+        for rid in ["ozon.compensation", "ozon.b2b_sales", "ozon.mutual_settlement"] {
+            let r = caps.reports.iter().find(|r| r.type_id == rid);
+            assert!(r.is_some(), "{rid} missing");
+            assert_eq!(r.unwrap().acquisition_mode, AcquisitionMode::Period, "{rid}");
+        }
     }
 }
