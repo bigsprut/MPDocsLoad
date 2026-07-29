@@ -15,6 +15,12 @@ use mdwf_core::{Authenticator, CoreError, CoreResult};
 
 use crate::auth::DEFAULT_BASE_URL;
 
+/// Лимит запросов к Ozon Seller API: 50 RPS (спец. news/584).
+pub const RATE_LIMIT_RPS: u32 = 50;
+
+/// Минимальный интервал между запросами для соблюдения 50 RPS.
+pub const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(20); // 1000ms / 50
+
 /// Retry policy (спец. §2.8.2): не ретраятся 400/401/403/404/422;
 /// ретраятся 429, 5xx и сетевые ошибки. База 500 мс, экспонента ×2, до 5 попыток.
 #[derive(Debug, Clone)]
@@ -138,13 +144,58 @@ impl Default for CircuitBreaker {
     }
 }
 
-/// HTTP-клиент Ozon: POST JSON с retry + circuit breaker.
+/// Rate limiter: минимальный интервал между запросами (для соблюдения 50 RPS).
+/// При 429 адаптивно увеличивает интервал через backoff().
+#[derive(Debug)]
+pub struct RateLimiter {
+    min_interval: Duration,
+    last_request: Mutex<Option<std::time::Instant>>,
+}
+
+impl RateLimiter {
+    #[must_use]
+    pub fn new(min_interval: Duration) -> Self {
+        Self {
+            min_interval,
+            last_request: Mutex::new(None),
+        }
+    }
+
+    /// Ждёт, если запрос был слишком недавно.
+    pub async fn acquire(&self) {
+        let wait = {
+            let mut last = self.last_request.lock();
+            let now = std::time::Instant::now();
+            let wait = match *last {
+                Some(t) if now.duration_since(t) < self.min_interval => {
+                    self.min_interval - now.duration_since(t)
+                }
+                _ => Duration::ZERO,
+            };
+            *last = Some(now + wait);
+            wait
+        };
+        if !wait.is_zero() {
+            sleep(wait).await;
+        }
+    }
+
+    /// Увеличивает интервал после 429: следующий запрос не уйдёт раньше `penalty`.
+    pub async fn backoff(&self, penalty: Duration) {
+        let mut last = self.last_request.lock();
+        let now = std::time::Instant::now();
+        *last = Some(now + penalty);
+    }
+}
+
+/// HTTP-клиент Ozon: POST JSON с retry, rate limit и circuit breaker.
 #[derive(Clone)]
 pub struct OzonHttpClient {
     http: reqwest::Client,
     base_url: String,
     retry: RetryPolicy,
     breaker: Arc<CircuitBreaker>,
+    limiter: Arc<RateLimiter>,
 }
 
 impl OzonHttpClient {
@@ -159,6 +210,7 @@ impl OzonHttpClient {
             base_url: base_url.unwrap_or(DEFAULT_BASE_URL).to_string(),
             retry,
             breaker: Arc::new(CircuitBreaker::default()),
+            limiter: Arc::new(RateLimiter::new(MIN_REQUEST_INTERVAL)),
         })
     }
 
@@ -168,7 +220,7 @@ impl OzonHttpClient {
         &self.base_url
     }
 
-    /// Выполняет POST-запрос с JSON-телом, retry и circuit breaker.
+    /// Выполняет POST-запрос с JSON-телом, retry, rate limit и circuit breaker.
     /// Возвращает распарсенный JSON.
     pub async fn post<B: Serialize>(
         &self,
@@ -178,6 +230,7 @@ impl OzonHttpClient {
     ) -> CoreResult<Value> {
         let url = format!("{}{path}", self.base_url);
         self.breaker.check()?;
+        self.limiter.acquire().await;
 
         let mut attempt = 0u32;
         loop {
@@ -198,11 +251,28 @@ impl OzonHttpClient {
                         let json = resp
                             .json::<Value>()
                             .await
-                            .map_err(|e| CoreError::Network(e))?;
+                            .map_err(CoreError::Network)?;
                         // Ozon отдаёт ошибки в `{"code":..., "message":...}` даже с 200 иногда.
                         return Ok(json);
                     }
-                    // Retryable: 429, 5xx.
+                    // 429 Too Many Requests: читаем Retry-After (Ozon использует стандартный заголовок).
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        let retry_after = extract_retry_after(&resp)
+                            .unwrap_or_else(|| self.retry.delay_for_attempt(attempt));
+                        warn!(%status, attempt, ?retry_after, "rate limited (429) — waiting");
+                        self.limiter.backoff(retry_after).await;
+                        self.breaker.on_failure();
+                        if attempt >= 3 {
+                            return Err(CoreError::Internal(format!(
+                                "Ozon API 429 Too Many Requests после {attempt} попыток. \
+                                 Подождите {} сек перед повтором.",
+                                retry_after.as_secs()
+                            )));
+                        }
+                        sleep(retry_after).await;
+                        continue;
+                    }
+                    // Retryable: 5xx.
                     warn!(%status, attempt, "retryable status");
                     if attempt > self.retry.max_retries {
                         self.breaker.on_failure();
@@ -223,6 +293,23 @@ impl OzonHttpClient {
             }
         }
     }
+}
+
+/// Извлекает задержку из ответа Ozon 429. Ozon использует стандартный
+/// `Retry-After` (секунды). Возвращает None, если заголовка нет.
+fn extract_retry_after(resp: &Response) -> Option<Duration> {
+    if let Some(val) = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()) {
+        if let Ok(secs) = val.trim().parse::<u64>() {
+            return Some(Duration::from_secs(secs.min(3600)));
+        }
+    }
+    // На всякий случай проверяем и X-Ratelimit-Retry (как у WB).
+    if let Some(val) = resp.headers().get("x-ratelimit-retry").and_then(|v| v.to_str().ok()) {
+        if let Ok(secs) = val.trim().parse::<u64>() {
+            return Some(Duration::from_secs(secs.min(3600)));
+        }
+    }
+    None
 }
 
 async fn map_status_error(status: StatusCode, resp: Response) -> CoreError {

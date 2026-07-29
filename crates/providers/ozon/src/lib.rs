@@ -17,6 +17,7 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::map_unwrap_or)]
+#![allow(clippy::unused_async)]
 
 mod auth;
 mod client;
@@ -26,7 +27,9 @@ mod provider;
 mod reports;
 
 pub use auth::{OzonAuthenticator, API_KEY_TTL_DAYS, DEFAULT_BASE_URL};
-pub use client::{CircuitBreaker, OzonHttpClient, RetryPolicy};
+pub use client::{
+    CircuitBreaker, OzonHttpClient, RateLimiter, RetryPolicy, MIN_REQUEST_INTERVAL, RATE_LIMIT_RPS,
+};
 pub use date_format::{
     format_date_only, format_iso8601_ms_z, format_year_month, parse_date_only, parse_year_month,
 };
