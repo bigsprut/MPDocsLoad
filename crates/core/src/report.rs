@@ -182,5 +182,44 @@ mod tests {
         let e = DocumentEntry::new("123", "УПД №123");
         assert_eq!(e.id, "123");
         assert_eq!(e.display_name, "УПД №123");
+        assert!(e.extensions.is_empty());
+        assert!(e.size_hint.is_none());
+        assert!(e.date.is_none());
+    }
+
+    #[test]
+    fn document_filter_default_empty() {
+        let f = DocumentFilter::default();
+        assert!(f.category.is_none());
+        assert!(f.date_from.is_none());
+        assert!(f.date_to.is_none());
+        assert!(f.extensions.is_empty());
+        assert!(f.limit.is_none());
+        assert!(f.extra.is_empty());
+    }
+
+    #[test]
+    fn report_category_serde() {
+        for c in [
+            ReportCategory::Finance,
+            ReportCategory::Documents,
+            ReportCategory::Operational,
+            ReportCategory::Penalties,
+            ReportCategory::Returns,
+            ReportCategory::Analytics,
+        ] {
+            let json = serde_json::to_string(&c).unwrap();
+            let back: ReportCategory = serde_json::from_str(&json).unwrap();
+            assert_eq!(format!("{c:?}"), format!("{back:?}"));
+        }
+    }
+
+    #[test]
+    fn acquisition_mode_serde() {
+        for m in [AcquisitionMode::Period, AcquisitionMode::Browsable] {
+            let json = serde_json::to_string(&m).unwrap();
+            let back: AcquisitionMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(m, back);
+        }
     }
 }

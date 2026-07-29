@@ -32,3 +32,68 @@ impl Default for PagePagination {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_pagination_variant() {
+        let p = Pagination::Pages {
+            page: 2,
+            page_size: 50,
+        };
+        assert_eq!(
+            p,
+            Pagination::Pages {
+                page: 2,
+                page_size: 50
+            }
+        );
+    }
+
+    #[test]
+    fn cursor_pagination_variant() {
+        let p = Pagination::Cursor {
+            last_id: Some("abc".into()),
+            limit: 100,
+        };
+        assert_eq!(p, Pagination::Cursor {
+            last_id: Some("abc".into()),
+            limit: 100,
+        });
+    }
+
+    #[test]
+    fn offset_pagination_variant() {
+        let p = Pagination::Offset {
+            limit: 10,
+            offset: 20,
+        };
+        assert_eq!(
+            p,
+            Pagination::Offset {
+                limit: 10,
+                offset: 20
+            }
+        );
+    }
+
+    #[test]
+    fn page_pagination_default() {
+        let p = PagePagination::default();
+        assert_eq!(p.page, 1);
+        assert_eq!(p.page_size, 1000);
+    }
+
+    #[test]
+    fn pagination_serde_roundtrip() {
+        let p = Pagination::Cursor {
+            last_id: Some("x".into()),
+            limit: 5,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Pagination = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+    }
+}

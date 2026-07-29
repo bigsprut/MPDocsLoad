@@ -60,3 +60,46 @@ pub struct Capabilities {
     pub auth_fields: Vec<AuthField>,
     pub reports: Vec<ReportDescriptor>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_type_serde() {
+        for t in [AuthType::ApiKey, AuthType::BearerToken, AuthType::OAuth2] {
+            let json = serde_json::to_string(&t).unwrap();
+            let back: AuthType = serde_json::from_str(&json).unwrap();
+            assert_eq!(t, back);
+        }
+    }
+
+    #[test]
+    fn auth_field_kind_select() {
+        let kind = AuthFieldKind::Select(vec!["a".into(), "b".into()]);
+        let json = serde_json::to_string(&kind).unwrap();
+        let back: AuthFieldKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{kind:?}"), format!("{back:?}"));
+    }
+
+    #[test]
+    fn capabilities_roundtrip() {
+        let caps = Capabilities {
+            auth_type: AuthType::ApiKey,
+            auth_fields: vec![AuthField {
+                id: "x".into(),
+                label: "X".into(),
+                kind: AuthFieldKind::Text,
+                required: true,
+                placeholder: None,
+                help_text: None,
+                secret: false,
+            }],
+            reports: Vec::new(),
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        let back: Capabilities = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.auth_type, AuthType::ApiKey);
+        assert_eq!(back.auth_fields.len(), 1);
+    }
+}

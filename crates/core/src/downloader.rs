@@ -70,7 +70,7 @@ impl DownloadedFile {
     }
 }
 
-/// Трейт выгрузчика — выполняет фактическое скачивание байтов.
+/// Трейт выгрузщика — выполняет фактическое скачивание байтов.
 ///
 /// `Report::download` делегирует сюда работу конкретного под-клиента.
 pub trait Downloader: Send + Sync {
@@ -81,4 +81,38 @@ pub trait Downloader: Send + Sync {
         id_or_params: &str,
         progress: ProgressCallbackRef,
     ) -> CoreResult<DownloadedFile>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_file_defaults() {
+        let f = DownloadedFile::new("a.csv", "csv", 100);
+        assert_eq!(f.file_name, "a.csv");
+        assert_eq!(f.extension, "csv");
+        assert_eq!(f.size, 100);
+        assert!(f.mime_type.is_none());
+        assert!(f.sha256.is_none());
+        assert!(f.source_id.is_none());
+        assert!(f.source_url.is_none());
+        assert!(f.content.is_none());
+    }
+
+    #[test]
+    fn with_content_sets_size_and_content() {
+        let f = DownloadedFile::with_content("b.xml", "xml", b"<x/>".to_vec());
+        assert_eq!(f.size, 4);
+        assert_eq!(f.content.as_deref(), Some(&b"<x/>"[..]));
+    }
+
+    #[test]
+    fn downloader_kind_serde() {
+        for k in [DownloaderKind::Api, DownloaderKind::ApiAsyncPoll] {
+            let json = serde_json::to_string(&k).expect("serialize");
+            let back: DownloaderKind = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(k, back);
+        }
+    }
 }
