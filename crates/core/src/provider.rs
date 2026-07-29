@@ -18,16 +18,16 @@ use crate::report::ReportRef;
 #[async_trait]
 pub trait MarketplaceProvider: Send + Sync + 'static {
     /// Стабильный идентификатор провайдера ("ozon", "wildberries").
-    fn id(&self) -> &str;
+    fn id(&self) -> &'static str;
 
     /// Человекочитаемое имя.
-    fn display_name(&self) -> &str;
+    fn display_name(&self) -> &'static str;
 
     /// Версия реализации провайдера.
-    fn version(&self) -> &str;
+    fn version(&self) -> &'static str;
 
     /// URL официальной документации API.
-    fn docs_url(&self) -> &str;
+    fn docs_url(&self) -> &'static str;
 
     /// Самоописание: тип авторизации, поля формы, список отчётов.
     fn capabilities(&self) -> &Capabilities;

@@ -11,6 +11,7 @@ members = [
     "crates/scheduler",
     "crates/providers/ozon",
     "crates/providers/wildberries",
+    "crates/test-provider",
     "crates/cli",
     "crates/gui",
     "crates/api",
@@ -101,6 +102,7 @@ mdwf-secrets = { path = "crates/secrets", version = "1.4.0" }
 mdwf-scheduler = { path = "crates/scheduler", version = "1.4.0" }
 mdwf-providers-ozon = { path = "crates/providers/ozon", version = "1.4.0" }
 mdwf-providers-wildberries = { path = "crates/providers/wildberries", version = "1.4.0" }
+mdwf-test-provider = { path = "crates/test-provider", version = "1.4.0" }
 mdwf-api = { path = "crates/api", version = "1.4.0" }
 
 [profile.release]

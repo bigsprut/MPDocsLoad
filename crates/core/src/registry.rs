@@ -99,10 +99,10 @@ mod tests {
 
     #[async_trait]
     impl MarketplaceProvider for FakeProvider {
-        fn id(&self) -> &str { self.id }
-        fn display_name(&self) -> &str { "Fake" }
-        fn version(&self) -> &str { "0.0" }
-        fn docs_url(&self) -> &str { "" }
+        fn id(&self) -> &'static str { self.id }
+        fn display_name(&self) -> &'static str { "Fake" }
+        fn version(&self) -> &'static str { "0.0" }
+        fn docs_url(&self) -> &'static str { "" }
         fn capabilities(&self) -> &Capabilities { unimplemented!() }
         async fn authenticator(&self, _: &crate::profile::Profile) -> CoreResult<Arc<dyn crate::auth::Authenticator>> { unimplemented!() }
         async fn report(&self, _: &str) -> CoreResult<crate::report::ReportRef> { unimplemented!() }

@@ -1,0 +1,20 @@
+[package]
+name = "mdwf-test-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "MDWF mock TestProvider для разработки GUI/CLI без реальных API"
+publish = false
+
+[dependencies]
+mdwf-core.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true

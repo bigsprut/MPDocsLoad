@@ -6,4 +6,6 @@
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::missing_errors_doc)]
 #![allow(clippy::module_name_repetitions)]
