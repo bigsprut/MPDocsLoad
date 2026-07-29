@@ -96,6 +96,17 @@ impl RateLimiter {
             sleep(wait).await;
         }
     }
+
+    /// Увеличивает интервал после получения 429: следующий запрос не уйдёт
+    /// раньше, чем через `penalty` (берётся из X-Ratelimit-Retry WB, если есть).
+    /// Дополнительно к этому acquire() всё равно контролирует min_interval.
+    pub async fn backoff(&self, penalty: Duration) {
+        let mut last = self.last_request.lock();
+        // Сдвигаем "последний запрос" в будущее на величину штрафа,
+        // чтобы acquire() следующего запроса подождал.
+        let now = std::time::Instant::now();
+        *last = Some(now + penalty);
+    }
 }
 
 /// Домен WB API (спец. §2.10.2).
@@ -136,8 +147,8 @@ impl WbDomain {
         .to_string()
     }
 
-    /// Минимальный интервал между запросами (спец. §2.10.2).
-    /// При тестировании можно обнулить через `MDWF_WB_NO_RATELIMIT=1`.
+/// Минимальный интервал между запросами (спец. §2.10.2).
+/// При тестировании можно обнулить через `MDWF_WB_NO_RATELIMIT=1`.
     #[must_use]
     pub fn min_interval(self) -> Duration {
         if std::env::var("MDWF_WB_NO_RATELIMIT").as_deref() == Ok("1") {
@@ -148,6 +159,19 @@ impl WbDomain {
             Self::Finance | Self::Analytics | Self::Returns => Duration::from_secs(60), // 1 RPM
             Self::Statistics => Duration::from_secs(6), // ~10 RPM
             Self::OpenApi => Duration::from_secs(1),
+        }
+    }
+
+    /// Максимально допустимый burst (число запросов подряд) для домена.
+    /// Если burst > 1, лимитер разрешает短时间内 подряд N запросов, но следит
+    /// за общим темпом. Для безопасности берём консервативные значения.
+    #[must_use]
+    pub fn burst(self) -> u32 {
+        match self {
+            Self::Documents => 5,      // док: burst 5
+            Self::Statistics => 10,    // док: burst 10
+            Self::Finance | Self::Analytics | Self::Returns => 1, // burst 1
+            Self::OpenApi => 1,
         }
     }
 }
@@ -222,11 +246,30 @@ impl WbHttpClient {
                     if status.is_success() {
                         return Ok(resp.json::<Value>().await.map_err(CoreError::Network)?);
                     }
+                    // 429 Too Many Requests: WB отдаёт X-Ratelimit-Retry (секунды).
+                    // Это КРИТИЧНО: на 429 обычная экспоненциальная задержка недостаточна,
+                    // WB реально требует ждать 600+ секунд (forum/2141).
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        let retry_after = extract_ratelimit_retry(&resp)
+                            .unwrap_or_else(|| self.retry.delay_for_attempt(attempt));
+                        warn!(%status, attempt, ?retry_after, "rate limited (429) — waiting");
+                        // На 429 делаем не больше 3 попыток (чтобы не долбиться),
+                        // и обновляем лимитер на больший интервал.
+                        self.limiter_for(domain).backoff(retry_after).await;
+                        if attempt >= 3 {
+                            return Err(CoreError::Internal(format!(
+                                "WB API 429 Too Many Requests после {attempt} попыток. \
+                                 Подождите {} сек перед повтором.",
+                                retry_after.as_secs()
+                            )));
+                        }
+                        sleep(retry_after).await;
+                        continue;
+                    }
                     warn!(%status, attempt, "retryable status");
                     if attempt > self.retry.max_retries {
                         return Err(map_status_error(status, resp).await);
                     }
-                    // Для 429 WB отдаёт заголовок X-Ratelimit-Retry (секунды).
                     sleep(self.retry.delay_for_attempt(attempt)).await;
                 }
                 Err(e) => {
@@ -267,6 +310,22 @@ impl WbHttpClient {
                     if status.is_success() {
                         return Ok(resp.json::<Value>().await.map_err(CoreError::Network)?);
                     }
+                    // 429 Too Many Requests (см. комментарий в GET).
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        let retry_after = extract_ratelimit_retry(&resp)
+                            .unwrap_or_else(|| self.retry.delay_for_attempt(attempt));
+                        warn!(%status, attempt, ?retry_after, "rate limited (429) — waiting");
+                        self.limiter_for(domain).backoff(retry_after).await;
+                        if attempt >= 3 {
+                            return Err(CoreError::Internal(format!(
+                                "WB API 429 Too Many Requests после {attempt} попыток. \
+                                 Подождите {} сек перед повтором.",
+                                retry_after.as_secs()
+                            )));
+                        }
+                        sleep(retry_after).await;
+                        continue;
+                    }
                     warn!(%status, attempt, "retryable status");
                     if attempt > self.retry.max_retries {
                         return Err(map_status_error(status, resp).await);
@@ -283,6 +342,27 @@ impl WbHttpClient {
             }
         }
     }
+}
+
+/// Извлекает задержку из ответа WB 429. WB использует заголовки:
+/// - `X-Ratelimit-Retry` — секунды до разрешения (спец. forum/2141: до 600+ сек)
+/// - `Retry-After` — стандартный HTTP-заголовок (секунды)
+/// Возвращает None, если заголовков нет.
+fn extract_ratelimit_retry(resp: &Response) -> Option<Duration> {
+    // Сначала пробуем X-Ratelimit-Retry (WB-специфичный).
+    if let Some(val) = resp.headers().get("x-ratelimit-retry").and_then(|v| v.to_str().ok()) {
+        if let Ok(secs) = val.trim().parse::<u64>() {
+            // Ограничиваем разумным потолком (1 час), защита от мусора.
+            return Some(Duration::from_secs(secs.min(3600)));
+        }
+    }
+    // Затем стандартный Retry-After.
+    if let Some(val) = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()) {
+        if let Ok(secs) = val.trim().parse::<u64>() {
+            return Some(Duration::from_secs(secs.min(3600)));
+        }
+    }
+    None
 }
 
 async fn map_status_error(status: StatusCode, resp: Response) -> CoreError {

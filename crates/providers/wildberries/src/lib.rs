@@ -24,6 +24,9 @@
 #![allow(clippy::assigning_clones)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+#![allow(clippy::unused_async)]
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::doc_lazy_continuation)]
 
 mod auth;
 mod client;
