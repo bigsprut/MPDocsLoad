@@ -80,8 +80,9 @@ impl App {
             .context("tokio runtime")?;
 
         let registry = ProviderRegistry::new();
-        // Регистрируем TestProvider (реальные Ozon/WB добавятся на этапах 8/9).
+        // Регистрируем провайдеров: TestProvider (mock) + Ozon (реальный).
         registry.register(Arc::new(TestProvider::new()) as ProviderRef)?;
+        registry.register(Arc::new(mdwf_providers_ozon::OzonProvider::new()?) as ProviderRef)?;
 
         info!(?prov.data_dir, ?prov.db_path, ?prov.output_dir, "config loaded");
 

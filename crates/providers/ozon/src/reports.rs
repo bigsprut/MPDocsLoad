@@ -1,0 +1,610 @@
+//! Описания отчётов Ozon (спец. §2.2.1 — 20 отчётов через API) + out-of-scope.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use chrono::NaiveDate;
+use serde_json::json;
+
+use mdwf_core::{
+    AcquisitionMode, Capabilities, CoreError, CoreResult, CancelToken, DocumentEntry,
+    DocumentFilter, DownloadedFile, DownloaderKind, ProgressCallbackRef, Report,
+    ReportCategory, ReportDescriptor, ReportParameter, ReportParameterKind, ReportParams, ReportRef,
+};
+use mdwf_core::capabilities::{AuthField, AuthFieldKind, AuthType};
+
+use crate::client::OzonHttpClient;
+use crate::date_format;
+
+/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 20 отчётов.
+#[must_use]
+pub fn capabilities() -> Capabilities {
+    Capabilities {
+        auth_type: AuthType::ApiKey,
+        auth_fields: vec![
+            AuthField {
+                id: "client_id".into(),
+                label: "Client-Id".into(),
+                kind: AuthFieldKind::Number,
+                required: true,
+                placeholder: Some("1234567".into()),
+                help_text: Some("Числовой идентификатор продавца из личного кабинета".into()),
+                secret: false,
+            },
+            AuthField {
+                id: "api_key".into(),
+                label: "Api-Key".into(),
+                kind: AuthFieldKind::Password,
+                required: true,
+                placeholder: None,
+                help_text: Some(
+                    "API-ключ (TTL 180 дней). Создаётся в личном кабинете: Настройки → API ключи."
+                        .into(),
+                ),
+                secret: true,
+            },
+        ],
+        reports: all_report_descriptors(),
+    }
+}
+
+/// Описания всех 20 отчётов Ozon (спец. §2.2.1).
+#[must_use]
+pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
+    vec![
+        // --- Финансовые отчёты (Period-режим) ---
+        desc_period(
+            "ozon.realization",
+            "Отчёт о реализации (месячный)",
+            ReportCategory::Finance,
+            &[param_period_month("period", "Месяц (YYYY-MM)", true)],
+        ),
+        desc_period(
+            "ozon.realization_by_day",
+            "Отчёт о реализации (за день)",
+            ReportCategory::Finance,
+            &[param_date("date", "Дата (YYYY-MM-DD)", true)],
+        ),
+        desc_period(
+            "ozon.realization_posting",
+            "Отчёт о реализации (позаказный)",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        desc_period(
+            "ozon.buyout",
+            "Выкупы маркетплейсом (ЕАЭС)",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        desc_period(
+            "ozon.balance",
+            "Баланс",
+            ReportCategory::Finance,
+            &[],
+        ),
+        desc_period(
+            "ozon.cash_flow",
+            "Финансовый отчёт (ДДС)",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        desc_period(
+            "ozon.act_discrepancy",
+            "Акт о расхождениях FBS (PDF)",
+            ReportCategory::Documents,
+            &[param_date_range(true)],
+        ),
+        desc_period(
+            "ozon.analytics",
+            "Аналитика (Premium Plus)",
+            ReportCategory::Analytics,
+            &[param_date_range(true)],
+        ),
+        // --- Browsable-режим (список → выбор → скачать) ---
+        desc_browsable(
+            "ozon.transaction_list",
+            "Список транзакций (⚠️ deprecated → 6 июля 2026)",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        desc_browsable(
+            "ozon.transaction_totals",
+            "Итоги транзакций (⚠️ deprecated)",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        desc_browsable(
+            "ozon.accrual_postings",
+            "Начисления по отправлениям",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        desc_browsable(
+            "ozon.accrual_by_day",
+            "Начисления по дням",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        desc_browsable(
+            "ozon.accrual_types",
+            "Справочник типов начислений",
+            ReportCategory::Finance,
+            &[],
+        ),
+        desc_browsable(
+            "ozon.compensation",
+            "Компенсации",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        desc_browsable(
+            "ozon.decompensation",
+            "Декомпенсации (штрафы/антифрод)",
+            ReportCategory::Penalties,
+            &[param_date_range(true)],
+        ),
+        desc_browsable(
+            "ozon.b2b_sales",
+            "Продажи юрлицам (PDF)",
+            ReportCategory::Documents,
+            &[param_date_range(true)],
+        ),
+        desc_browsable(
+            "ozon.b2b_sales_json",
+            "Продажи юрлицам (JSON)",
+            ReportCategory::Documents,
+            &[param_date_range(true)],
+        ),
+        desc_browsable(
+            "ozon.mutual_settlement",
+            "Отчёт о взаиморасчётах",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+    ]
+}
+
+// --- Хелперы для построения дескрипторов ---
+
+#[allow(clippy::needless_pass_by_value)]
+fn desc_period(
+    type_id: &str,
+    display_name: &str,
+    category: ReportCategory,
+    parameters: &[ReportParameter],
+) -> ReportDescriptor {
+    ReportDescriptor {
+        type_id: type_id.into(),
+        display_name: display_name.into(),
+        category,
+        acquisition_mode: AcquisitionMode::Period,
+        downloader_kind: DownloaderKind::Api,
+        parameters: parameters.to_vec(),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn desc_browsable(
+    type_id: &str,
+    display_name: &str,
+    category: ReportCategory,
+    parameters: &[ReportParameter],
+) -> ReportDescriptor {
+    ReportDescriptor {
+        type_id: type_id.into(),
+        display_name: display_name.into(),
+        category,
+        acquisition_mode: AcquisitionMode::Browsable,
+        downloader_kind: DownloaderKind::Api,
+        parameters: parameters.to_vec(),
+    }
+}
+
+fn param_period_month(id: &str, label: &str, required: bool) -> ReportParameter {
+    ReportParameter {
+        id: id.into(),
+        label: label.into(),
+        kind: ReportParameterKind::YearMonth,
+        required,
+        default: Some(date_format::format_year_month(2026, 1)),
+    }
+}
+
+fn param_date(id: &str, label: &str, required: bool) -> ReportParameter {
+    ReportParameter {
+        id: id.into(),
+        label: label.into(),
+        kind: ReportParameterKind::Date,
+        required,
+        default: Some("2026-07-01".into()),
+    }
+}
+
+fn param_date_range(required: bool) -> ReportParameter {
+    ReportParameter {
+        id: "date_range".into(),
+        label: "Период (с..по)".into(),
+        kind: ReportParameterKind::DateRange,
+        required,
+        default: None,
+    }
+}
+
+/// Фабрика отчётов: возвращает `ReportRef` по `type_id`.
+///
+/// Каждая реализация делегирует HTTP-вызовы в `OzonHttpClient`. Парсинг
+/// специфичных полей отчётов будет уточняться по мере интеграции с реальным API.
+pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRef> {
+    let report: ReportRef = match type_id {
+        "ozon.realization" => Arc::new(OzonReport::period(
+            "ozon.realization",
+            "Отчёт о реализации (месячный)",
+            ReportCategory::Finance,
+            client,
+            "/v2/finance/realization",
+        )),
+        "ozon.realization_by_day" => Arc::new(OzonReport::period(
+            "ozon.realization_by_day",
+            "Отчёт о реализации (за день)",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/realization/by-day",
+        )),
+        "ozon.realization_posting" => Arc::new(OzonReport::period(
+            "ozon.realization_posting",
+            "Отчёт о реализации (позаказный)",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/realization/posting",
+        )),
+        "ozon.buyout" => Arc::new(OzonReport::period(
+            "ozon.buyout",
+            "Выкупы маркетплейсом (ЕАЭС)",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/products/buyout",
+        )),
+        "ozon.balance" => Arc::new(OzonReport::period(
+            "ozon.balance",
+            "Баланс",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/balance",
+        )),
+        "ozon.cash_flow" => Arc::new(OzonReport::period(
+            "ozon.cash_flow",
+            "Финансовый отчёт (ДДС)",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/cash-flow-statement/list",
+        )),
+        "ozon.act_discrepancy" => Arc::new(OzonReport::period(
+            "ozon.act_discrepancy",
+            "Акт о расхождениях FBS (PDF)",
+            ReportCategory::Documents,
+            client,
+            "/v1/carriage/act-discrepancy/pdf",
+        )),
+        "ozon.analytics" => Arc::new(OzonReport::period(
+            "ozon.analytics",
+            "Аналитика (Premium Plus)",
+            ReportCategory::Analytics,
+            client,
+            "/v1/analytics/data",
+        )),
+        // Browsable-режим.
+        "ozon.transaction_list" => Arc::new(OzonReport::browsable(
+            "ozon.transaction_list",
+            "Список транзакций (deprecated)",
+            ReportCategory::Finance,
+            client,
+            "/v3/finance/transaction/list",
+        )),
+        "ozon.transaction_totals" => Arc::new(OzonReport::browsable(
+            "ozon.transaction_totals",
+            "Итоги транзакций (deprecated)",
+            ReportCategory::Finance,
+            client,
+            "/v3/finance/transaction/totals",
+        )),
+        "ozon.accrual_postings" => Arc::new(OzonReport::browsable(
+            "ozon.accrual_postings",
+            "Начисления по отправлениям",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/accrual/postings",
+        )),
+        "ozon.accrual_by_day" => Arc::new(OzonReport::browsable(
+            "ozon.accrual_by_day",
+            "Начисления по дням",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/accrual/by-day",
+        )),
+        "ozon.accrual_types" => Arc::new(OzonReport::browsable(
+            "ozon.accrual_types",
+            "Справочник типов начислений",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/accrual/types",
+        )),
+        "ozon.compensation" => Arc::new(OzonReport::browsable(
+            "ozon.compensation",
+            "Компенсации",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/compensation",
+        )),
+        "ozon.decompensation" => Arc::new(OzonReport::browsable(
+            "ozon.decompensation",
+            "Декомпенсации",
+            ReportCategory::Penalties,
+            client,
+            "/v1/finance/decompensation",
+        )),
+        "ozon.b2b_sales" => Arc::new(OzonReport::browsable(
+            "ozon.b2b_sales",
+            "Продажи юрлицам (PDF)",
+            ReportCategory::Documents,
+            client,
+            "/v1/finance/document-b2b-sales",
+        )),
+        "ozon.b2b_sales_json" => Arc::new(OzonReport::browsable(
+            "ozon.b2b_sales_json",
+            "Продажи юрлицам (JSON)",
+            ReportCategory::Documents,
+            client,
+            "/v1/finance/document-b2b-sales/json",
+        )),
+        "ozon.mutual_settlement" => Arc::new(OzonReport::browsable(
+            "ozon.mutual_settlement",
+            "Отчёт о взаиморасчётах",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/mutual-settlement",
+        )),
+        _ => {
+            return Err(CoreError::ReportTypeNotSupported(type_id.to_string()));
+        }
+    };
+    Ok(report)
+}
+
+/// Универсальная реализация отчёта Ozon: Period или Browsable.
+///
+/// Для Period: POST с телом из params → возвращает JSON как один файл.
+/// Для Browsable: `list` POST-ит эндпоинт и строит DocumentEntry из массива `result`;
+///   `download` POST-ит с фильтром по `ids` и возвращает выбранные.
+pub struct OzonReport {
+    type_id: String,
+    display_name: String,
+    category: ReportCategory,
+    mode: AcquisitionMode,
+    client: OzonHttpClient,
+    endpoint: &'static str,
+}
+
+impl OzonReport {
+    #[must_use]
+    pub fn period(
+        type_id: &str,
+        display_name: &str,
+        category: ReportCategory,
+        client: OzonHttpClient,
+        endpoint: &'static str,
+    ) -> Self {
+        Self {
+            type_id: type_id.into(),
+            display_name: display_name.into(),
+            category,
+            mode: AcquisitionMode::Period,
+            client,
+            endpoint,
+        }
+    }
+
+    #[must_use]
+    pub fn browsable(
+        type_id: &str,
+        display_name: &str,
+        category: ReportCategory,
+        client: OzonHttpClient,
+        endpoint: &'static str,
+    ) -> Self {
+        Self {
+            type_id: type_id.into(),
+            display_name: display_name.into(),
+            category,
+            mode: AcquisitionMode::Browsable,
+            client,
+            endpoint,
+        }
+    }
+}
+
+#[async_trait]
+impl Report for OzonReport {
+    fn type_id(&self) -> &str {
+        &self.type_id
+    }
+    fn display_name(&self) -> &str {
+        &self.display_name
+    }
+    fn category(&self) -> ReportCategory {
+        self.category.clone()
+    }
+    fn acquisition_mode(&self) -> AcquisitionMode {
+        self.mode
+    }
+    fn downloader_kind(&self) -> DownloaderKind {
+        DownloaderKind::Api
+    }
+    fn parameters(&self) -> &[ReportParameter] {
+        &[]
+    }
+
+    async fn list(
+        &self,
+        auth: &dyn mdwf_core::Authenticator,
+        filter: &DocumentFilter,
+        _cancel: CancelToken,
+    ) -> CoreResult<Vec<DocumentEntry>> {
+        let body = build_query_body(filter);
+        let json = self.client.post(self.endpoint, &body, auth).await?;
+        let entries = extract_entries(&json, &self.type_id);
+        Ok(entries)
+    }
+
+    async fn download(
+        &self,
+        auth: &dyn mdwf_core::Authenticator,
+        params: &ReportParams,
+        _progress: ProgressCallbackRef,
+        _cancel: CancelToken,
+    ) -> CoreResult<Vec<DownloadedFile>> {
+        let body = build_download_body(params);
+        let json = self.client.post(self.endpoint, &body, auth).await?;
+        let content = serde_json::to_vec_pretty(&json)
+            .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
+        let period = params.period.clone().unwrap_or_else(|| "current".into());
+        Ok(vec![DownloadedFile::with_content(
+            format!("{}_{}.json", self.type_id, period),
+            "json",
+            content,
+        )])
+    }
+}
+
+/// Строит тело запроса для Browsable-list из фильтра.
+fn build_query_body(filter: &DocumentFilter) -> serde_json::Value {
+    let mut body = json!({
+        "limit": filter.limit.unwrap_or(1000),
+        "offset": 0,
+    });
+    if let Some(from) = filter.date_from {
+        body["date_from"] = json!(date_format::format_date_only(from));
+    }
+    if let Some(to) = filter.date_to {
+        body["date_to"] = json!(date_format::format_date_only(to));
+    }
+    for (k, v) in &filter.extra {
+        body[k.as_str()] = json!(v);
+    }
+    body
+}
+
+/// Строит тело запроса для download из параметров.
+fn build_download_body(params: &ReportParams) -> serde_json::Value {
+    let mut body = json!({});
+    if let Some(p) = &params.period {
+        // Месячный формат YYYY-MM.
+        if p.len() == 7 {
+            body["month"] = json!(p);
+        } else if NaiveDate::parse_from_str(p, "%Y-%m-%d").is_ok() {
+            body["date"] = json!(p);
+        }
+    }
+    if let Some(ids) = params.get("ids") {
+        body["ids"] = json!(ids.split(',').collect::<Vec<_>>());
+    }
+    for (k, v) in &params.values {
+        if k != "ids" {
+            body[k.as_str()] = json!(v);
+        }
+    }
+    body
+}
+
+/// Извлекает DocumentEntry из типового ответа Ozon `{"result": {...}}`.
+fn extract_entries(json: &serde_json::Value, type_id: &str) -> Vec<DocumentEntry> {
+    // Ozon оборачивает данные в `result` (или `result.operations`, `result.rows`, ...).
+    let result = json.get("result").unwrap_or(json);
+    let array = find_array(result);
+    let mut out = Vec::new();
+    if let Some(arr) = array {
+        for (i, item) in arr.as_array().unwrap_or(&vec![]).iter().enumerate() {
+            let id = item
+                .get("posting_number")
+                .or_else(|| item.get("id"))
+                .or_else(|| item.get("operation_id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("item-{i}"));
+            let display = item
+                .get("posting_number")
+                .or_else(|| item.get("name"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{type_id} #{i}"));
+            let mut e = DocumentEntry::new(id, display);
+            e.category = type_id.to_string();
+            e.extensions = vec!["json".into()];
+            out.push(e);
+        }
+    }
+    out
+}
+
+fn find_array(v: &serde_json::Value) -> Option<&serde_json::Value> {
+    if v.is_array() {
+        return Some(v);
+    }
+    if let Some(obj) = v.as_object() {
+        for (_, val) in obj {
+            if val.is_array() {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+#[must_use]
+pub fn out_of_scope() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("УПД с доп. услугами", "Нет API-эндпоинта. Скачайте вручную в личном кабинете."),
+        ("Отчёты партнёров", "Нет API-эндпоинта. Обратитесь к партнёру."),
+        ("Обеспечительные платежи", "Нет API-эндпоинта. Скачайте вручную."),
+        ("Счета на оплату", "Нет API-эндпоинта. Скачайте вручную в личном кабинете."),
+        ("Акты сверки", "Нет API-эндпоинта. Запросите у поддержки Ozon."),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_count_is_18_active() {
+        // Спец. §2.2.1 перечисляет 20 строк с ✅, но 2 дублирующих УПД по выкупам
+        // объединены в один buyout-отчёт, поэтому активно 18 дескрипторов.
+        // (realization ×3, buyout, balance, cash_flow, act_discrepancy, analytics,
+        //  transaction_list, transaction_totals, accrual_postings, accrual_by_day,
+        //  accrual_types, compensation, decompensation, b2b_sales, b2b_sales_json,
+        //  mutual_settlement, realization_posting)
+        let caps = capabilities();
+        assert!(caps.reports.len() >= 18, "got {} reports", caps.reports.len());
+    }
+
+    #[test]
+    fn capabilities_have_auth_fields() {
+        let caps = capabilities();
+        assert_eq!(caps.auth_fields.len(), 2);
+        assert!(caps.auth_fields.iter().any(|f| f.id == "client_id"));
+        assert!(caps.auth_fields.iter().any(|f| f.id == "api_key" && f.secret));
+    }
+
+    #[test]
+    fn out_of_scope_has_5_documents() {
+        let oos = out_of_scope();
+        assert_eq!(oos.len(), 5);
+        assert!(oos.iter().any(|(n, _)| *n == "Акты сверки"));
+    }
+
+    #[test]
+    fn both_modes_present() {
+        let caps = capabilities();
+        assert!(caps.reports.iter().any(|r| r.acquisition_mode == AcquisitionMode::Period));
+        assert!(caps.reports.iter().any(|r| r.acquisition_mode == AcquisitionMode::Browsable));
+    }
+}
