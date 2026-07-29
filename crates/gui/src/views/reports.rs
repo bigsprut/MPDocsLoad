@@ -13,6 +13,7 @@ use crate::channels::{CommandSender, ProviderInfo, ReportInfo};
 
 thread_local! {
     static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
+    static LIST_WIDGET: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
 }
 
 /// Хук: провайдеры загружены (для обновления combo, если нужно).
@@ -59,6 +60,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
     list_box.set_vexpand(true);
     root.append(&list_box);
+    LIST_WIDGET.with(|lw| *lw.borrow_mut() = Some(list_box.clone()));
 
     let cs1 = cs.clone();
     let list_box1 = list_box.clone();
@@ -91,9 +93,36 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
 /// Обработчик «отчёты загружены» — перерисовывает список.
 pub fn on_reports_loaded(res: &Result<Vec<ReportInfo>, String>) {
-    REPORTS.with(|r| {
-        *r.borrow_mut() = res.as_ref().cloned().unwrap_or_default();
-    });
-    // Полная перерисовка списка будет через сигнал; пока сохраняем во thread_local.
-    // (На ЭТАПЕ 6 свяжем с GObject-моделью для автообновления.)
+    let list_box = LIST_WIDGET.with(|lw| lw.borrow().clone());
+    let Some(list_box) = list_box else { return };
+
+    // Очищаем список.
+    while let Some(child) = list_box.first_child() {
+        list_box.remove(&child);
+    }
+
+    match res {
+        Err(e) => {
+            let lbl = Label::new(Some(&format!("Ошибка: {e}")));
+            lbl.set_css_classes(&["error"]);
+            list_box.append(&lbl);
+        }
+        Ok(reports) => {
+            REPORTS.with(|r| *r.borrow_mut() = reports.clone());
+            if reports.is_empty() {
+                list_box.append(&Label::new(Some("Отчётов не найдено.")));
+                return;
+            }
+            for r in reports {
+                let text = format!("{} — {}", r.type_id, r.display_name);
+                let label = Label::builder().label(&text).halign(gtk4::Align::Start).build();
+                let mode = if r.is_browsable { "список" } else { "период" };
+                label.set_tooltip_text(Some(&format!(
+                    "{}\nРежим: {}\nКатегория: {}",
+                    r.type_id, mode, r.category
+                )));
+                list_box.append(&label);
+            }
+        }
+    }
 }

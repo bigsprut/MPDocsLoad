@@ -25,6 +25,8 @@ thread_local! {
     static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
     static DOCS: Rc<RefCell<Vec<DocumentEntry>>> = Rc::new(RefCell::new(Vec::new()));
     static CHECKS: Rc<RefCell<Vec<(String, CheckButton)>>> = Rc::new(RefCell::new(Vec::new()));
+    // Командный канал (для авто-запросов при смене выбора).
+    static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
     // Виджеты (сохраняем после build для обновления из событий).
     static W_PROVIDER: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
     static W_PROFILE: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
@@ -64,26 +66,21 @@ pub fn on_profiles_loaded(profiles: &[Profile]) {
     refresh_profile_combo();
 }
 
-/// Хук: отчёты загружены.
+/// Хук: отчёты загружены (все уже принадлежат запрошенному провайдеру).
 pub fn on_reports_loaded(reports: &[ReportInfo]) {
-    REPORTS.with(|r| {
-        *r.borrow_mut() = reports
-            .iter()
-            .filter(|r| matches_current_provider(r))
-            .cloned()
-            .collect();
-    });
-    W_REPORT.with(|w| {
-        if let Some(combo) = w.borrow().as_ref() {
-            combo.remove_all();
-            let reps = REPORTS.with(|r| r.borrow().clone());
-            for r in &reps {
-                combo.append_text(&format!("{} — {}", r.type_id, r.display_name));
-            }
-            combo.set_active(Some(0));
-            update_mode_hint();
+    REPORTS.with(|r| *r.borrow_mut() = reports.to_vec());
+    let combo = W_REPORT.with(|w| w.borrow().clone());
+    let Some(combo) = combo else { return };
+    combo.remove_all();
+    if reports.is_empty() {
+        combo.append_text("(нет отчётов)");
+    } else {
+        for r in reports {
+            combo.append_text(&format!("{} — {}", r.type_id, r.display_name));
         }
-    });
+    }
+    combo.set_active(Some(0));
+    update_mode_hint();
 }
 
 pub fn build(cs: &CommandSender) -> GtkBox {
@@ -188,6 +185,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_PROVIDER.with(|w| *w.borrow_mut() = Some(provider_combo.clone()));
     W_PROFILE.with(|w| *w.borrow_mut() = Some(profile_combo.clone()));
     W_REPORT.with(|w| *w.borrow_mut() = Some(report_combo.clone()));
+    CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
     W_LIST.with(|w| *w.borrow_mut() = Some(list_box.clone()));
     W_RESULT.with(|w| *w.borrow_mut() = Some(result_label.clone()));
     W_MODE_HINT.with(|w| *w.borrow_mut() = Some(mode_hint.clone()));
@@ -330,18 +328,6 @@ fn current_report_type() -> Option<String> {
     text.split(" — ").next().map(str::to_string)
 }
 
-/// True, если отчёт принадлежит текущему выбранному провайдеру.
-fn matches_current_provider(r: &ReportInfo) -> bool {
-    let combo = W_PROVIDER.with(|w| w.borrow().clone());
-    let Some(combo) = combo else {
-        return true;
-    };
-    let Some(pid) = current_provider_id(&combo) else {
-        return true;
-    };
-    r.provider_id == pid
-}
-
 /// Обновить combo профилей под текущего провайдера.
 fn refresh_profile_combo() {
     let combo = W_PROFILE.with(|w| w.borrow().clone());
@@ -362,19 +348,22 @@ fn refresh_profile_combo() {
     combo.set_active(Some(0));
 }
 
-/// Смена провайдера: обновить combo профилей + запросить отчёты.
+/// Смена провайдера: обновить combo профилей + автоматически запросить отчёты.
 fn on_provider_changed() {
     refresh_profile_combo();
-    // Запрос отчётов делегируем через событие — но отправлять команду можно только
-    // из обработчика кнопки. Здесь только помечаем отчёты пустыми; пользователь
-    // нажмёт «↻ Обновить». Альтернативно — запросим сразу:
-    W_REPORT.with(|w| {
-        if let Some(combo) = w.borrow().as_ref() {
-            combo.remove_all();
-            combo.append_text("(нажмите «↻ Обновить»)");
-            combo.set_active(Some(0));
+    // Очищаем combo отчётов (покажем «Загрузка…»).
+    if let Some(combo) = W_REPORT.with(|w| w.borrow().clone()) {
+        combo.remove_all();
+        combo.append_text("(загрузка…)");
+        combo.set_active(Some(0));
+    }
+    // Авто-запрос отчётов выбранного провайдера.
+    let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
+    if let Some(pid) = pid {
+        if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
+            cs.send(crate::channels::UiCommand::LoadReports(pid));
         }
-    });
+    }
 }
 
 /// Обновить подсказку режима и доступность кнопок для выбранного отчёта.
