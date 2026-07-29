@@ -70,14 +70,35 @@ pub fn build_and_present(
         .build();
 
     let bottom = GtkBox::new(Orientation::Horizontal, 0);
+    bottom.set_margin_top(2);
+    bottom.set_margin_bottom(2);
     bottom.append(&status);
 
-    let outer = GtkBox::new(Orientation::Vertical, 0);
-    outer.set_vexpand(true);
-    outer.set_hexpand(true);
-    outer.append(&root);
-    outer.append(&Separator::new(Orientation::Horizontal));
-    outer.append(&bottom);
+    // --- ToolbarView: даёт полосу заголовка с кнопками управления окном ---
+    // (свернуть/развернуть/закрыть). Без неё libadwaita на Windows не рисует
+    // стандартные кнопки управления окном.
+    let toolbar = adw::ToolbarView::new();
+
+    // Верхняя панель заголовка.
+    let header = adw::HeaderBar::builder().show_title(true).build();
+
+    // Меню «Приложение»: пункты «О программе» + «Выход».
+    let menu = gtk4::gio::Menu::new();
+    menu.append(Some("О программе"), Some("app.about"));
+    menu.append(Some("Выход"), Some("app.quit"));
+    let menu_btn = gtk4::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Меню")
+        .menu_model(&menu)
+        .build();
+    header.pack_start(&menu_btn);
+
+    toolbar.add_top_bar(&header);
+    toolbar.set_content(Some(&root));
+    toolbar.add_bottom_bar(&bottom);
+
+    // Действия приложения: about и quit.
+    setup_app_actions(app, &window);
 
     // Цикл обработки событий UI: читаем из async_channel receiver в main context.
     {
@@ -94,8 +115,63 @@ pub fn build_and_present(
         }));
     }
 
-    window.set_content(Some(&outer));
+    window.set_content(Some(&toolbar));
     window.present();
+}
+
+/// Регистрирует действия приложения `app.about` и `app.quit`.
+fn setup_app_actions(app: &adw::Application, window: &adw::ApplicationWindow) {
+    // Действие «quit»: закрывает окно и завершает приложение.
+    let quit_action = gtk4::gio::SimpleAction::new("quit", None);
+    {
+        let win = window.clone();
+        quit_action.connect_activate(move |_, _| {
+            win.close();
+        });
+    }
+    app.add_action(&quit_action);
+    // Горячая клавиша Ctrl+Q.
+    app.set_accels_for_action("app.quit", &["<Ctrl>Q"]);
+
+    // Действие «about»: показываем вкладку «О программе».
+    let about_action = gtk4::gio::SimpleAction::new("about", None);
+    about_action.connect_activate({
+        let win = window.clone();
+        move |_, _| {
+            // Переключаем стек на «about» — ищем его в content.
+            show_about_in_window(&win);
+        }
+    });
+    app.add_action(&about_action);
+}
+
+/// Находит стек в окне и переключает на вкладку «О программе».
+fn show_about_in_window(win: &adw::ApplicationWindow) {
+    // Идём от content (ToolbarView) -> content (GtkBox) -> stack.
+    let Some(content) = win.content() else {
+        return;
+    };
+    // Рекурсивный поиск Stack среди детей.
+    if let Some(stack) = find_stack(&content) {
+        stack.set_visible_child_name(ViewId::About.as_str());
+    }
+}
+
+/// Рекурсивный поиск первого виджета типа gtk4::Stack в дереве.
+fn find_stack(widget: &gtk4::Widget) -> Option<gtk4::Stack> {
+    if let Ok(stack) = widget.clone().downcast::<gtk4::Stack>() {
+        return Some(stack);
+    }
+    if let Some(bin) = widget.downcast_ref::<gtk4::Box>() {
+        let mut child = bin.first_child();
+        while let Some(c) = child {
+            if let Some(found) = find_stack(&c) {
+                return Some(found);
+            }
+            child = c.next_sibling();
+        }
+    }
+    None
 }
 
 /// Маршрутизация событий UI в нужные обработчики.
