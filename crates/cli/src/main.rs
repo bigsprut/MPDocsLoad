@@ -75,8 +75,46 @@ enum Command {
         #[arg(long)]
         provider: Option<String>,
     },
+    /// Управление расписаниями планировщика.
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleCmd,
+    },
     /// Диагностика окружения и подключений.
     Doctor,
+}
+
+#[derive(Subcommand, Debug)]
+enum ScheduleCmd {
+    /// Список расписаний.
+    List,
+    /// Добавить расписание.
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        profile: String,
+        #[arg(long, required = true)]
+        report: Vec<String>,
+        #[arg(long, default_value = "0 2 1 * *")]
+        cron: String,
+        /// Сдвиг периода в месяцах (0 = текущий, -1 = прошлый).
+        #[arg(long, default_value_t = 0)]
+        period_offset: i32,
+        #[arg(long, default_value_t = false)]
+        disabled: bool,
+    },
+    /// Удалить расписание.
+    Delete { name: String },
+    /// Запустить все просроченные расписания.
+    Run,
+    /// Управление автозапуском с Windows.
+    Autostart {
+        #[arg(long)]
+        enable: bool,
+        #[arg(long)]
+        disable: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -183,7 +221,7 @@ async fn main() -> StdExitCode {
 }
 
 async fn run(cli: Cli) -> Result<ExitCode> {
-    use commands::{doctor, download, out_of_scope, profiles, providers, reports, Context};
+    use commands::{doctor, download, out_of_scope, profiles, providers, reports, schedule, Context};
     // Контекст создаётся один раз и переиспользуется всеми командами.
     let ctx = match Context::new() {
         Ok(c) => c,
@@ -198,6 +236,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Reports { action } => reports::run(&ctx, action).await,
         Command::Download(args) => download::run(&ctx, args).await,
         Command::OutOfScope { provider } => out_of_scope::run(&ctx, provider).await,
+        Command::Schedule { action } => schedule::run(&ctx, action).await,
         Command::Doctor => doctor::run(&ctx).await,
     }
 }

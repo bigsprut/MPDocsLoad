@@ -26,4 +26,4 @@ pub mod runner;
 
 pub use autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
 pub use cron::{next_run, parse, DAILY, MONTHLY, QUARTERLY, WEEKLY};
-pub use runner::{run_due_schedules, Runner};
+pub use runner::{run_due_schedules, JobExecutor, JobRequest, JobResult, RunStatus, Runner};

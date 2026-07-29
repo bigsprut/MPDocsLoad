@@ -21,6 +21,7 @@ mdwf-providers-wildberries.workspace = true
 mdwf-test-provider.workspace = true
 mdwf-config.workspace = true
 clap.workspace = true
+async-trait.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

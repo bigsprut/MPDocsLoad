@@ -7,5 +7,6 @@ pub mod out_of_scope;
 pub mod profiles;
 pub mod providers;
 pub mod reports;
+pub mod schedule;
 
 pub use context::Context;
