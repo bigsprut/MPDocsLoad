@@ -27,6 +27,8 @@
 #![allow(clippy::unused_async)]
 #![allow(clippy::match_same_arms)]
 #![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::unused_self)]
 
 mod auth;
 mod client;

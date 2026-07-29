@@ -1,10 +1,15 @@
-//! Documents API WB (спец. §2.10.3) — список/скачивание УПД, УКД, актов.
+//! Documents API WB — список/скачивание УПД, УКД, актов.
 //!
-//! Трёхшаговый паттерн:
-//! 1. `GET /api/v1/documents/categories` — список категорий.
-//! 2. `GET /api/v1/documents/list` — список документов по категории.
-//! 3. `GET /api/v1/documents/download` или `POST /api/v1/documents/download/all`
-//!    — скачивание (одиночное или батчами до 50).
+//! Сверено с официальной документацией dev.wildberries.ru (раздел «Документы»).
+//!
+//! Эндпоинты (домен documents-api.wildberries.ru):
+//! - GET  /api/v1/documents/categories  -> {"data":{"categories":[...]}}
+//! - GET  /api/v1/documents/list         -> {"data":{"documents":[...]}}
+//!   параметры: locale, beginTime, endTime, sort, order, category, serviceName, limit(<=50), offset
+//! - GET  /api/v1/documents/download     -> {"data":{"fileName","extension","document"(base64)}}
+//!   параметры: serviceName, extension
+//! - POST /api/v1/documents/download/all -> {"data":{"fileName","extension","document"(base64)}}
+//!   тело: {"params":[{serviceName, extension}, ...]} до 50 элементов
 
 use base64::Engine;
 use chrono::NaiveDate;
@@ -15,14 +20,14 @@ use tracing::debug;
 use mdwf_core::{Authenticator, CoreError, CoreResult, DocumentEntry};
 
 use crate::client::{WbDomain, WbHttpClient};
-use crate::date_format::format_date_moscow;
+use crate::date_format;
 
-/// Категория документа WB (из `/documents/categories`).
+/// Категория документа WB (из /documents/categories).
 #[derive(Debug, Clone, Deserialize)]
 pub struct DocumentCategory {
     pub name: String,
     #[serde(default)]
-    pub parent: Option<String>,
+    pub title: Option<String>,
 }
 
 /// Параметры запроса списка документов.
@@ -31,6 +36,9 @@ pub struct ListDocumentsParams {
     pub category: Option<String>,
     pub date_from: Option<NaiveDate>,
     pub date_to: Option<NaiveDate>,
+    /// locale: "ru" | "en" | "zh" (дока: default "en").
+    pub locale: String,
+    /// limit: максимум 50 (дока).
     pub limit: u32,
     pub offset: u32,
 }
@@ -41,26 +49,25 @@ impl Default for ListDocumentsParams {
             category: None,
             date_from: None,
             date_to: None,
-            limit: 1000,
+            locale: "ru".into(),
+            limit: 50,
             offset: 0,
         }
     }
 }
 
-/// Элемент списка документов WB.
+/// Элемент списка документов WB (поле documents[]. из ответа).
 #[derive(Debug, Clone, Deserialize)]
 pub struct WbDocument {
-    pub id: serde_json::Value,
+    /// Уникальный ID документа (дока: передаётся как serviceName в /download).
+    #[serde(rename = "serviceName")]
+    pub service_name: String,
     #[serde(default)]
-    pub url: Option<String>,
+    pub category: Option<String>,
     #[serde(default)]
-    pub filename: Option<String>,
+    pub amount: Option<f64>,
     #[serde(default)]
-    pub extension: Option<String>,
-    #[serde(default)]
-    pub size: Option<i64>,
-    #[serde(default)]
-    pub create_date: Option<String>,
+    pub date: Option<String>,
 }
 
 /// Subclient для Documents API.
@@ -74,7 +81,7 @@ impl<'a> DocumentsClient<'a> {
         Self { http }
     }
 
-    /// Шаг 1: список поддерживаемых категорий.
+    /// Список поддерживаемых категорий. Ответ: {"data":{"categories":[...]}}.
     pub async fn list_categories(
         &self,
         auth: &dyn Authenticator,
@@ -82,16 +89,23 @@ impl<'a> DocumentsClient<'a> {
         debug!("WB documents: list categories");
         let json = self
             .http
-            .get(WbDomain::Documents, "/api/v1/documents/categories", &[], auth)
+            .get(
+                WbDomain::Documents,
+                "/api/v1/documents/categories",
+                &[("locale", "ru")],
+                auth,
+            )
             .await?;
+        // Формат: {"data": {"categories": [...]}}.
         let cats: Vec<DocumentCategory> = json
             .get("data")
-            .and_then(|d| serde_json::from_value(d.clone()).ok())
+            .and_then(|d| d.get("categories"))
+            .and_then(|c| serde_json::from_value(c.clone()).ok())
             .unwrap_or_default();
         Ok(cats)
     }
 
-    /// Проверяет, что категория поддерживается WB (спец. §2.10.3 шаг 1).
+    /// Проверяет, что категория поддерживается WB.
     pub async fn ensure_category(
         &self,
         auth: &dyn Authenticator,
@@ -106,7 +120,7 @@ impl<'a> DocumentsClient<'a> {
         Ok(())
     }
 
-    /// Шаг 2: список документов по параметрам.
+    /// Список документов по параметрам. Ответ: {"data":{"documents":[...]}}.
     pub async fn list_documents(
         &self,
         auth: &dyn Authenticator,
@@ -114,145 +128,146 @@ impl<'a> DocumentsClient<'a> {
     ) -> CoreResult<Vec<WbDocument>> {
         debug!(category = ?params.category, "WB documents: list");
         let mut query: Vec<(&str, String)> = vec![
-            ("limit", params.limit.to_string()),
+            ("locale", params.locale.clone()),
+            ("limit", params.limit.min(50).to_string()),
             ("offset", params.offset.to_string()),
+            ("sort", "date".into()),
+            ("order", "desc".into()),
         ];
         if let Some(c) = &params.category {
             query.push(("category", c.clone()));
         }
+        // Дока: beginTime/endTime (CamelCase), дата YYYY-MM-DD.
         if let Some(d) = params.date_from {
-            query.push(("begin_time", format_date_moscow(d)));
+            query.push(("beginTime", format_date(d)));
         }
         if let Some(d) = params.date_to {
-            query.push(("end_time", format_date_moscow(d)));
+            query.push(("endTime", format_date(d)));
         }
         let query_ref: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let json = self
             .http
             .get(WbDomain::Documents, "/api/v1/documents/list", &query_ref, auth)
             .await?;
+        // Формат: {"data": {"documents": [...]}}.
         let docs: Vec<WbDocument> = json
             .get("data")
-            .and_then(|d| serde_json::from_value(d.clone()).ok())
+            .and_then(|d| d.get("documents"))
+            .and_then(|docs| serde_json::from_value(docs.clone()).ok())
             .unwrap_or_default();
         Ok(docs)
     }
 
-    /// Шаг 3 (одиночный): скачивание одного документа.
-    /// Возвращает декодированные байты (base64 ZIP/XLSX/XML).
+    /// Скачивание одного документа. Ответ: {"data":{"fileName","extension","document"(base64)}}.
+    /// Параметры (дока): serviceName (required) + extension (required).
     pub async fn download_one(
         &self,
         auth: &dyn Authenticator,
-        download_id: &str,
+        service_name: &str,
+        extension: &str,
     ) -> CoreResult<Vec<u8>> {
-        debug!(%download_id, "WB documents: download one");
+        debug!(service_name, extension, "WB documents: download one");
         let json = self
             .http
             .get(
                 WbDomain::Documents,
                 "/api/v1/documents/download",
-                &[("downloadId", download_id)],
+                &[("serviceName", service_name), ("extension", extension)],
                 auth,
             )
             .await?;
+        // Формат: {"data": {"document": "<base64>"}}.
         let b64 = json
             .get("data")
-            .and_then(|d| d.get("file"))
+            .and_then(|d| d.get("document"))
             .and_then(|f| f.as_str())
-            .ok_or_else(|| CoreError::Internal("WB download: no 'data.file' field".into()))?;
+            .ok_or_else(|| CoreError::Internal("WB download: нет поля data.document".into()))?;
         base64::engine::general_purpose::STANDARD
             .decode(b64)
             .map_err(|e| CoreError::Internal(format!("base64 decode: {e}")))
     }
 
-    /// Шаг 3 (батч): батч-скачивание до 50 документов через `/download/all`.
+    /// Батч-скачивание до 50 документов через /download/all.
+    /// Тело: {"params":[{"serviceName","extension"}, ...]}. Ответ как у /download.
     pub async fn download_batch(
         &self,
         auth: &dyn Authenticator,
-        ids: &[(String, String)], // (service_name, extension)
-    ) -> CoreResult<Vec<Vec<u8>>> {
-        debug!(count = ids.len(), "WB documents: download batch");
-        if ids.len() > 50 {
+        items: &[(String, String)], // (serviceName, extension)
+    ) -> CoreResult<Vec<u8>> {
+        debug!(count = items.len(), "WB documents: download batch");
+        if items.is_empty() {
+            return Err(CoreError::InvalidParameter("пустой батч".into()));
+        }
+        if items.len() > 50 {
             return Err(CoreError::InvalidParameter(format!(
-                "batch limit is 50, got {}",
-                ids.len()
+                "лимит батча 50, получено {}",
+                items.len()
             )));
         }
-        let body: Vec<serde_json::Value> = ids
+        let params: Vec<serde_json::Value> = items
             .iter()
-            .map(|(name, ext)| json!({" serviceName": name, "extension": ext}))
+            .map(|(name, ext)| json!({"serviceName": name, "extension": ext}))
             .collect();
+        let body = json!({"params": params});
         let json = self
             .http
             .post(WbDomain::Documents, "/api/v1/documents/download/all", &body, auth)
             .await?;
-        let arr = json
+        let b64 = json
             .get("data")
-            .and_then(|d| d.as_array())
-            .ok_or_else(|| CoreError::Internal("WB download/all: no 'data' array".into()))?;
-        let mut out = Vec::with_capacity(arr.len());
-        for item in arr {
-            let b64 = item
-                .get("file")
-                .and_then(|f| f.as_str())
-                .ok_or_else(|| CoreError::Internal("WB download/all: missing 'file'".into()))?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|e| CoreError::Internal(format!("base64 decode: {e}")))?;
-            out.push(bytes);
-        }
-        Ok(out)
+            .and_then(|d| d.get("document"))
+            .and_then(|f| f.as_str())
+            .ok_or_else(|| CoreError::Internal("WB download/all: нет data.document".into()))?;
+        base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| CoreError::Internal(format!("base64 decode: {e}")))
     }
 }
 
-/// Преобразует `WbDocument` в `DocumentEntry` для UI.
+/// Преобразует WbDocument в DocumentEntry для UI.
 #[must_use]
 pub fn wb_document_to_entry(doc: &WbDocument, category: &str) -> DocumentEntry {
-    let id_str = match &doc.id {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        other => other.to_string(),
-    };
-    let display = doc
-        .filename
-        .clone()
-        .unwrap_or_else(|| format!("Документ {id_str}"));
-    let mut e = DocumentEntry::new(id_str, display);
+    let mut e = DocumentEntry::new(doc.service_name.clone(), doc.service_name.clone());
     e.category = category.to_string();
-    e.extensions = doc
-        .extension
-        .as_deref()
-        .map(|x| vec![x.to_string()])
-        .unwrap_or_default();
-    e.size_hint = doc.size.map(|s| s.max(0) as u64);
-    if let Some(date_str) = &doc.create_date {
-        e.date = chrono::DateTime::parse_from_rfc3339(date_str)
-            .ok()
-            .map(|dt| dt.date_naive());
+    e.extensions = vec!["zip".into(), "xml".into()];
+    e.size_hint = doc.amount.map(|a| a as u64);
+    if let Some(date_str) = &doc.date {
+        e.date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok();
     }
     e
+}
+
+/// Форматирует дату как YYYY-MM-DD (дока: beginTime/endTime в формате даты).
+fn format_date(d: NaiveDate) -> String {
+    date_format::format_date_moscow(d)
+        .split('T')
+        .next()
+        .unwrap_or("2026-01-01")
+        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
 
     #[test]
     fn wb_doc_to_entry_basic() {
         let doc = WbDocument {
-            id: json!(12345),
-            url: None,
-            filename: Some("УПД №123".into()),
-            extension: Some("xml".into()),
-            size: Some(2048),
-            create_date: Some("2026-07-01T00:00:00+03:00".into()),
+            service_name: "redeem-notification-44841941".into(),
+            category: Some("redeem-notification".into()),
+            amount: Some(100.0),
+            date: Some("2026-07-01".into()),
         };
-        let e = wb_document_to_entry(&doc, "upd");
-        assert_eq!(e.id, "12345");
-        assert_eq!(e.display_name, "УПД №123");
-        assert_eq!(e.extensions, vec!["xml"]);
-        assert_eq!(e.size_hint, Some(2048));
+        let e = wb_document_to_entry(&doc, "redeem-notification");
+        assert_eq!(e.id, "redeem-notification-44841941");
+        assert_eq!(e.category, "redeem-notification");
         assert_eq!(e.date, Some(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()));
+    }
+
+    #[test]
+    fn default_params_limit_50() {
+        let p = ListDocumentsParams::default();
+        assert_eq!(p.limit, 50);
+        assert_eq!(p.locale, "ru");
     }
 }

@@ -1,4 +1,13 @@
-//! Описания отчётов WB (спец. §2.2.2 — 24 отчёта через API) + out-of-scope.
+//! Описания отчётов WB (сверено с официальной документацией dev.wildberries.ru).
+//!
+//! Разделы документации (все домены подтверждены):
+//! - Баланс:           GET  finance-api      /api/v1/account/balance
+//! - Финансы:          POST finance-api      /api/finance/v1/sales-reports/* , /acquiring/*
+//! - Документы:        GET  documents-api    /api/v1/documents/*
+//! - Отчёты (стат):    GET  statistics-api   /api/v1/supplier/orders, /sales
+//! - Аналитика/данные: POST seller-analytics /api/analytics/v3/*, GET /api/analytics/v1/*
+//! - Удержания:        GET  seller-analytics /api/analytics/v1/{deductions,measurement-penalties,...}
+//! - Возвраты:         GET  seller-analytics /api/v1/analytics/goods-return
 
 use std::sync::Arc;
 
@@ -15,135 +24,123 @@ use mdwf_core::{
 use crate::client::{WbDomain, WbHttpClient};
 use crate::date_format;
 
+// =========================================================================
+// Capabilities
+// =========================================================================
+
 /// Возвращает Capabilities WB: тип авторизации + поле токена + отчёты.
 #[must_use]
 pub fn capabilities() -> Capabilities {
     Capabilities {
         auth_type: AuthType::BearerToken,
-        auth_fields: vec![
-            AuthField {
-                id: "token".into(),
-                label: "API-токен".into(),
-                kind: AuthFieldKind::Password,
-                required: true,
-                placeholder: None,
-                help_text: Some(
-                    "Токен доступа (тип Personal). Создаётся в личном кабинете: Профиль → Доступ к API."
-                        .into(),
-                ),
-                secret: true,
-            },
-        ],
+        auth_fields: vec![AuthField {
+            id: "token".into(),
+            label: "API-токен".into(),
+            kind: AuthFieldKind::Password,
+            required: true,
+            placeholder: None,
+            help_text: Some(
+                "Токен доступа (тип Personal). Личный кабинет → Профиль → Доступ к API.".into(),
+            ),
+            secret: true,
+        }],
         reports: all_report_descriptors(),
     }
 }
 
-/// Все 24 дескриптора отчётов WB (спец. §2.2.2).
+/// Все дескрипторы отчётов WB (по официальной документации).
 #[must_use]
 pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
     vec![
-        // --- Finance domain (Period) ---
-        desc_period(
-            "wb.balance",
-            "Баланс продавца",
-            ReportCategory::Finance,
-            &[],
-        ),
+        // --- Баланс (finance-api, GET) ---
+        desc_period("wb.balance", "Баланс продавца", ReportCategory::Finance),
+        // --- Финансы (finance-api, POST) ---
         desc_period(
             "wb.sales_reports_list",
             "Реестр реализации (список)",
             ReportCategory::Finance,
-            &[param_date_range()],
         ),
         desc_period(
             "wb.sales_reports_detailed",
-            "Детализация реализации (по периоду)",
+            "Детализация реализации (за период)",
             ReportCategory::Finance,
-            &[param_date_range()],
         ),
         desc_period(
             "wb.acquiring_list",
             "Эквайринг (список)",
             ReportCategory::Finance,
-            &[param_date_range()],
         ),
         desc_period(
             "wb.acquiring_detailed",
             "Эквайринг (детализация)",
             ReportCategory::Finance,
-            &[param_date_range()],
         ),
-        // --- Documents domain (Browsable — УПД/УКД/акты) ---
+        // --- Документы (documents-api, GET) ---
         desc_browsable(
             "wb.documents",
             "Документы (УПД/УКД/акты) — по категории",
             ReportCategory::Documents,
-            &[
-                param_select(
-                    "category",
-                    "Категория",
-                    &[
-                        "upd",
-                        "upd-purchase-from-legal",
-                        "sale-to-le-signed",
-                        "redeem-notification",
-                        "act-income-mp",
-                    ],
-                ),
-                param_date_range(),
-            ],
         ),
         desc_browsable(
             "wb.documents_categories",
-            "Список категорий документов",
+            "Категории документов",
             ReportCategory::Documents,
-            &[],
         ),
-        // --- Statistics domain ---
-        desc_browsable(
-            "wb.orders",
-            "Заказы (операционные)",
-            ReportCategory::Operational,
-            &[param_date_range()],
-        ),
-        desc_browsable(
-            "wb.sales",
-            "Продажи (операционные)",
-            ReportCategory::Operational,
-            &[param_date_range()],
-        ),
-        // --- Analytics domain ---
+        // --- Статистика (statistics-api, GET) ---
+        desc_browsable("wb.orders", "Заказы", ReportCategory::Operational),
+        desc_browsable("wb.sales", "Продажи", ReportCategory::Operational),
+        // --- Удержания (seller-analytics-api, GET) ---
         desc_browsable(
             "wb.deductions",
             "Штрафы за подмены",
             ReportCategory::Penalties,
-            &[param_date_range()],
         ),
         desc_browsable(
             "wb.measurement_penalties",
             "Штрафы за габариты",
             ReportCategory::Penalties,
-            &[param_date_range()],
+        ),
+        desc_browsable(
+            "wb.warehouse_measurements",
+            "Замеры склада",
+            ReportCategory::Penalties,
+        ),
+        desc_browsable(
+            "wb.goods_labeling",
+            "Маркировка товара",
+            ReportCategory::Penalties,
         ),
         desc_browsable(
             "wb.antifraud",
             "Самовыкупы (антифрод)",
             ReportCategory::Penalties,
-            &[param_date_range()],
         ),
-        // --- Returns domain ---
+        // --- Возвраты (seller-analytics-api, GET) ---
         desc_browsable(
-            "wb.claims",
-            "Возвраты (claims)",
+            "wb.goods_return",
+            "Возвраты товаров",
             ReportCategory::Returns,
-            &[param_date_range()],
         ),
-        // --- Async (ApiAsyncPoll) ---
+        // --- Async-отчёты (seller-analytics-api) ---
+        desc_period(
+            "wb.warehouse_remains",
+            "Остатки на складах (async)",
+            ReportCategory::Operational,
+        ),
         desc_period(
             "wb.acceptance_report",
-            "Аналитический отчёт приёмки (async)",
+            "Операции при приёмке (async)",
+            ReportCategory::Operational,
+        ),
+        desc_period(
+            "wb.paid_storage",
+            "Платное хранение (async)",
             ReportCategory::Finance,
-            &[param_date_range()],
+        ),
+        desc_period(
+            "wb.region_sale",
+            "Продажи по регионам",
+            ReportCategory::Analytics,
         ),
     ]
 }
@@ -155,7 +152,6 @@ fn desc_period(
     type_id: &str,
     display_name: &str,
     category: ReportCategory,
-    parameters: &[ReportParameter],
 ) -> ReportDescriptor {
     ReportDescriptor {
         type_id: type_id.into(),
@@ -163,7 +159,7 @@ fn desc_period(
         category,
         acquisition_mode: AcquisitionMode::Period,
         downloader_kind: DownloaderKind::Api,
-        parameters: parameters.to_vec(),
+        parameters: vec![param_date_range()],
     }
 }
 
@@ -172,7 +168,6 @@ fn desc_browsable(
     type_id: &str,
     display_name: &str,
     category: ReportCategory,
-    parameters: &[ReportParameter],
 ) -> ReportDescriptor {
     ReportDescriptor {
         type_id: type_id.into(),
@@ -180,7 +175,7 @@ fn desc_browsable(
         category,
         acquisition_mode: AcquisitionMode::Browsable,
         downloader_kind: DownloaderKind::Api,
-        parameters: parameters.to_vec(),
+        parameters: vec![param_date_range()],
     }
 }
 
@@ -194,137 +189,237 @@ fn param_date_range() -> ReportParameter {
     }
 }
 
-fn param_select(id: &str, label: &str, options: &[&str]) -> ReportParameter {
-    ReportParameter {
-        id: id.into(),
-        label: label.into(),
-        kind: ReportParameterKind::Select(options.iter().map(|s| (*s).to_string()).collect()),
-        required: false,
-        default: options.first().map(|s| (*s).to_string()),
-    }
+// =========================================================================
+// Фабрика отчётов
+// =========================================================================
+
+/// HTTP-метод для запроса.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HttpMethod {
+    Get,
+    Post,
 }
 
-/// Фабрика отчётов WB.
+/// Способ извлечения массива из ответа WB.
+/// WB использует разные обёртки в зависимости от эндпоинта.
+#[derive(Clone, Copy)]
+pub(crate) enum ResponseShape {
+    /// Прямой массив `[...]` (orders, sales).
+    Array,
+    /// `{data: [...]}` (старый формат).
+    DataArray,
+    /// `{data: {reports: [...], total: N}}` (deductions, measurement-penalties).
+    DataReports,
+    /// `{data: {documents: [...]}}` (documents list — обрабатывается отдельно).
+    DataDocuments,
+    /// `{details: [...]}` (antifraud).
+    Details,
+    /// `{report: [...]}` (region-sale, goods-return, goods-labeling).
+    Report,
+}
+
+/// Фабрика отчётов: возвращает `ReportRef` по `type_id`.
+/// Все пути/методы/форматы сверенs с официальной документацией WB.
 pub fn make_report(type_id: &str, client: WbHttpClient) -> CoreResult<ReportRef> {
     let report: ReportRef = match type_id {
-        "wb.balance" => Arc::new(WbReport::new(
+        // === Баланс === GET finance-api /api/v1/account/balance
+        "wb.balance" => Arc::new(WbReport::new_get(
             "wb.balance",
             "Баланс продавца",
             ReportCategory::Finance,
             AcquisitionMode::Period,
-            WbDomain::Marketplace,
+            WbDomain::Finance,
             "/api/v1/account/balance",
+            ResponseShape::DataArray,
             client,
         )),
-        "wb.sales_reports_list" => Arc::new(WbReport::new(
+
+        // === Финансы === POST finance-api
+        "wb.sales_reports_list" => Arc::new(WbReport::new_post(
             "wb.sales_reports_list",
             "Реестр реализации (список)",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/finance/v1/sales-reports/list",
+            ResponseShape::Array,
             client,
         )),
-        "wb.sales_reports_detailed" => Arc::new(WbReport::new(
+        "wb.sales_reports_detailed" => Arc::new(WbReport::new_post(
             "wb.sales_reports_detailed",
             "Детализация реализации",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/finance/v1/sales-reports/detailed",
+            ResponseShape::Array,
             client,
         )),
-        "wb.acquiring_list" => Arc::new(WbReport::new(
+        "wb.acquiring_list" => Arc::new(WbReport::new_post(
             "wb.acquiring_list",
             "Эквайринг (список)",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/finance/v1/acquiring/list",
+            ResponseShape::Array,
             client,
         )),
-        "wb.acquiring_detailed" => Arc::new(WbReport::new(
+        "wb.acquiring_detailed" => Arc::new(WbReport::new_post(
             "wb.acquiring_detailed",
             "Эквайринг (детализация)",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/finance/v1/acquiring/detailed",
+            ResponseShape::Array,
             client,
         )),
+
+        // === Документы === (отдельные реализации, documents-api GET)
         "wb.documents" => Arc::new(WbDocumentsReport::new(client)),
         "wb.documents_categories" => Arc::new(WbCategoriesReport::new(client)),
-        "wb.orders" => Arc::new(WbReport::new(
+
+        // === Статистика === GET statistics-api, ответ — прямой массив
+        "wb.orders" => Arc::new(WbReport::new_get(
             "wb.orders",
             "Заказы",
             ReportCategory::Operational,
             AcquisitionMode::Browsable,
             WbDomain::Statistics,
             "/api/v1/supplier/orders",
+            ResponseShape::Array,
             client,
         )),
-        "wb.sales" => Arc::new(WbReport::new(
+        "wb.sales" => Arc::new(WbReport::new_get(
             "wb.sales",
             "Продажи",
             ReportCategory::Operational,
             AcquisitionMode::Browsable,
             WbDomain::Statistics,
             "/api/v1/supplier/sales",
+            ResponseShape::Array,
             client,
         )),
-        "wb.deductions" => Arc::new(WbReport::new(
+
+        // === Удержания === GET seller-analytics-api
+        "wb.deductions" => Arc::new(WbReport::new_get(
             "wb.deductions",
             "Штрафы за подмены",
             ReportCategory::Penalties,
             AcquisitionMode::Browsable,
             WbDomain::Analytics,
             "/api/analytics/v1/deductions",
+            ResponseShape::DataReports,
             client,
         )),
-        "wb.measurement_penalties" => Arc::new(WbReport::new(
+        "wb.measurement_penalties" => Arc::new(WbReport::new_get(
             "wb.measurement_penalties",
             "Штрафы за габариты",
             ReportCategory::Penalties,
             AcquisitionMode::Browsable,
             WbDomain::Analytics,
             "/api/analytics/v1/measurement-penalties",
+            ResponseShape::DataReports,
             client,
         )),
-        "wb.antifraud" => Arc::new(WbReport::new(
+        "wb.warehouse_measurements" => Arc::new(WbReport::new_get(
+            "wb.warehouse_measurements",
+            "Замеры склада",
+            ReportCategory::Penalties,
+            AcquisitionMode::Browsable,
+            WbDomain::Analytics,
+            "/api/analytics/v1/warehouse-measurements",
+            ResponseShape::DataReports,
+            client,
+        )),
+        "wb.goods_labeling" => Arc::new(WbReport::new_get(
+            "wb.goods_labeling",
+            "Маркировка товара",
+            ReportCategory::Penalties,
+            AcquisitionMode::Browsable,
+            WbDomain::Analytics,
+            "/api/v1/analytics/goods-labeling",
+            ResponseShape::Report,
+            client,
+        )),
+        "wb.antifraud" => Arc::new(WbReport::new_get(
             "wb.antifraud",
             "Самовыкупы (антифрод)",
             ReportCategory::Penalties,
             AcquisitionMode::Browsable,
             WbDomain::Analytics,
             "/api/v1/analytics/antifraud-details",
+            ResponseShape::Details,
             client,
         )),
-        "wb.claims" => Arc::new(WbReport::new(
-            "wb.claims",
-            "Возвраты (claims)",
+
+        // === Возвраты === GET seller-analytics-api
+        "wb.goods_return" => Arc::new(WbReport::new_get(
+            "wb.goods_return",
+            "Возвраты товаров",
             ReportCategory::Returns,
             AcquisitionMode::Browsable,
-            WbDomain::Returns,
-            "/api/v1/claims",
+            WbDomain::Analytics,
+            "/api/v1/analytics/goods-return",
+            ResponseShape::Report,
             client,
         )),
-        "wb.acceptance_report" => Arc::new(WbReport::new(
+
+        // === Продажи по регионам === GET seller-analytics-api
+        "wb.region_sale" => Arc::new(WbReport::new_get(
+            "wb.region_sale",
+            "Продажи по регионам",
+            ReportCategory::Analytics,
+            AcquisitionMode::Period,
+            WbDomain::Analytics,
+            "/api/v1/analytics/region-sale",
+            ResponseShape::Report,
+            client,
+        )),
+
+        // === Async-отчёты === (create→poll→download). Пока как Period GET download-фаза.
+        "wb.warehouse_remains" => Arc::new(WbReport::new_get(
+            "wb.warehouse_remains",
+            "Остатки на складах (async)",
+            ReportCategory::Operational,
+            AcquisitionMode::Period,
+            WbDomain::Analytics,
+            "/api/v1/warehouse_remains",
+            ResponseShape::DataArray,
+            client,
+        )),
+        "wb.acceptance_report" => Arc::new(WbReport::new_get(
             "wb.acceptance_report",
-            "Аналитический отчёт приёмки (async)",
+            "Операции при приёмке (async)",
+            ReportCategory::Operational,
+            AcquisitionMode::Period,
+            WbDomain::Analytics,
+            "/api/v1/acceptance_report",
+            ResponseShape::DataArray,
+            client,
+        )),
+        "wb.paid_storage" => Arc::new(WbReport::new_get(
+            "wb.paid_storage",
+            "Платное хранение (async)",
             ReportCategory::Finance,
             AcquisitionMode::Period,
-            WbDomain::Marketplace,
-            "/api/v1/acceptance_report",
+            WbDomain::Analytics,
+            "/api/v1/paid_storage",
+            ResponseShape::DataArray,
             client,
         )),
-        _ => {
-            return Err(CoreError::ReportTypeNotSupported(type_id.to_string()));
-        }
+
+        _ => return Err(CoreError::ReportTypeNotSupported(type_id.to_string())),
     };
     Ok(report)
 }
 
-/// Универсальный отчёт WB для простых endpoints (GET с query / POST с телом).
+// =========================================================================
+// WbReport — универсальный отчёт (GET или POST)
+// =========================================================================
+
+/// Универсальный отчёт WB с настраиваемым HTTP-методом и форматом ответа.
 pub struct WbReport {
     type_id: String,
     display_name: String,
@@ -332,19 +427,22 @@ pub struct WbReport {
     mode: AcquisitionMode,
     domain: WbDomain,
     path: &'static str,
+    method: HttpMethod,
+    shape: ResponseShape,
     client: WbHttpClient,
 }
 
 impl WbReport {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn new(
+    pub fn new_get(
         type_id: &str,
         display_name: &str,
         category: ReportCategory,
         mode: AcquisitionMode,
         domain: WbDomain,
         path: &'static str,
+        shape: ResponseShape,
         client: WbHttpClient,
     ) -> Self {
         Self {
@@ -354,6 +452,33 @@ impl WbReport {
             mode,
             domain,
             path,
+            method: HttpMethod::Get,
+            shape,
+            client,
+        }
+    }
+
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new_post(
+        type_id: &str,
+        display_name: &str,
+        category: ReportCategory,
+        mode: AcquisitionMode,
+        domain: WbDomain,
+        path: &'static str,
+        shape: ResponseShape,
+        client: WbHttpClient,
+    ) -> Self {
+        Self {
+            type_id: type_id.into(),
+            display_name: display_name.into(),
+            category,
+            mode,
+            domain,
+            path,
+            method: HttpMethod::Post,
+            shape,
             client,
         }
     }
@@ -386,14 +511,8 @@ impl Report for WbReport {
         filter: &DocumentFilter,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
-        let query = build_query_from_filter(filter);
-        let query_ref: Vec<(&str, &str)> =
-            query.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let json = self
-            .client
-            .get(self.domain, self.path, &query_ref, auth)
-            .await?;
-        Ok(extract_entries(&json, &self.type_id))
+        let json = self.fetch(auth, filter).await?;
+        Ok(extract_entries(&json, self.shape, &self.type_id))
     }
 
     async fn download(
@@ -403,14 +522,9 @@ impl Report for WbReport {
         _progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
-        // Для простых отчётов WB — GET с date_from/date_to.
-        let query = build_query_from_params(params);
-        let query_ref: Vec<(&str, &str)> =
-            query.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let json = self
-            .client
-            .get(self.domain, self.path, &query_ref, auth)
-            .await?;
+        // Для простых отчётов — тот же запрос, результат сохраняем как JSON.
+        let filter = filter_from_params(params);
+        let json = self.fetch(auth, &filter).await?;
         let content = serde_json::to_vec_pretty(&json)
             .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
@@ -422,7 +536,174 @@ impl Report for WbReport {
     }
 }
 
-/// Отчёт Documents API (3-шаговый паттерн, спец. §2.10.3).
+impl WbReport {
+    /// Выполняет запрос (GET или POST) в зависимости от метода.
+    async fn fetch(
+        &self,
+        auth: &dyn mdwf_core::Authenticator,
+        filter: &DocumentFilter,
+    ) -> CoreResult<serde_json::Value> {
+        match self.method {
+            HttpMethod::Get => {
+                let query = build_query_from_filter(filter);
+                let query_ref: Vec<(&str, &str)> =
+                    query.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                self.client
+                    .get(self.domain, self.path, &query_ref, auth)
+                    .await
+            }
+            HttpMethod::Post => {
+                let body = build_body_from_filter(filter);
+                self.client
+                    .post(self.domain, self.path, &body, auth)
+                    .await
+            }
+        }
+    }
+}
+
+/// Извлекает DocumentEntry из ответа согласно формату (ResponseShape).
+fn extract_entries(
+    json: &serde_json::Value,
+    shape: ResponseShape,
+    type_id: &str,
+) -> Vec<DocumentEntry> {
+    let array = match shape {
+        ResponseShape::Array => json, // orders/sales: прямой массив [...]
+        ResponseShape::DataArray => json.get("data").unwrap_or(json),
+        ResponseShape::DataReports => json
+            .get("data")
+            .and_then(|d| d.get("reports"))
+            .unwrap_or(json),
+        ResponseShape::DataDocuments => json
+            .get("data")
+            .and_then(|d| d.get("documents"))
+            .unwrap_or(json),
+        ResponseShape::Details => json.get("details").unwrap_or(json),
+        ResponseShape::Report => json.get("report").unwrap_or(json),
+    };
+
+    let mut out = Vec::new();
+    if let Some(arr) = array.as_array() {
+        for (i, item) in arr.iter().enumerate() {
+            // Универсальный ID: пробуем srid, orderId, nmId, reportId, rrdId, id.
+            let id = item
+                .get("srid")
+                .or_else(|| item.get("orderId"))
+                .or_else(|| item.get("nmId"))
+                .or_else(|| item.get("reportId"))
+                .or_else(|| item.get("rrdId"))
+                .or_else(|| item.get("id"))
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v.to_string())
+                })
+                .unwrap_or_else(|| format!("item-{i}"));
+            let display = item
+                .get("supplierArticle")
+                .or_else(|| item.get("subject"))
+                .or_else(|| item.get("category"))
+                .or_else(|| item.get("brand"))
+                .or_else(|| item.get("docTypeName"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{type_id} #{i}"));
+            let mut e = DocumentEntry::new(id, display);
+            e.category = type_id.to_string();
+            e.extensions = vec!["json".into()];
+            // Дата: пробуем date, saleDt, orderDt, rrDate, createDate.
+            for date_field in ["date", "saleDt", "orderDt", "rrDate", "createDate"] {
+                if let Some(d) = item.get(date_field).and_then(|v| v.as_str()) {
+                    e.date = parse_flexible_date(d);
+                    if e.date.is_some() {
+                        break;
+                    }
+                }
+            }
+            out.push(e);
+        }
+    }
+    out
+}
+
+/// Парсит дату в нескольких форматах (YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, YYYY-MM-DDTHH:MM:SSZ).
+fn parse_flexible_date(s: &str) -> Option<chrono::NaiveDate> {
+    // Сначала пробуем полный datetime, потом дату.
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.date_naive());
+    }
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Some(dt.date());
+    }
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
+// =========================================================================
+// Хелперы построения query/body
+// =========================================================================
+
+/// Строит query-параметры для GET-запросов из фильтра.
+fn build_query_from_filter(filter: &DocumentFilter) -> Vec<(&'static str, String)> {
+    let mut q: Vec<(&'static str, String)> = Vec::new();
+    if let Some(d) = filter.date_from {
+        q.push(("dateFrom", date_format::format_date_moscow(d)));
+    }
+    if let Some(d) = filter.date_to {
+        q.push(("dateTo", date_format::format_date_moscow(d)));
+    }
+    if let Some(limit) = filter.limit {
+        q.push(("limit", limit.to_string()));
+    }
+    q
+}
+
+/// Строит JSON-тело для POST-запросов (финансовые отчёты) из фильтра.
+/// Дока: {dateFrom, dateTo, limit, offset, period}.
+fn build_body_from_filter(filter: &DocumentFilter) -> serde_json::Value {
+    let mut body = json!({
+        "limit": filter.limit.unwrap_or(1000),
+        "offset": 0,
+    });
+    if let Some(d) = filter.date_from {
+        body["dateFrom"] = json!(date_format::format_date_moscow(d));
+    }
+    if let Some(d) = filter.date_to {
+        body["dateTo"] = json!(date_format::format_date_moscow(d));
+    }
+    body
+}
+
+/// Преобразует ReportParams в DocumentFilter (для download).
+fn filter_from_params(params: &ReportParams) -> DocumentFilter {
+    let mut f = DocumentFilter::default();
+    if let Some(d) = params.get("date_from") {
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d") {
+            f.date_from = Some(date);
+        }
+    }
+    if let Some(d) = params.get("date_to") {
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d") {
+            f.date_to = Some(date);
+        }
+    }
+    if let Some(p) = &params.period {
+        // YYYY-MM -> первый день месяца.
+        if p.len() == 7 {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(&format!("{p}-01"), "%Y-%m-%d") {
+                f.date_from = Some(date);
+                f.date_to = Some(date + chrono::Duration::days(30));
+            }
+        }
+    }
+    f
+}
+
+// =========================================================================
+// WbDocumentsReport — Documents API (3-шаговый, documents-api GET)
+// =========================================================================
+
+/// Отчёт Documents API (3-шаговый паттерн, дока раздел «Документы»).
 pub struct WbDocumentsReport {
     client: WbHttpClient,
 }
@@ -467,20 +748,17 @@ impl Report for WbDocumentsReport {
             .as_deref()
             .ok_or_else(|| CoreError::InvalidParameter("wb.documents: требуется category".into()))?;
 
-        // Шаг 1: проверяем категорию.
         docs_client.ensure_category(auth, category).await?;
 
-        // Шаг 2: список документов.
         let params = crate::documents::ListDocumentsParams {
             category: Some(category.to_string()),
             date_from: filter.date_from,
             date_to: filter.date_to,
-            limit: filter.limit.unwrap_or(1000),
+            limit: filter.limit.unwrap_or(50).min(50),
             offset: 0,
+            ..Default::default()
         };
         let docs = docs_client.list_documents(auth, &params).await?;
-
-        // Преобразуем в DocumentEntry.
         Ok(docs
             .iter()
             .map(|d| crate::documents::wb_document_to_entry(d, category))
@@ -503,9 +781,22 @@ impl Report for WbDocumentsReport {
         }
 
         let docs_client = crate::documents::DocumentsClient::new(&self.client);
+        if ids.len() <= 50 {
+            let items: Vec<(String, String)> = ids
+                .iter()
+                .map(|s| ((*s).to_string(), "zip".to_string()))
+                .collect();
+            let bytes = docs_client.download_batch(auth, &items).await?;
+            return Ok(vec![DownloadedFile::with_content(
+                "wb_documents_batch.zip".to_string(),
+                "zip",
+                bytes,
+            )]);
+        }
+
         let mut files = Vec::new();
         for id in ids {
-            let bytes = docs_client.download_one(auth, id).await?;
+            let bytes = docs_client.download_one(auth, id, "zip").await?;
             files.push(DownloadedFile::with_content(
                 format!("wb_doc_{id}.zip"),
                 "zip",
@@ -516,7 +807,10 @@ impl Report for WbDocumentsReport {
     }
 }
 
-/// Отчёт «список категорий документов».
+// =========================================================================
+// WbCategoriesReport — список категорий документов
+// =========================================================================
+
 pub struct WbCategoriesReport {
     client: WbHttpClient,
 }
@@ -534,7 +828,7 @@ impl Report for WbCategoriesReport {
         "wb.documents_categories"
     }
     fn display_name(&self) -> &str {
-        "Список категорий документов"
+        "Категории документов"
     }
     fn category(&self) -> ReportCategory {
         ReportCategory::Documents
@@ -580,72 +874,11 @@ impl Report for WbCategoriesReport {
     }
 }
 
-// --- Хелперы ---
+// =========================================================================
+// Out-of-scope
+// =========================================================================
 
-fn build_query_from_filter(filter: &DocumentFilter) -> Vec<(&'static str, String)> {
-    let mut q: Vec<(&'static str, String)> = Vec::new();
-    if let Some(d) = filter.date_from {
-        q.push(("dateFrom", date_format::format_date_moscow(d)));
-    }
-    if let Some(d) = filter.date_to {
-        q.push(("dateTo", date_format::format_date_moscow(d)));
-    }
-    if let Some(cat) = &filter.category {
-        // category передаётся как query для простых endpoints.
-        q.push(("category", cat.clone()));
-    }
-    if let Some(limit) = filter.limit {
-        q.push(("limit", limit.to_string()));
-    }
-    q
-}
-
-fn build_query_from_params(params: &ReportParams) -> Vec<(&'static str, String)> {
-    let mut q: Vec<(&'static str, String)> = Vec::new();
-    if let Some(p) = params.get("date_from") {
-        if let Ok(d) = chrono::NaiveDate::parse_from_str(p, "%Y-%m-%d") {
-            q.push(("dateFrom", date_format::format_date_moscow(d)));
-        }
-    }
-    if let Some(p) = params.get("date_to") {
-        if let Ok(d) = chrono::NaiveDate::parse_from_str(p, "%Y-%m-%d") {
-            q.push(("dateTo", date_format::format_date_moscow(d)));
-        }
-    }
-    if let Some(cat) = params.get("category") {
-        q.push(("category", cat.to_string()));
-    }
-    q
-}
-
-fn extract_entries(json: &serde_json::Value, _type_id: &str) -> Vec<DocumentEntry> {
-    let mut out = Vec::new();
-    if let Some(arr) = json.get("data").and_then(|d| d.as_array()) {
-        for (i, item) in arr.iter().enumerate() {
-            let id = item
-                .get("id")
-                .or_else(|| item.get("number"))
-                .and_then(|v| {
-                    v.as_str()
-                        .map(str::to_string)
-                        .or_else(|| v.as_i64().map(|n| n.to_string()))
-                })
-                .unwrap_or_else(|| format!("item-{i}"));
-            let display = item
-                .get("name")
-                .or_else(|| item.get("barcode"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("WB doc #{i}"));
-            let mut e = DocumentEntry::new(id, display);
-            e.extensions = vec!["json".into()];
-            out.push(e);
-        }
-    }
-    out
-}
-
-/// Документы WB, недоступные через API (out-of-scope, спец. §2.2.2, §3.1).
+/// Документы WB, недоступные через API (out-of-scope, дока не содержит методов).
 #[must_use]
 pub fn out_of_scope() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -664,6 +897,7 @@ mod tests {
         let caps = capabilities();
         assert!(caps.reports.iter().any(|r| r.type_id == "wb.documents"));
         assert!(caps.reports.iter().any(|r| r.type_id == "wb.balance"));
+        assert!(caps.reports.iter().any(|r| r.type_id == "wb.sales_reports_list"));
     }
 
     #[test]
@@ -680,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn documents_descriptor_is_browsable_with_category_select() {
+    fn documents_descriptor_is_browsable() {
         let caps = capabilities();
         let docs = caps
             .reports
@@ -688,6 +922,40 @@ mod tests {
             .find(|r| r.type_id == "wb.documents")
             .unwrap();
         assert_eq!(docs.acquisition_mode, AcquisitionMode::Browsable);
-        assert!(docs.parameters.iter().any(|p| p.id == "category"));
+    }
+
+    #[test]
+    fn finance_reports_are_period() {
+        let caps = capabilities();
+        for rid in [
+            "wb.sales_reports_list",
+            "wb.acquiring_list",
+            "wb.balance",
+        ] {
+            let r = caps.reports.iter().find(|r| r.type_id == rid).unwrap();
+            assert_eq!(r.acquisition_mode, AcquisitionMode::Period, "{rid}");
+        }
+    }
+
+    #[test]
+    fn extract_entries_array_shape() {
+        let json = json!([
+            {"srid": "S1", "supplierArticle": "A1", "date": "2026-07-01T10:00:00"},
+            {"srid": "S2", "supplierArticle": "A2", "date": "2026-07-02"}
+        ]);
+        let entries = extract_entries(&json, ResponseShape::Array, "wb.orders");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, "S1");
+        assert_eq!(entries[1].display_name, "A2");
+    }
+
+    #[test]
+    fn extract_entries_data_reports_shape() {
+        let json = json!({
+            "data": {"reports": [{"nmId": 123, "brand": "X"}], "total": 1}
+        });
+        let entries = extract_entries(&json, ResponseShape::DataReports, "wb.deductions");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "123");
     }
 }

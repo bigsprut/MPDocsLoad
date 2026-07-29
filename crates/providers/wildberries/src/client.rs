@@ -109,17 +109,19 @@ impl RateLimiter {
     }
 }
 
-/// Домен WB API (спец. §2.10.2 + актуальная миграция на категорийные поддомены).
+/// Домен WB API (сверено с официальной документацией dev.wildberries.ru).
 #[derive(Debug, Clone, Copy)]
 pub enum WbDomain {
+    /// finance-api: баланс + отчёты реализации + эквайринг (дока: "Финансы").
     Finance,
+    /// documents-api: категории, список, скачивание документов (дока: "Документы").
     Documents,
+    /// statistics-api: заказы, продажи (дока: "Отчёты").
     Statistics,
+    /// seller-analytics-api: штрафы, аналитика.
     Analytics,
+    /// returns-api: возвраты.
     Returns,
-    /// Баланс и marketplace-методы. Раньше был api.wildberries.ru,
-    /// но WB мигрировал на marketplace-api.wildberries.ru.
-    Marketplace,
 }
 
 impl WbDomain {
@@ -133,47 +135,48 @@ impl WbDomain {
             Self::Statistics => "MDWF_WB_BASE_STATISTICS",
             Self::Analytics => "MDWF_WB_BASE_ANALYTICS",
             Self::Returns => "MDWF_WB_BASE_RETURNS",
-            Self::Marketplace => "MDWF_WB_BASE_MARKETPLACE",
         };
         if let Ok(url) = std::env::var(env_key) {
             return url.trim_end_matches('/').to_string();
         }
         match self {
+            // Баланс: GET /api/v1/account/balance — подтверждено на finance-api.
             Self::Finance => "https://finance-api.wildberries.ru",
             Self::Documents => "https://documents-api.wildberries.ru",
             Self::Statistics => "https://statistics-api.wildberries.ru",
             Self::Analytics => "https://seller-analytics-api.wildberries.ru",
             Self::Returns => "https://returns-api.wildberries.ru",
-            // Баланс мигрировал с api.wildberries.ru (теперь NXDOMAIN)
-            // на marketplace-api.wildberries.ru.
-            Self::Marketplace => "https://marketplace-api.wildberries.ru",
         }
         .to_string()
     }
 
-    /// Минимальный интервал между запросами (спец. §2.10.2).
-    /// При тестировании можно обнулить через `MDWF_WB_NO_RATELIMIT=1`.
+    /// Минимальный интервал между запросами (по официальной документации WB).
+    /// Лимиты Personal-токена (для продавцов). При тестировании можно обнулить
+    /// через `MDWF_WB_NO_RATELIMIT=1`.
     #[must_use]
     pub fn min_interval(self) -> Duration {
         if std::env::var("MDWF_WB_NO_RATELIMIT").as_deref() == Ok("1") {
             return Duration::ZERO;
         }
         match self {
-            Self::Documents => Duration::from_secs(10), // 1 req/10s
-            Self::Finance | Self::Analytics | Self::Returns => Duration::from_secs(60), // 1 RPM
-            Self::Statistics => Duration::from_secs(6), // ~10 RPM
-            Self::Marketplace => Duration::from_secs(1),
+            // Дока "Документы" (categories/list/download): 1 req/10s, burst 5.
+            // download/all: 1 req/5min, burst 5.
+            Self::Documents => Duration::from_secs(10),
+            // Дока "Финансы": 1 req/1min, burst 1.
+            Self::Finance => Duration::from_secs(60),
+            Self::Analytics | Self::Returns => Duration::from_secs(60), // 1 RPM, burst 1
+            Self::Statistics => Duration::from_secs(6),                 // ~10 RPM
         }
     }
 
     /// Максимально допустимый burst (число запросов подряд) для домена.
+    /// По официальной документации WB.
     #[must_use]
     pub fn burst(self) -> u32 {
         match self {
-            Self::Documents => 5,      // док: burst 5
-            Self::Statistics => 10,    // док: burst 10
-            Self::Finance | Self::Analytics | Self::Returns => 1, // burst 1
-            Self::Marketplace => 1,
+            Self::Documents => 5,                                      // док: burst 5
+            Self::Statistics => 10,                                    // док: burst 10
+            Self::Finance | Self::Analytics | Self::Returns => 1,      // burst 1
         }
     }
 }
@@ -183,7 +186,7 @@ impl WbDomain {
 pub struct WbHttpClient {
     http: reqwest::Client,
     retry: RetryPolicy,
-    limiters: Arc<[RateLimiter; 6]>,
+    limiters: Arc<[RateLimiter; 5]>,
 }
 
 impl WbHttpClient {
@@ -196,7 +199,6 @@ impl WbHttpClient {
             http,
             retry,
             limiters: Arc::new([
-                RateLimiter::new(WbDomain::Marketplace.min_interval()),
                 RateLimiter::new(WbDomain::Finance.min_interval()),
                 RateLimiter::new(WbDomain::Documents.min_interval()),
                 RateLimiter::new(WbDomain::Statistics.min_interval()),
@@ -208,12 +210,11 @@ impl WbHttpClient {
 
     fn limiter_for(&self, domain: WbDomain) -> &RateLimiter {
         let idx = match domain {
-            WbDomain::Marketplace => 0,
-            WbDomain::Finance => 1,
-            WbDomain::Documents => 2,
-            WbDomain::Statistics => 3,
-            WbDomain::Analytics => 4,
-            WbDomain::Returns => 5,
+            WbDomain::Finance => 0,
+            WbDomain::Documents => 1,
+            WbDomain::Statistics => 2,
+            WbDomain::Analytics => 3,
+            WbDomain::Returns => 4,
         };
         &self.limiters[idx]
     }
