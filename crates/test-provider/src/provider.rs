@@ -129,16 +129,23 @@ impl Report for TestReport {
         if self.mode == AcquisitionMode::Browsable {
             let ids: Vec<&str> = ids_csv.map(|s| s.split(',').collect()).unwrap_or_default();
             for id in ids {
-                let content = format!("<test-doc id=\"{id}\" from=\"{}\"/>", self.type_id);
-                files.push(DownloadedFile::new(format!("{id}.xml"), "xml", content.len() as u64));
+                let content = format!(
+                    "<test-doc id=\"{id}\" from=\"{}\"/>\n",
+                    self.type_id
+                );
+                files.push(DownloadedFile::with_content(
+                    format!("{id}.xml"),
+                    "xml",
+                    content.into_bytes(),
+                ));
             }
         } else {
             let period = params.period.clone().unwrap_or_else(|| "unknown".into());
             let content = format!("period report {} for {}\nrow1\nrow2\n", self.type_id, period);
-            files.push(DownloadedFile::new(
+            files.push(DownloadedFile::with_content(
                 format!("{}.csv", self.type_id),
                 "csv",
-                content.len() as u64,
+                content.into_bytes(),
             ));
         }
         Ok(files)

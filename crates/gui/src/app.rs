@@ -2,7 +2,6 @@
 //! доменный слой (registry + catalog + secrets), главное окно и маршрутизирует
 //! события между UI и tokio.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -13,9 +12,10 @@ use parking_lot::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use mdwf_config::ProvisionedConfig;
 use mdwf_core::{ProviderRegistry, ProviderRef};
-use mdwf_secrets::{InMemorySecretStore, SecretStore};
-use mdwf_storage::Catalog;
+use mdwf_secrets::{InMemorySecretStore, OsKeychain, SecretStore};
+use mdwf_storage::{Catalog, FileStore, FileStoreConfig, FileNameContext, FolderStructure};
 use mdwf_test_provider::TestProvider;
 
 use crate::channels::{
@@ -35,22 +35,43 @@ pub struct App {
     event_rx: async_channel::Receiver<UiEvent>,
 }
 
-/// Доменный слой: провайдеры + каталог + секреты + tokio runtime.
+/// Доменный слой: провайдеры + каталог + секреты + tokio runtime + config.
 pub struct Domain {
     pub registry: ProviderRegistry,
     pub catalog: RwLock<Option<Catalog>>,
     pub secrets: Arc<dyn SecretStore>,
     pub runtime: RwLock<Option<tokio::runtime::Runtime>>,
+    pub config: RwLock<ProvisionedConfig>,
+    pub file_store: RwLock<FileStore>,
 }
 
 impl App {
-    /// Создаёт приложение: инициализирует GTK, tokio, регистрирует провайдеров.
+    /// Создаёт приложение: инициализирует GTK, tokio, регистрирует провайдеров,
+    /// провижинит конфиг, открывает SQLite-каталог.
     pub fn new() -> Result<Self> {
         // GTK init.
         gtk4::init().context("gtk4::init")?;
         adw::init().context("libadwaita::init")?;
 
         let gtk_app = adw::Application::new(Some(APP_ID), gtk4::gio::ApplicationFlags::FLAGS_NONE);
+
+        // Конфиг + каталог + secrets.
+        let prov = ProvisionedConfig::load_standard().context("load config")?;
+        std::fs::create_dir_all(&prov.data_dir).ok();
+        let catalog = Catalog::open(&prov.db_path).context("open catalog")?;
+
+        let secrets: Arc<dyn SecretStore> = if prov.raw.security.use_keychain {
+            Arc::new(OsKeychain::new())
+        } else {
+            Arc::new(InMemorySecretStore::new())
+        };
+
+        let file_store = FileStore::new(FileStoreConfig {
+            output_dir: prov.output_dir.clone(),
+            file_name_template: prov.raw.storage.file_name_template.clone(),
+            folder_structure: parse_folder_structure(&prov.raw.storage.folder_structure),
+            compute_hash: prov.raw.storage.compute_hash,
+        });
 
         // Доменный слой.
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -62,12 +83,15 @@ impl App {
         // Регистрируем TestProvider (реальные Ozon/WB добавятся на этапах 8/9).
         registry.register(Arc::new(TestProvider::new()) as ProviderRef)?;
 
+        info!(?prov.data_dir, ?prov.db_path, ?prov.output_dir, "config loaded");
+
         let domain = Arc::new(Domain {
             registry,
-            catalog: RwLock::new(None),
-            // На старте — in-memory секреты; переключение на OsKeychain — в настройках.
-            secrets: Arc::new(InMemorySecretStore::new()),
+            catalog: RwLock::new(Some(catalog)),
+            secrets,
             runtime: RwLock::new(Some(runtime)),
+            config: RwLock::new(prov),
+            file_store: RwLock::new(file_store),
         });
 
         // Каналы UI <-> tokio.
@@ -119,19 +143,6 @@ impl App {
         info!("MDWF GUI exited");
         std::process::ExitCode::from(code.value() as u8)
     }
-
-    /// Путь к каталогу SQLite по умолчанию (в директории данных MDWF).
-    #[must_use]
-    pub fn default_db_path() -> PathBuf {
-        let base = dirs_or_fallback();
-        base.join("mdwf.db")
-    }
-}
-
-fn dirs_or_fallback() -> PathBuf {
-    // Простая стратегия: рядом с бинарником / текущая директория.
-    // Полноценный путь к данным ОС будет добавлен с крейтом `dirs` в ЭТАПЕ 7.
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Цикл обработки команд UI в tokio-стороне.
@@ -345,15 +356,96 @@ async fn do_download(
         fraction: Some(0.0),
         message: "начало выгрузки…".into(),
     });
-    let result = report
+    let files = report
         .download(auth.as_ref(), &params, progress, cancel)
         .await
         .map_err(|e| e.to_string());
+
+    fwd.forward(UiEvent::Progress {
+        fraction: Some(0.9),
+        message: "запись файлов на диск…".into(),
+    });
+
+    let files = files?;
+    let saved = persist_files(domain, &files, provider_id, profile_name, report_type, &params).await;
+    match saved {
+        Ok(count) => fwd.forward(UiEvent::Notify(format!("Сохранено файлов: {count}"))),
+        Err(e) => fwd.forward(UiEvent::Notify(format!("ошибка записи: {e}"))),
+    }
+
     fwd.forward(UiEvent::Progress {
         fraction: Some(1.0),
         message: "выгрузка завершена".into(),
     });
-    result
+    Ok(files)
+}
+
+/// Записывает скачанные файлы на диск через FileStore и регистрирует в каталоге.
+async fn persist_files(
+    domain: &Domain,
+    files: &[mdwf_core::DownloadedFile],
+    provider_id: &str,
+    profile_name: &str,
+    report_type: &str,
+    params: &mdwf_core::ReportParams,
+) -> Result<usize, String> {
+    let profile = read_profile(domain, profile_name)?;
+    let profile_id = profile.id.ok_or("профиль без id")?;
+
+    let mut count = 0usize;
+    for f in files {
+        let content = f.content.as_ref().ok_or("файл без контента")?;
+        let period = params.period.as_deref();
+        let ctx = FileNameContext {
+            provider_id,
+            profile_name,
+            report_type,
+            period,
+            extension: &f.extension,
+            document_id: f.source_id.as_deref(),
+            document_date: None,
+        };
+
+        // Запись на диск (клонируем FileStore-конфиг, т.к. RwLock).
+        let stored = {
+            let store = domain.file_store.read().clone();
+            store.save(content, &ctx).map_err(|e| e.to_string())?
+        };
+
+        // Регистрация в каталоге (с дедупликацией по хэшу).
+        if let Some(cat) = domain.catalog.read().as_ref() {
+            let new_dl = mdwf_storage::NewDownload {
+                profile_id,
+                report_type: report_type.to_string(),
+                period: period.map(str::to_string),
+                params: Some(serde_json::to_string(params).unwrap_or_default()),
+                file_path: format!("{} ({} байт)", stored.file_name, stored.size),
+                file_size: {
+                    #[allow(clippy::cast_possible_wrap)]
+                    {
+                        stored.size as i64
+                    }
+                },
+                file_hash: stored.sha256.clone(),
+                file_format: stored.extension.clone(),
+                rows_count: None,
+                downloader_kind: "Api".to_string(),
+                source_url: stored.source_url.clone(),
+            };
+            let _ = cat.record_download(&new_dl);
+        }
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Разбор строкового имени структуры папок.
+fn parse_folder_structure(s: &str) -> FolderStructure {
+    match s {
+        "flat" => FolderStructure::Flat,
+        "by_provider_profile_period" => FolderStructure::ByProviderProfilePeriod,
+        _ => FolderStructure::ByProviderPeriod,
+    }
 }
 
 /// Адаптер: `ProgressCallback` -> пересылает прогресс в UI через `EventForwarder`.

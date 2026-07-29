@@ -34,6 +34,10 @@ pub struct DownloadedFile {
     pub source_id: Option<String>,
     /// Исходный URL (если применимо).
     pub source_url: Option<String>,
+    /// In-memory содержимое файла (провайдер заполняет; app-слой пишет на диск).
+    /// `None` если файл уже записан провайдером или контент не возвращается.
+    #[serde(skip)]
+    pub content: Option<Vec<u8>>,
 }
 
 impl DownloadedFile {
@@ -48,7 +52,21 @@ impl DownloadedFile {
             downloaded_at: Utc::now(),
             source_id: None,
             source_url: None,
+            content: None,
         }
+    }
+
+    /// Создаёт файл с in-memory контентом и автоматически вычисляет размер.
+    #[must_use]
+    pub fn with_content(
+        file_name: impl Into<String>,
+        extension: impl Into<String>,
+        content: Vec<u8>,
+    ) -> Self {
+        let size = content.len() as u64;
+        let mut f = Self::new(file_name, extension, size);
+        f.content = Some(content);
+        f
     }
 }
 

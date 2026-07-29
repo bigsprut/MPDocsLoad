@@ -19,6 +19,7 @@ mdwf-scheduler.workspace = true
 mdwf-providers-ozon.workspace = true
 mdwf-providers-wildberries.workspace = true
 mdwf-test-provider.workspace = true
+mdwf-config.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true
 glib.workspace = true

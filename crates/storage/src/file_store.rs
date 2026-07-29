@@ -51,6 +51,7 @@ impl Default for FileStoreConfig {
 
 /// Файловое хранилище. Сохраняет байты на диск и возвращает `DownloadedFile`
 /// с вычисленным хэшем (если включено).
+#[derive(Clone)]
 pub struct FileStore {
     config: FileStoreConfig,
 }
@@ -96,7 +97,9 @@ impl FileStore {
             downloaded_at: Utc::now(),
             source_id: ctx.document_id.map(str::to_string),
             source_url: None,
+            content: None,
         })
+
     }
 
     fn target_dir(&self, ctx: &FileNameContext<'_>) -> PathBuf {
