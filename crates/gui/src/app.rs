@@ -209,7 +209,9 @@ async fn run_command_loop(
                 provider_id,
                 profile_name,
             } => {
+                tracing::info!("LoadDocumentCategories: {provider_id} / {profile_name}");
                 let outcome = load_document_categories(&domain, &provider_id, &profile_name).await;
+                tracing::info!("LoadDocumentCategories result: {:?}", outcome.as_ref().map(std::vec::Vec::len));
                 fwd.forward(UiEvent::DocumentCategoriesLoaded(outcome));
             }
             UiCommand::LoadAuthFields(provider_id) => {

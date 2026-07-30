@@ -458,30 +458,27 @@ fn refresh_profile_combo() {
 fn maybe_request_categories() {
     let rtype = current_report_type();
     let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
-    if rtype.as_deref() == Some("wb.documents") && pid.as_deref() == Some("wildberries") {
-        if let Some((_, pname)) = current_profile() {
-            if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
-                // Только если категории ещё не загружены (combo пустой или только «все»).
-                let need = W_CATEGORY_COMBO.with(|w| {
-                    w.borrow()
-                        .as_ref()
-                        .and_then(|c| c.model().map(|m| m.iter_n_children(None)))
-                        .map_or(true, |n| n <= 1)
-                });
-                if need {
-                    if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
-                        combo.remove_all();
-                        combo.append_text("(загрузка…)");
-                        combo.set_active(Some(0));
-                    }
-                    cs.send(crate::channels::UiCommand::LoadDocumentCategories {
-                        provider_id: "wildberries".into(),
-                        profile_name: pname,
-                    });
-                }
-            }
-        }
+
+    if rtype.as_deref() != Some("wb.documents") || pid.as_deref() != Some("wildberries") {
+        return;
     }
+    let Some((_, pname)) = current_profile() else {
+        return;
+    };
+    let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
+        return;
+    };
+
+    // Показываем «загрузка…» и отправляем запрос.
+    if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
+        combo.remove_all();
+        combo.append_text("(загрузка…)");
+        combo.set_active(Some(0));
+    }
+    cs.send(crate::channels::UiCommand::LoadDocumentCategories {
+        provider_id: "wildberries".into(),
+        profile_name: pname,
+    });
 }
 
 /// Смена провайдера: обновить combo профилей + автоматически запросить отчёты.
