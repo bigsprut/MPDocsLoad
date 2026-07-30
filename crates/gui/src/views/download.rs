@@ -33,6 +33,7 @@ thread_local! {
     static W_REPORT: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
     static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
+    static W_RESULT_BOX: Rc<RefCell<Option<GtkBox>>> = Rc::new(RefCell::new(None));
     static W_MODE_HINT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     static W_LIST_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_PERIOD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
@@ -212,14 +213,17 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .build();
     root.append(&scroll);
 
-    // --- Результат ---
+    // --- Результат (контейнер: label + кнопка "Открыть папку") ---
+    let result_box = GtkBox::new(Orientation::Horizontal, 8);
     let result_label = Label::builder()
         .label("Готов к работе. Создайте профиль во вкладке «Профили», затем выберите его здесь.")
         .halign(gtk4::Align::Start)
         .css_classes(["dim-label"])
         .wrap(true)
+        .hexpand(true)
         .build();
-    root.append(&result_label);
+    result_box.append(&result_label);
+    root.append(&result_box);
 
     // Сохраняем виджеты.
     W_PROVIDER.with(|w| *w.borrow_mut() = Some(provider_combo.clone()));
@@ -228,6 +232,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
     W_LIST.with(|w| *w.borrow_mut() = Some(list_box.clone()));
     W_RESULT.with(|w| *w.borrow_mut() = Some(result_label.clone()));
+    W_RESULT_BOX.with(|w| *w.borrow_mut() = Some(result_box.clone()));
     W_MODE_HINT.with(|w| *w.borrow_mut() = Some(mode_hint.clone()));
     W_LIST_BTN.with(|w| *w.borrow_mut() = Some(list_btn.clone()));
     W_PERIOD_BTN.with(|w| *w.borrow_mut() = Some(period_btn.clone()));
@@ -652,9 +657,69 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Обработчик: скачивание завершено.
-pub fn on_download_finished(files: &[DownloadedFile]) {
-    notify(&format!("Скачано файлов: {}. Файлы записаны в папку загрузок.", files.len()));
+/// Обработчик: скачивание завершено (с путями к файлам).
+pub fn on_download_finished(result: &crate::channels::DownloadResult) {
+    let n = result.files.len();
+    if n == 0 {
+        notify("Файлы не найдены.");
+        return;
+    }
+
+    // Показываем пути к файлам.
+    let paths_text = result
+        .saved_paths
+        .iter()
+        .map(|p| format!("  • {p}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    notify(&format!("✅ Скачано файлов: {n}.\n{paths_text}"));
+
+    // Добавляем кнопку «Открыть папку» рядом с результатом.
+    let result_box = W_RESULT_BOX.with(|w| w.borrow().clone());
+    if let Some(rbox) = result_box {
+        // Удаляем старую кнопку, если была.
+        let mut child = rbox.last_child();
+        while let Some(c) = child {
+            let next = c.prev_sibling();
+            let is_btn = c.downcast_ref::<gtk4::LinkButton>().is_some();
+            if is_btn {
+                rbox.remove(&c);
+            }
+            child = next;
+        }
+
+        // Определяем папку из первого пути.
+        if let Some(first_path) = result.saved_paths.first() {
+            if let Some(parent) = std::path::Path::new(first_path).parent() {
+                let folder = parent.display().to_string();
+                let link = gtk4::LinkButton::builder()
+                    .label("📁 Открыть папку")
+                    .uri(format!("file:///{folder}"))
+                    .has_tooltip(true)
+                    .tooltip_text(&folder)
+                    .build();
+                link.connect_clicked(move |_| {
+                    let _ = open_folder(&folder);
+                });
+                rbox.append(&link);
+            }
+        }
+    }
+}
+
+/// Открывает папку в проводнике Windows.
+fn open_folder(path: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(path)
+            .spawn()?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 /// Обработчик: ошибка скачивания.

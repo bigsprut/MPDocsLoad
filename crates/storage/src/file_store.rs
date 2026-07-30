@@ -74,6 +74,16 @@ impl FileStore {
         data: &[u8],
         ctx: &FileNameContext<'_>,
     ) -> StorageResult<DownloadedFile> {
+        let (file, _dir) = self.save_with_dir(data, ctx)?;
+        Ok(file)
+    }
+
+    /// Сохраняет байты на диск и возвращает (DownloadedFile, директория).
+    pub fn save_with_dir(
+        &self,
+        data: &[u8],
+        ctx: &FileNameContext<'_>,
+    ) -> StorageResult<(DownloadedFile, PathBuf)> {
         let dir = self.target_dir(ctx);
         fs::create_dir_all(&dir).map_err(StorageError::Io)?;
 
@@ -88,18 +98,20 @@ impl FileStore {
             None
         };
 
-        Ok(DownloadedFile {
-            file_name,
-            extension: ctx.extension.to_string(),
-            mime_type: guess_mime(ctx.extension),
-            size: data.len() as u64,
-            sha256: hash,
-            downloaded_at: Utc::now(),
-            source_id: ctx.document_id.map(str::to_string),
-            source_url: None,
-            content: None,
-        })
-
+        Ok((
+            DownloadedFile {
+                file_name,
+                extension: ctx.extension.to_string(),
+                mime_type: guess_mime(ctx.extension),
+                size: data.len() as u64,
+                sha256: hash,
+                downloaded_at: Utc::now(),
+                source_id: ctx.document_id.map(str::to_string),
+                source_url: None,
+                content: None,
+            },
+            dir,
+        ))
     }
 
     fn target_dir(&self, ctx: &FileNameContext<'_>) -> PathBuf {

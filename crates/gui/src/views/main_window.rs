@@ -220,9 +220,9 @@ fn dispatch_event(event: &UiEvent, status: &Label) {
             }
         }
         UiEvent::DownloadFinished(res) => match res {
-            Ok(files) => {
-                status.set_text(&format!("Скачано файлов: {}", files.len()));
-                crate::views::download::on_download_finished(files);
+            Ok(result) => {
+                status.set_text(&format!("Скачано файлов: {}", result.files.len()));
+                crate::views::download::on_download_finished(result);
             }
             Err(e) => {
                 status.set_text(&format!("Ошибка выгрузки: {e}"));

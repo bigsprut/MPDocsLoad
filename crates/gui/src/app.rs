@@ -388,7 +388,7 @@ async fn do_download(
     mut params: mdwf_core::ReportParams,
     cancel: CancellationToken,
     fwd: &EventForwarder,
-) -> Result<Vec<mdwf_core::DownloadedFile>, String> {
+) -> Result<crate::channels::DownloadResult, String> {
     let profile = read_profile(domain, profile_name)?;
     let provider = domain
         .registry
@@ -427,19 +427,23 @@ async fn do_download(
 
     let files = files?;
     let saved = persist_files(domain, &files, provider_id, profile_name, report_type, &params).await;
-    match saved {
-        Ok(count) => fwd.forward(UiEvent::Notify(format!("Сохранено файлов: {count}"))),
-        Err(e) => fwd.forward(UiEvent::Notify(format!("ошибка записи: {e}"))),
-    }
 
     fwd.forward(UiEvent::Progress {
         fraction: Some(1.0),
         message: "выгрузка завершена".into(),
     });
-    Ok(files)
+
+    match saved {
+        Ok(paths) => Ok(crate::channels::DownloadResult {
+            files,
+            saved_paths: paths,
+        }),
+        Err(e) => Err(e),
+    }
 }
 
 /// Записывает скачанные файлы на диск через FileStore и регистрирует в каталоге.
+/// Возвращает вектор полных путей к сохранённым файлам.
 async fn persist_files(
     domain: &Domain,
     files: &[mdwf_core::DownloadedFile],
@@ -447,11 +451,11 @@ async fn persist_files(
     profile_name: &str,
     report_type: &str,
     params: &mdwf_core::ReportParams,
-) -> Result<usize, String> {
+) -> Result<Vec<String>, String> {
     let profile = read_profile(domain, profile_name)?;
     let profile_id = profile.id.ok_or("профиль без id")?;
 
-    let mut count = 0usize;
+    let mut saved_paths = Vec::new();
     for f in files {
         let content = f.content.as_ref().ok_or("файл без контента")?;
         let period = params.period.as_deref();
@@ -466,10 +470,13 @@ async fn persist_files(
         };
 
         // Запись на диск (клонируем FileStore-конфиг, т.к. RwLock).
-        let stored = {
+        let (stored, dir) = {
             let store = domain.file_store.read().clone();
-            store.save(content, &ctx).map_err(|e| e.to_string())?
+            store.save_with_dir(content, &ctx).map_err(|e| e.to_string())?
         };
+        let full_path = dir.join(&stored.file_name);
+        let full_path_str = full_path.display().to_string();
+        saved_paths.push(full_path_str.clone());
 
         // Регистрация в каталоге (с дедупликацией по хэшу).
         if let Some(cat) = domain.catalog.read().as_ref() {
@@ -478,7 +485,7 @@ async fn persist_files(
                 report_type: report_type.to_string(),
                 period: period.map(str::to_string),
                 params: Some(serde_json::to_string(params).unwrap_or_default()),
-                file_path: format!("{} ({} байт)", stored.file_name, stored.size),
+                file_path: full_path_str,
                 file_size: {
                     #[allow(clippy::cast_possible_wrap)]
                     {
@@ -493,9 +500,8 @@ async fn persist_files(
             };
             let _ = cat.record_download(&new_dl);
         }
-        count += 1;
     }
-    Ok(count)
+    Ok(saved_paths)
 }
 
 /// Разбор строкового имени структуры папок.

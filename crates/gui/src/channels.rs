@@ -116,8 +116,8 @@ pub enum UiEvent {
     ReportsLoaded(Result<Vec<ReportInfo>, String>),
     /// Список документов получен.
     DocumentsListed(Result<Vec<DocumentEntry>, String>),
-    /// Скачивание завершено.
-    DownloadFinished(Result<Vec<DownloadedFile>, String>),
+    /// Скачивание завершено (с полными путями к сохранённым файлам).
+    DownloadFinished(Result<DownloadResult, String>),
     /// Прогресс операции.
     Progress {
         fraction: Option<f64>,
@@ -127,6 +127,13 @@ pub enum UiEvent {
     Notify(String),
     /// Сохранённое состояние экрана «Загрузка» загружено (при старте).
     DownloadStateLoaded(Option<DownloadState>),
+}
+
+/// Результат скачивания: файлы + пути на диске.
+#[derive(Debug, Clone)]
+pub struct DownloadResult {
+    pub files: Vec<DownloadedFile>,
+    pub saved_paths: Vec<String>,
 }
 
 /// Краткая информация о провайдере для UI.
