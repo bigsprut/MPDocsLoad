@@ -39,6 +39,7 @@ thread_local! {
     static W_PERIOD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_DOWNLOAD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_CATEGORY_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
+    static W_CATEGORY_LABEL: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     static W_DATE_FROM: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_DATE_TO: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_MONTH: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
@@ -200,7 +201,8 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let date_to = Entry::builder().placeholder_text("по YYYY-MM-DD").width_chars(12).text(&default_to).build();
     let limit_entry = Entry::builder().placeholder_text("лимит").width_chars(6).build();
     let period_entry = Entry::builder().placeholder_text("YYYY-MM").width_chars(9).text(&default_month).build();
-    row2.append(&Label::new(Some("Категория:")));
+    let category_label = Label::new(Some("Категория:"));
+    row2.append(&category_label);
     row2.append(&category_combo);
     row2.append(&Label::new(Some("Диапазон:")));
     row2.append(&date_from);
@@ -263,6 +265,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_PERIOD_BTN.with(|w| *w.borrow_mut() = Some(period_btn.clone()));
     W_DOWNLOAD_BTN.with(|w| *w.borrow_mut() = Some(download_btn.clone()));
     W_CATEGORY_COMBO.with(|w| *w.borrow_mut() = Some(category_combo.clone()));
+    W_CATEGORY_LABEL.with(|w| *w.borrow_mut() = Some(category_label.clone()));
     W_DATE_FROM.with(|w| *w.borrow_mut() = Some(date_from.clone()));
     W_DATE_TO.with(|w| *w.borrow_mut() = Some(date_to.clone()));
     W_MONTH.with(|w| *w.borrow_mut() = Some(period_entry.clone()));
@@ -526,6 +529,15 @@ fn update_mode_hint() {
     W_LIST_BTN.with(|w| { if let Some(b) = w.borrow().as_ref() { b.set_sensitive(list_enabled); } });
     W_DOWNLOAD_BTN.with(|w| { if let Some(b) = w.borrow().as_ref() { b.set_sensitive(dl_enabled); } });
     W_PERIOD_BTN.with(|w| { if let Some(b) = w.borrow().as_ref() { b.set_sensitive(period_enabled); } });
+
+    // Категория нужна только для wb.documents — скрываем для остальных отчётов.
+    let cat_visible = name == "wb.documents";
+    if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
+        combo.set_visible(cat_visible);
+    }
+    if let Some(label) = W_CATEGORY_LABEL.with(|w| w.borrow().clone()) {
+        label.set_visible(cat_visible);
+    }
 }
 
 fn build_filter(category: &ComboBoxText, date_from: &Entry, date_to: &Entry, limit: &Entry) -> DocumentFilter {
