@@ -81,11 +81,6 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "Документы (УПД/УКД/акты) — по категории",
             ReportCategory::Documents,
         ),
-        desc_browsable(
-            "wb.documents_categories",
-            "Категории документов",
-            ReportCategory::Documents,
-        ),
         // --- Статистика (statistics-api, GET) ---
         desc_browsable("wb.orders", "Заказы", ReportCategory::Operational),
         desc_browsable("wb.sales", "Продажи", ReportCategory::Operational),
