@@ -287,6 +287,24 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         schedule_save();
     });
     profile_combo.connect_changed(move |_| {
+        // При смене профиля — перезапрашиваем категории WB (токен мог измениться).
+        let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
+        if pid.as_deref() == Some("wildberries") {
+            if let Some((_, pname)) = current_profile() {
+                if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
+                    // Очищаем combo на время загрузки.
+                    if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
+                        combo.remove_all();
+                        combo.append_text("(загрузка…)");
+                        combo.set_active(Some(0));
+                    }
+                    cs.send(crate::channels::UiCommand::LoadDocumentCategories {
+                        provider_id: "wildberries".into(),
+                        profile_name: pname,
+                    });
+                }
+            }
+        }
         schedule_save();
     });
     // Смена отчёта → обновить подсказку режима + доступность кнопок + автосохранение.
