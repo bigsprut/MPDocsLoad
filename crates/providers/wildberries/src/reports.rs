@@ -666,15 +666,20 @@ impl Report for WbDocumentsReport {
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
         let docs_client = crate::documents::DocumentsClient::new(&self.client);
-        let category = filter
-            .category
-            .as_deref()
-            .ok_or_else(|| CoreError::InvalidParameter("wb.documents: требуется category".into()))?;
+        // Категория опциональна: если не указана, WB вернёт документы всех категорий.
+        let category = filter.category.as_deref().unwrap_or("");
 
-        docs_client.ensure_category(auth, category).await?;
+        // Проверяем категорию только если она указана.
+        if !category.is_empty() {
+            docs_client.ensure_category(auth, category).await?;
+        }
 
         let params = crate::documents::ListDocumentsParams {
-            category: Some(category.to_string()),
+            category: if category.is_empty() {
+                None
+            } else {
+                Some(category.to_string())
+            },
             date_from: filter.date_from,
             date_to: filter.date_to,
             limit: filter.limit.unwrap_or(50).min(50),
@@ -684,7 +689,11 @@ impl Report for WbDocumentsReport {
         let docs = docs_client.list_documents(auth, &params).await?;
         Ok(docs
             .iter()
-            .map(|d| crate::documents::wb_document_to_entry(d, category))
+            .map(|d| {
+                // Используем категорию из самого документа, если есть.
+                let cat = d.category.as_deref().unwrap_or(category);
+                crate::documents::wb_document_to_entry(d, cat)
+            })
             .collect())
     }
 

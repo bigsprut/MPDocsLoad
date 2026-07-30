@@ -332,10 +332,10 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             return;
         };
         let filter = build_filter(&cat_combo_list, &date_from, &date_to, &limit_entry);
-        // Для wb.documents категория обязательна.
+        // Категория опциональна: если не выбрана, вернутся документы всех категорий.
+        // Оставляем подсказку только для удобства.
         if rtype == "wb.documents" && filter.category.is_none() {
-            notify("Для «Документы (УПД/УКД/акты)» выберите категорию из списка.");
-            return;
+            notify("Получаю документы всех категорий. Для фильтра выберите категорию из списка.");
         }
         cs_list.send(crate::channels::UiCommand::ListDocuments {
             provider_id: pid,
