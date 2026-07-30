@@ -69,19 +69,6 @@ pub fn on_providers_loaded(providers: &[crate::channels::ProviderInfo]) {
 pub fn on_profiles_loaded(profiles: &[Profile]) {
     PROFILES.with(|p| *p.borrow_mut() = profiles.to_vec());
     refresh_profile_combo();
-
-    // Для WB — запрашиваем категории документов автоматически (нужен профиль).
-    let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
-    if pid.as_deref() == Some("wildberries") {
-        if let Some((_, pname)) = current_profile() {
-            if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
-                cs.send(crate::channels::UiCommand::LoadDocumentCategories {
-                    provider_id: "wildberries".into(),
-                    profile_name: pname,
-                });
-            }
-        }
-    }
 }
 
 /// Хук: категории документов WB загружены → заполняем combo.
@@ -506,16 +493,6 @@ fn on_provider_changed() {
     if let Some(ref pid) = pid {
         if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
             cs.send(crate::channels::UiCommand::LoadReports(pid.clone()));
-            // Для WB — запрашиваем категории документов автоматически.
-            if pid == "wildberries" {
-                // Категории требуют профиль — отправим, когда он выбран.
-                // Очищаем combo категорий на время.
-                if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
-                    combo.remove_all();
-                    combo.append_text("(выберите профиль)");
-                    combo.set_active(Some(0));
-                }
-            }
         }
     }
 }
