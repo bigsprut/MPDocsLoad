@@ -38,7 +38,7 @@ thread_local! {
     static W_LIST_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_PERIOD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_DOWNLOAD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
-    static W_CATEGORY: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
+    static W_CATEGORY_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
     static W_DATE_FROM: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_DATE_TO: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_MONTH: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
@@ -69,6 +69,41 @@ pub fn on_providers_loaded(providers: &[crate::channels::ProviderInfo]) {
 pub fn on_profiles_loaded(profiles: &[Profile]) {
     PROFILES.with(|p| *p.borrow_mut() = profiles.to_vec());
     refresh_profile_combo();
+
+    // Для WB — запрашиваем категории документов автоматически (нужен профиль).
+    let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
+    if pid.as_deref() == Some("wildberries") {
+        if let Some((_, pname)) = current_profile() {
+            if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
+                cs.send(crate::channels::UiCommand::LoadDocumentCategories {
+                    provider_id: "wildberries".into(),
+                    profile_name: pname,
+                });
+            }
+        }
+    }
+}
+
+/// Хук: категории документов WB загружены → заполняем combo.
+pub fn on_document_categories_loaded(res: &Result<Vec<String>, String>) {
+    let combo = W_CATEGORY_COMBO.with(|w| w.borrow().clone());
+    let Some(combo) = combo else { return };
+    combo.remove_all();
+    combo.append_text("(все)");
+    match res {
+        Err(e) => {
+            combo.append_text(&format!("(ошибка: {e})"));
+        }
+        Ok(cats) if cats.is_empty() => {
+            combo.append_text("(нет категорий)");
+        }
+        Ok(cats) => {
+            for c in cats {
+                combo.append_text(c);
+            }
+        }
+    }
+    combo.set_active(Some(0));
 }
 
 /// Хук: отчёты загружены (все уже принадлежат запрошенному провайдеру).
@@ -170,13 +205,16 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let default_month = last_month_date.format("%Y-%m").to_string();
 
     let row2 = GtkBox::new(Orientation::Horizontal, 8);
-    let category_entry = Entry::builder().placeholder_text("категория (напр. upd)").width_chars(18).build();
+    let category_combo = ComboBoxText::new();
+    category_combo.append_text("(все)");
+    category_combo.set_active(Some(0));
+    category_combo.set_tooltip_text(Some("Категория документа (загружается автоматически из WB)"));
     let date_from = Entry::builder().placeholder_text("с YYYY-MM-DD").width_chars(12).text(&default_from).build();
     let date_to = Entry::builder().placeholder_text("по YYYY-MM-DD").width_chars(12).text(&default_to).build();
     let limit_entry = Entry::builder().placeholder_text("лимит").width_chars(6).build();
     let period_entry = Entry::builder().placeholder_text("YYYY-MM").width_chars(9).text(&default_month).build();
     row2.append(&Label::new(Some("Категория:")));
-    row2.append(&category_entry);
+    row2.append(&category_combo);
     row2.append(&Label::new(Some("Диапазон:")));
     row2.append(&date_from);
     // Кнопка-календарь для date_from
@@ -237,7 +275,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_LIST_BTN.with(|w| *w.borrow_mut() = Some(list_btn.clone()));
     W_PERIOD_BTN.with(|w| *w.borrow_mut() = Some(period_btn.clone()));
     W_DOWNLOAD_BTN.with(|w| *w.borrow_mut() = Some(download_btn.clone()));
-    W_CATEGORY.with(|w| *w.borrow_mut() = Some(category_entry.clone()));
+    W_CATEGORY_COMBO.with(|w| *w.borrow_mut() = Some(category_combo.clone()));
     W_DATE_FROM.with(|w| *w.borrow_mut() = Some(date_from.clone()));
     W_DATE_TO.with(|w| *w.borrow_mut() = Some(date_to.clone()));
     W_MONTH.with(|w| *w.borrow_mut() = Some(period_entry.clone()));
@@ -259,13 +297,17 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     update_mode_hint();
 
     // Автосохранение при изменении полей ввода.
-    for entry in [&category_entry, &date_from, &date_to, &period_entry, &limit_entry] {
+    for entry in [&date_from, &date_to, &period_entry, &limit_entry] {
         let e = entry.clone();
         entry.connect_changed(move |_| {
             let _ = &e;
             schedule_save();
         });
     }
+    // Автосохранение для category_combo.
+    category_combo.connect_changed(move |_| {
+        schedule_save();
+    });
 
     // «↻ Обновить» — запросить отчёты выбранного провайдера.
     let cs_rep = cs.clone();
@@ -283,15 +325,16 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
     // «Список документов».
     let cs_list = cs.clone();
+    let cat_combo_list = category_combo.clone();
     list_btn.connect_clicked(move |_| {
         let Some((pid, pname, rtype)) = current_target() else {
             notify("Выберите профиль и отчёт.");
             return;
         };
-        let filter = build_filter(&category_entry, &date_from, &date_to, &limit_entry);
+        let filter = build_filter(&cat_combo_list, &date_from, &date_to, &limit_entry);
         // Для wb.documents категория обязательна.
         if rtype == "wb.documents" && filter.category.is_none() {
-            notify("Для «Документы (УПД/УКД/акты)» укажите категорию (напр. upd).");
+            notify("Для «Документы (УПД/УКД/акты)» выберите категорию из списка.");
             return;
         }
         cs_list.send(crate::channels::UiCommand::ListDocuments {
@@ -428,9 +471,19 @@ fn on_provider_changed() {
     }
     // Авто-запрос отчётов выбранного провайдера.
     let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
-    if let Some(pid) = pid {
+    if let Some(ref pid) = pid {
         if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
-            cs.send(crate::channels::UiCommand::LoadReports(pid));
+            cs.send(crate::channels::UiCommand::LoadReports(pid.clone()));
+            // Для WB — запрашиваем категории документов автоматически.
+            if pid == "wildberries" {
+                // Категории требуют профиль — отправим, когда он выбран.
+                // Очищаем combo категорий на время.
+                if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
+                    combo.remove_all();
+                    combo.append_text("(выберите профиль)");
+                    combo.set_active(Some(0));
+                }
+            }
         }
     }
 }
@@ -466,11 +519,13 @@ fn update_mode_hint() {
     W_PERIOD_BTN.with(|w| { if let Some(b) = w.borrow().as_ref() { b.set_sensitive(period_enabled); } });
 }
 
-fn build_filter(category: &Entry, date_from: &Entry, date_to: &Entry, limit: &Entry) -> DocumentFilter {
+fn build_filter(category: &ComboBoxText, date_from: &Entry, date_to: &Entry, limit: &Entry) -> DocumentFilter {
     let mut f = DocumentFilter::default();
-    let cat = category.text().to_string();
-    if !cat.is_empty() {
-        f.category = Some(cat);
+    if let Some(cat) = category.active_text() {
+        let cat = cat.to_string();
+        if cat != "(все)" && !cat.is_empty() {
+            f.category = Some(cat);
+        }
     }
     if let Ok(d) = NaiveDate::parse_from_str(&date_from.text(), "%Y-%m-%d") {
         f.date_from = Some(d);
@@ -501,7 +556,13 @@ fn collect_state() -> DownloadState {
         provider_id,
         profile_name,
         report_type,
-        category: entry_value!(W_CATEGORY),
+        category: W_CATEGORY_COMBO.with(|w| {
+            w.borrow()
+                .as_ref()
+                .and_then(gtk4::ComboBoxText::active_text)
+                .map(|s| s.to_string())
+                .filter(|s| s != "(все)")
+        }),
         date_from: entry_value!(W_DATE_FROM),
         date_to: entry_value!(W_DATE_TO),
         month: entry_value!(W_MONTH),
@@ -523,9 +584,21 @@ pub fn on_download_state_loaded(state: Option<&DownloadState>) {
         return;
     };
 
-    // 1. Восстанавливаем поля ввода (без триггера автосохранения — через set_text).
+    // 1. Восстанавливаем категорию в combo (ищем совпадение).
     if let Some(v) = &state.category {
-        W_CATEGORY.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
+        W_CATEGORY_COMBO.with(|w| {
+            if let Some(combo) = w.borrow().as_ref() {
+                let n = combo.model().map_or(0, |m| m.iter_n_children(None));
+                for i in 0..n {
+                    combo.set_active(Some(i as u32));
+                    if let Some(text) = combo.active_text() {
+                        if text.as_str() == v {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
     }
     if let Some(v) = &state.date_from {
         W_DATE_FROM.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });

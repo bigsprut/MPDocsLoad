@@ -205,6 +205,13 @@ async fn run_command_loop(
                 let outcome = load_reports(&domain, &provider_id).await;
                 fwd.forward(UiEvent::ReportsLoaded(outcome));
             }
+            UiCommand::LoadDocumentCategories {
+                provider_id,
+                profile_name,
+            } => {
+                let outcome = load_document_categories(&domain, &provider_id, &profile_name).await;
+                fwd.forward(UiEvent::DocumentCategoriesLoaded(outcome));
+            }
             UiCommand::LoadAuthFields(provider_id) => {
                 let fields = load_auth_fields(&domain, &provider_id);
                 fwd.forward(UiEvent::AuthFieldsLoaded {
@@ -324,6 +331,36 @@ async fn load_reports(domain: &Domain, provider_id: &str) -> Result<Vec<ReportIn
         })
         .collect();
     Ok(reports)
+}
+
+/// Загружает список категорий документов WB через API.
+async fn load_document_categories(
+    domain: &Domain,
+    provider_id: &str,
+    profile_name: &str,
+) -> Result<Vec<String>, String> {
+    let profile = read_profile(domain, profile_name)?;
+    let provider = domain
+        .registry
+        .require(provider_id)
+        .map_err(|e| e.to_string())?;
+    let auth = provider
+        .authenticator(&profile)
+        .await
+        .map_err(|e| e.to_string())?;
+    let report = provider
+        .report("wb.documents_categories")
+        .await
+        .map_err(|e| e.to_string())?;
+    let entries = report
+        .list(
+            auth.as_ref(),
+            &mdwf_core::DocumentFilter::default(),
+            mdwf_core::CancelToken::new(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(entries.into_iter().map(|e| e.id).collect())
 }
 
 /// Загружает поля формы авторизации провайдера (для динамической отрисовки).

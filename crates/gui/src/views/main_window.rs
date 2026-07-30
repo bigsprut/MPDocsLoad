@@ -219,6 +219,9 @@ fn dispatch_event(event: &UiEvent, status: &Label) {
                 Err(e) => status.set_text(&format!("Ошибка: {e}")),
             }
         }
+        UiEvent::DocumentCategoriesLoaded(res) => {
+            crate::views::download::on_document_categories_loaded(res);
+        }
         UiEvent::DownloadFinished(res) => match res {
             Ok(result) => {
                 status.set_text(&format!("Скачано файлов: {}", result.files.len()));

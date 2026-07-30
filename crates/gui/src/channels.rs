@@ -56,6 +56,11 @@ pub enum UiCommand {
     CheckProfile(String),
     /// Загрузить список отчётов провайдера.
     LoadReports(String),
+    /// Загрузить список категорий документов WB (для выпадающего списка).
+    LoadDocumentCategories {
+        provider_id: String,
+        profile_name: String,
+    },
     /// Получить список документов (Browsable-режим).
     ListDocuments {
         provider_id: String,
@@ -116,6 +121,8 @@ pub enum UiEvent {
     ReportsLoaded(Result<Vec<ReportInfo>, String>),
     /// Список документов получен.
     DocumentsListed(Result<Vec<DocumentEntry>, String>),
+    /// Список категорий документов WB получен.
+    DocumentCategoriesLoaded(Result<Vec<String>, String>),
     /// Скачивание завершено (с полными путями к сохранённым файлам).
     DownloadFinished(Result<DownloadResult, String>),
     /// Прогресс операции.
