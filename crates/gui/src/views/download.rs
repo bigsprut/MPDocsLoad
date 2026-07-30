@@ -130,6 +130,8 @@ pub fn on_reports_loaded(reports: &[ReportInfo]) {
         combo.set_active(Some(0));
     }
     update_mode_hint();
+    // Явно запрашиваем категории, т.к. set_active может не вызвать connect_changed.
+    maybe_request_categories();
 }
 
 pub fn build(cs: &CommandSender) -> GtkBox {
