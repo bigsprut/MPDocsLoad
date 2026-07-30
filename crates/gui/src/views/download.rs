@@ -501,9 +501,13 @@ fn on_provider_changed() {
 
 /// Обновить подсказку режима и доступность кнопок для выбранного отчёта.
 fn update_mode_hint() {
-    let (is_browsable, name) = current_report_type()
-        .and_then(|t| REPORTS.with(|r| r.borrow().iter().find(|x| x.type_id == t).cloned()))
-        .map_or((false, String::new()), |r| (r.is_browsable, r.display_name));
+    let rtype = current_report_type();
+    let info = rtype
+        .as_ref()
+        .and_then(|t| REPORTS.with(|r| r.borrow().iter().find(|x| x.type_id == *t).cloned()));
+    let (is_browsable, name) = info
+        .as_ref()
+        .map_or((false, String::new()), |r| (r.is_browsable, r.display_name.clone()));
 
     W_MODE_HINT.with(|w| {
         if let Some(l) = w.borrow().as_ref() {
@@ -530,7 +534,7 @@ fn update_mode_hint() {
     W_PERIOD_BTN.with(|w| { if let Some(b) = w.borrow().as_ref() { b.set_sensitive(period_enabled); } });
 
     // Категория нужна только для wb.documents — скрываем для остальных отчётов.
-    let cat_visible = name == "wb.documents";
+    let cat_visible = rtype.as_deref() == Some("wb.documents");
     if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
         combo.set_visible(cat_visible);
     }
