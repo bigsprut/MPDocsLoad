@@ -287,29 +287,13 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         schedule_save();
     });
     profile_combo.connect_changed(move |_| {
-        // При смене профиля — перезапрашиваем категории WB (токен мог измениться).
-        let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
-        if pid.as_deref() == Some("wildberries") {
-            if let Some((_, pname)) = current_profile() {
-                if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
-                    // Очищаем combo на время загрузки.
-                    if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
-                        combo.remove_all();
-                        combo.append_text("(загрузка…)");
-                        combo.set_active(Some(0));
-                    }
-                    cs.send(crate::channels::UiCommand::LoadDocumentCategories {
-                        provider_id: "wildberries".into(),
-                        profile_name: pname,
-                    });
-                }
-            }
-        }
         schedule_save();
     });
     // Смена отчёта → обновить подсказку режима + доступность кнопок + автосохранение.
     report_combo.connect_changed(move |_| {
         update_mode_hint();
+        // Запрашиваем категории WB только при выборе отчёта wb.documents.
+        maybe_request_categories();
         schedule_save();
     });
     update_mode_hint();
@@ -476,6 +460,36 @@ fn refresh_profile_combo() {
         combo.append_text("(нет профилей — создайте во вкладке «Профили»)");
     }
     combo.set_active(Some(0));
+}
+
+/// Запрашивает категории WB только если выбран отчёт wb.documents.
+fn maybe_request_categories() {
+    let rtype = current_report_type();
+    let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
+    if rtype.as_deref() == Some("wb.documents") && pid.as_deref() == Some("wildberries") {
+        if let Some((_, pname)) = current_profile() {
+            if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
+                // Только если категории ещё не загружены (combo пустой или только «все»).
+                let need = W_CATEGORY_COMBO.with(|w| {
+                    w.borrow()
+                        .as_ref()
+                        .and_then(|c| c.model().map(|m| m.iter_n_children(None)))
+                        .map_or(true, |n| n <= 1)
+                });
+                if need {
+                    if let Some(combo) = W_CATEGORY_COMBO.with(|w| w.borrow().clone()) {
+                        combo.remove_all();
+                        combo.append_text("(загрузка…)");
+                        combo.set_active(Some(0));
+                    }
+                    cs.send(crate::channels::UiCommand::LoadDocumentCategories {
+                        provider_id: "wildberries".into(),
+                        profile_name: pname,
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Смена провайдера: обновить combo профилей + автоматически запросить отчёты.
