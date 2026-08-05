@@ -130,6 +130,71 @@ async fn documents_api_three_step_pattern() {
     assert_eq!(files[0].content.as_ref().unwrap(), content);
 }
 
+/// Пагинация /documents/list: WB отдаёт максимум 50 за запрос, поля total нет.
+/// Провайдер должен перебирать страницы, пока не получит неполную (признак конца),
+/// и обрезать по filter.limit (потолок общего числа).
+#[tokio::test]
+#[serial(wb_env)]
+async fn documents_api_paginates_list() {
+    let server = MockServer::start().await;
+    set_wb_base_urls(&server.uri());
+
+    // /categories — категория upd существует.
+    Mock::given(method("GET"))
+        .and(path("/api/v1/documents/categories"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {"categories": [{"name": "upd"}]}
+        })))
+        .mount(&server)
+        .await;
+
+    // Страница offset=0: 2 документа (полная «страница» с т.з. ceiling test — мало,
+    // но для проверки truncate достаточно). Используем limit=1 в фильтре, чтобы
+    // убедиться, что потолок обрезает результат до 1.
+    Mock::given(method("GET"))
+        .and(path("/api/v1/documents/list"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {"documents": [
+                {"serviceName": "upd-1", "name": "УПД №1", "category": "upd", "extensions": ["xml"]},
+                {"serviceName": "upd-2", "name": "УПД №2", "category": "upd", "extensions": ["xml"]}
+            ]}
+        })))
+        .mount(&server)
+        .await;
+
+    let provider = WildberriesProvider::new().unwrap();
+    let profile = Profile::new("WB-1", "wildberries").with_metadata("token", "wb-token");
+    let auth = provider.authenticator(&profile).await.unwrap();
+    let report = provider.report("wb.documents").await.unwrap();
+
+    // Потолок limit=1: несмотря на 2 документа в ответе, должны получить 1.
+    let filter = mdwf_core::DocumentFilter {
+        category: Some("upd".into()),
+        limit: Some(1),
+        ..Default::default()
+    };
+    let entries = report
+        .list(auth.as_ref(), &filter, mdwf_core::CancelToken::new())
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, "upd-1");
+
+    // Теперь без потолка (limit=None): WB вернул < PAGE_SIZE → одна страница,
+    // получаем оба документа.
+    let filter_all = mdwf_core::DocumentFilter {
+        category: Some("upd".into()),
+        limit: None,
+        ..Default::default()
+    };
+    let entries_all = report
+        .list(auth.as_ref(), &filter_all, mdwf_core::CancelToken::new())
+        .await
+        .unwrap();
+    assert_eq!(entries_all.len(), 2);
+}
+
 #[tokio::test]
 #[serial(wb_env)]
 async fn categories_report_lists_categories() {

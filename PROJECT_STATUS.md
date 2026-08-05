@@ -274,10 +274,18 @@ pub struct DownloadResult {
 
 ### Не реализовано
 1. **Async-отчёты WB** (warehouse_remains, paid_storage, acceptance_report) — create→poll→download паттерн не реализован, только create-фаза
-2. **Пагинация** в list-endpoints (transaction_list, accrual_postings и т.д.) — типы есть, но циклы не реализованы
-3. **max_parallel_jobs** планировщика — счётчик running не декрементируется
-4. **TestProvider в release** — должен быть только dev
-5. **Очистка rate-limiter от ожидания 60с в тестах** — `MDWF_WB_NO_RATELIMIT=1`
+2. **max_parallel_jobs** планировщика — счётчик running не декрементируется
+3. **TestProvider в release** — должен быть только dev
+4. **Очистка rate-limiter от ожидания 60с в тестах** — `MDWF_WB_NO_RATELIMIT=1`
+
+### ✅ Недавно сделано
+- **Пагинация `/api/v1/documents/list`** (сделано). WB отдаёт максимум 50 документов
+  за запрос, поля `total` в ответе нет (сверено со схемой `GetListData`).
+  `WbDocumentsReport::list` теперь перебирает страницы по 50, пока не получит
+  неполную (признак конца) или не наберёт `filter.limit` (`None` = без потолка,
+  выгружаем все). Страховочный потолок — 200 страниц (10 000 документов).
+  Запросы идут через per-domain rate-limiter (1 req/10с burst 5). Интеграционный
+  тест `documents_api_paginates_list` проверяет truncate по ceiling и полную выгрузку.
 
 ### Не подтверждено первоисточником (может быть неверно)
 1. `returns-api.wildberries.ru` для claims — спека говорит `/api/v1/claims`, но в присланной доке этого раздела нет
@@ -306,6 +314,7 @@ pub struct DownloadResult {
 - feat(gui): русские названия категорий (DocumentCategoryInfo{label,value}) — combo показывает title, в API уходит name
 - fix(wb): схема WbDocument приведена к OpenAPI-спеке (name/extensions/creationTime; убраны выдуманные amount/date) — осмысленные имена в списке документов
 - feat(wb): человекочитаемые имена файлов на диске (DocumentSel{name,extension} → doc_meta → source_id=name), реальное extension из ответа, поштучное скачивание, нормализация имён (unknown-сегменты вырезаются)
+- feat(wb): пагинация /documents/list — цикл по offset (страницы по 50), limit=пусто→все, limit=N→потолок, страховочный cap 200 страниц
 
 ---
 

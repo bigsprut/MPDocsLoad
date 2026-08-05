@@ -633,6 +633,13 @@ impl WbDocumentsReport {
     }
 }
 
+/// Размер страницы для пагинации /documents/list (WB-максимум за запрос).
+const WB_DOCS_PAGE_SIZE: u32 = 50;
+/// Страховочный потолок числа страниц, чтобы не зациклиться при аномальном
+/// ответе WB (напр. постоянно возвращает полные 50, но данные дублируются).
+/// 200 страниц × 50 = 10 000 документов — заведомо больше любого реального случая.
+const WB_DOCS_MAX_PAGES: u32 = 200;
+
 #[async_trait]
 impl Report for WbDocumentsReport {
     fn type_id(&self) -> &str {
@@ -669,20 +676,49 @@ impl Report for WbDocumentsReport {
             docs_client.ensure_category(auth, category).await?;
         }
 
-        let params = crate::documents::ListDocumentsParams {
-            category: if category.is_empty() {
-                None
-            } else {
-                Some(category.to_string())
-            },
-            date_from: filter.date_from,
-            date_to: filter.date_to,
-            limit: filter.limit.unwrap_or(50).min(50),
-            offset: 0,
-            ..Default::default()
-        };
-        let docs = docs_client.list_documents(auth, &params).await?;
-        Ok(docs
+        // Пагинация: WB /documents/list отдаёт максимум 50 документов за запрос
+        // (поля total в ответе нет — дока/спека GetListData содержит только documents).
+        // Поэтому перебираем страницы по PAGE_SIZE, пока не получим неполную страницу
+        // (признак конца) или не наберём ceiling = filter.limit (None = без потолка,
+        // выгружаем все). Запросы идут через per-domain rate-limiter (1 req/10с burst 5).
+        let ceiling = filter.limit; // None = без ограничения.
+
+        let mut all: Vec<crate::documents::WbDocument> = Vec::new();
+        let mut offset: u32 = 0;
+        for _ in 0..WB_DOCS_MAX_PAGES {
+            // Если уже набрали ceiling — стоп.
+            if let Some(max) = ceiling {
+                if all.len() as u32 >= max {
+                    break;
+                }
+            }
+            let params = crate::documents::ListDocumentsParams {
+                category: if category.is_empty() {
+                    None
+                } else {
+                    Some(category.to_string())
+                },
+                date_from: filter.date_from,
+                date_to: filter.date_to,
+                limit: WB_DOCS_PAGE_SIZE,
+                offset,
+                ..Default::default()
+            };
+            let page = docs_client.list_documents(auth, &params).await?;
+            let got = page.len();
+            all.extend(page);
+            // Неполная страница — это последняя (дока не возвращает total).
+            if (got as u32) < WB_DOCS_PAGE_SIZE {
+                break;
+            }
+            offset = offset.saturating_add(WB_DOCS_PAGE_SIZE);
+        }
+        // Обрезаем по ceiling, если набрали больше (последняя страница могла дать излишек).
+        if let Some(max) = ceiling {
+            all.truncate(max as usize);
+        }
+
+        Ok(all
             .iter()
             .map(|d| {
                 // Используем категорию из самого документа, если есть.
