@@ -1,9 +1,8 @@
-//! Описания отчётов Ozon (спец. §2.2.1 — 13 отчётов через API) + out-of-scope.
+//! Описания отчётов Ozon (спец. §2.2.1 — 10 отчётов через API) + out-of-scope.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Datelike;
 use serde_json::json;
 
 use mdwf_core::{
@@ -16,7 +15,7 @@ use mdwf_core::capabilities::{AuthField, AuthFieldKind, AuthType};
 use crate::client::OzonHttpClient;
 use crate::date_format;
 
-/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 13 отчётов.
+/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 10 отчётов.
 #[must_use]
 pub fn capabilities() -> Capabilities {
     Capabilities {
@@ -48,7 +47,7 @@ pub fn capabilities() -> Capabilities {
     }
 }
 
-/// Описания всех 13 отчётов Ozon (спец. §2.2.1). Удалены: «Справочник типов
+/// Описания всех 10 отчётов Ozon (спец. §2.2.1). Удалены: служебные, дублёры,
 /// начислений» (служебный), b2b_sales_json (дублёр PDF), cash_flow/analytics/
 /// act_discrepancy (требуют сложных схем/UI, сверено с docs.ozon.ru).
 #[must_use]
@@ -60,12 +59,6 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "Отчёт о реализации (месячный)",
             ReportCategory::Finance,
             &[param_period_month("period", "Месяц (YYYY-MM)", true)],
-        ),
-        desc_period(
-            "ozon.realization_by_day",
-            "Отчёт о реализации (за день)",
-            ReportCategory::Finance,
-            &[param_date("date", "Дата (YYYY-MM-DD)", true)],
         ),
         desc_period(
             "ozon.realization_posting",
@@ -86,18 +79,6 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             &[],
         ),
         // --- Browsable-режим (список → выбор → скачать) ---
-        desc_browsable(
-            "ozon.transaction_list",
-            "Список транзакций (⚠️ deprecated → 6 июля 2026)",
-            ReportCategory::Finance,
-            &[param_date_range(true)],
-        ),
-        desc_browsable(
-            "ozon.transaction_totals",
-            "Итоги транзакций (⚠️ deprecated)",
-            ReportCategory::Finance,
-            &[param_date_range(true)],
-        ),
         desc_browsable(
             "ozon.accrual_postings",
             "Начисления по отправлениям",
@@ -183,16 +164,6 @@ fn param_period_month(id: &str, label: &str, required: bool) -> ReportParameter 
     }
 }
 
-fn param_date(id: &str, label: &str, required: bool) -> ReportParameter {
-    ReportParameter {
-        id: id.into(),
-        label: label.into(),
-        kind: ReportParameterKind::Date,
-        required,
-        default: Some("2026-07-01".into()),
-    }
-}
-
 fn param_date_range(required: bool) -> ReportParameter {
     ReportParameter {
         id: "date_range".into(),
@@ -216,13 +187,6 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             client,
             "/v2/finance/realization",
         )),
-        "ozon.realization_by_day" => Arc::new(OzonReport::period(
-            "ozon.realization_by_day",
-            "Отчёт о реализации (за день)",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/realization/by-day",
-        )),
         "ozon.realization_posting" => Arc::new(OzonReport::period(
             "ozon.realization_posting",
             "Отчёт о реализации (позаказный)",
@@ -245,20 +209,6 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             "/v1/finance/balance",
         )),
         // Browsable-режим.
-        "ozon.transaction_list" => Arc::new(OzonReport::browsable(
-            "ozon.transaction_list",
-            "Список транзакций (deprecated)",
-            ReportCategory::Finance,
-            client,
-            "/v3/finance/transaction/list",
-        )),
-        "ozon.transaction_totals" => Arc::new(OzonReport::browsable(
-            "ozon.transaction_totals",
-            "Итоги транзакций (deprecated)",
-            ReportCategory::Finance,
-            client,
-            "/v3/finance/transaction/totals",
-        )),
         "ozon.accrual_postings" => Arc::new(OzonReport::browsable(
             "ozon.accrual_postings",
             "Начисления по отправлениям",
@@ -437,12 +387,10 @@ fn build_query_body(filter: &DocumentFilter) -> serde_json::Value {
 /// Формат тела зависит от type_id — разные эндпоинты Ozon ждут разные схемы
 /// периода (сверено с официальным swagger.json API v2.1):
 /// - `month`+`year` как integer: realization, realization_posting.
-/// - `day`+`month`+`year` как integer: realization_by_day.
 /// - `date` как строка YYYY-MM: compensation, decompensation, b2b_sales,
 ///   mutual_settlement (async-отчёты).
 /// - `date_from`+`date_to` как YYYY-MM-DD: balance, buyout.
-/// - прочие (cash_flow, analytics) требуют сложных схем и обрабатываются
-///   отдельно — здесь для них собирается body из params.values как есть.
+/// - browsable-отчёты (accrual_*): без периода, тело из params.values.
 fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Value {
     let mut body = json!({});
     let period = params.period.as_deref();
@@ -457,16 +405,6 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
                 if let Some((y, m)) = date_format::parse_year_month(p) {
                     body["year"] = json!(y);
                     body["month"] = json!(m);
-                }
-            }
-        }
-        // day + month + year как integer (period в формате YYYY-MM-DD).
-        "ozon.realization_by_day" => {
-            if let Some(p) = period {
-                if let Some(d) = date_format::parse_date_only(p) {
-                    body["year"] = json!(d.year());
-                    body["month"] = json!(d.month());
-                    body["day"] = json!(d.day());
                 }
             }
         }
@@ -725,18 +663,6 @@ mod tests {
     }
 
     #[test]
-    fn build_body_realization_by_day_three_ints() {
-        let params = ReportParams {
-            period: Some("2026-07-15".into()),
-            ..Default::default()
-        };
-        let body = build_download_body("ozon.realization_by_day", &params);
-        assert_eq!(body["year"], 2026);
-        assert_eq!(body["month"], 7);
-        assert_eq!(body["day"], 15);
-    }
-
-    #[test]
     fn build_body_balance_date_from_to() {
         let params = ReportParams::default()
             .with("date_from", "2026-07-01")
@@ -775,9 +701,9 @@ mod tests {
     }
 
     #[test]
-    fn reports_count_is_13() {
+    fn reports_count_is_10() {
         let caps = capabilities();
-        assert_eq!(caps.reports.len(), 13, "got {} reports", caps.reports.len());
+        assert_eq!(caps.reports.len(), 10, "got {} reports", caps.reports.len());
         // accrual_types удалён — это служебный справочник, не выгрузка.
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_types"));
         // b2b_sales_json удалён — дублёр b2b_sales (PDF).
@@ -786,6 +712,11 @@ mod tests {
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.cash_flow"));
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.analytics"));
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.act_discrepancy"));
+        // transaction_list/totals удалены (deprecated → отключены 8 сентября 2026).
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.transaction_list"));
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.transaction_totals"));
+        // realization_by_day удалён (требует подписку Premium Plus/Pro).
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.realization_by_day"));
     }
 
     #[test]

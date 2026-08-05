@@ -39,7 +39,7 @@ crates/
 ├── scheduler/         — cron + retry + автозапуск Windows (HKCU Run)
 ├── config/            — config.toml + пути (%APPDATA%\mdwf)
 ├── test-provider/     — TestProvider mock
-├── providers/ozon/    — Ozon Seller API (13 отчётов; accrual_types, b2b_sales_json, cash_flow, analytics, act_discrepancy удалены)
+├── providers/ozon/    — Ozon Seller API (10 отчётов; accrual_types, b2b_sales_json, cash_flow, analytics, act_discrepancy, transaction_*, realization_by_day удалены)
 ├── providers/wildberries/ — WB OpenAPI (14 отчётов)
 ├── cli/               — mdwf CLI (clap)
 ├── gui/               — mdwf-gui (GTK4 + libadwaita)
@@ -195,7 +195,7 @@ WB (зеркало `github.com/eslazarev/wildberries-sdk`, т.к. `dev.wildberri
 - Заголовки `Client-Id` + `Api-Key`
 - TTL ключа: 6 месяцев (дока), в спеке 180 дней
 
-### Эндпоинты Ozon (13 отчётов; сверено с docs.ozon.ru — accrual_types/b2b_sales_json/cash_flow/analytics/act_discrepancy удалены)
+### Эндпоинты Ozon (10 отчётов; сверено с docs.ozon.ru)
 
 **Health-check:** POST /v1/finance/balance с `{date_from, date_to}` (макс 30 дней)
 
@@ -329,8 +329,12 @@ pub struct DownloadResult {
   периода + пагинацию page/page_size), `analytics` (обязательные metrics/dimension —
   нужен UI выбора), `act_discrepancy` (требует carriage_id, а не период). Сверено с
   `docs.ozon.ru` — эти эндпоинты не соответствуют простому period/date интерфейсу.
-  Теперь **13 отчётов Ozon** (было 18 → accrual_types, b2b_sales_json, cash_flow,
-  analytics, act_discrepancy удалены). Тест `reports_count_is_13` фиксирует число.
+- **Удалены deprecated и Premium-отчёты Ozon** (сделано). `transaction_list`,
+  `transaction_totals` (deprecated → отключены 8 сентября 2026, подтверждено
+  `docs.ozon.ru`), `realization_by_day` (требует подписку Premium Plus/Pro). Теперь
+  **10 отчётов Ozon** (18 → удалены accrual_types, b2b_sales_json, cash_flow,
+  analytics, act_discrepancy, transaction_list, transaction_totals, realization_by_day).
+  Тест `reports_count_is_10` фиксирует число.
 
 ### Не подтверждено первоисточником (может быть неверно)
 1. `returns-api.wildberries.ru` для claims — спека говорит `/api/v1/claims`, но в присланной доке этого раздела нет
