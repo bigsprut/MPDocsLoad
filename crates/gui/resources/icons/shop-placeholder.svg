@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Иконка-плейсхолдер: нейтральная серая закруглённая плитка с символом магазина.
+     Используется в заголовке, пока магазин не выбран или провайдер неизвестен. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" rx="6" ry="6" fill="#9ca3af"/>
+  <!-- силуэт магазина: навес + корпус -->
+  <path d="M6 9 L7 6 H17 L18 9 Z" fill="#ffffff"/>
+  <rect x="7" y="9.5" width="10" height="7" fill="#ffffff"/>
+  <rect x="10.5" y="12" width="3" height="4.5" fill="#9ca3af"/>
+</svg>

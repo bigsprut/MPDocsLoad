@@ -1,24 +1,24 @@
-//! Вкладка «Отчёты»: выбор провайдера, список доступных отчётов,
-//! подгрузка списка отчётов провайдера.
+//! Вкладка «Отчёты»: список доступных отчётов активного магазина.
+//!
+//! Магазин (маркетплейс + профиль) выбирается во вкладке «Магазин» — здесь
+//! только read-only индикатор и список отчётов активного провайдера. Клик по
+//! отчёту — подсказка перейти во вкладку «Загрузка» для выгрузки.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk4::prelude::*;
-use gtk4::{
-    Box as GtkBox, Button, ComboBoxText, Label, ListBox, Orientation,
-};
+use gtk4::{Box as GtkBox, Button, Label, ListBox, Orientation};
 
-use crate::channels::{CommandSender, ProviderInfo, ReportInfo};
+use crate::channels::{CommandSender, ReportInfo};
 
 thread_local! {
     static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
     static LIST_WIDGET: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
-}
-
-/// Хук: провайдеры загружены (для обновления combo, если нужно).
-pub fn on_providers_loaded(_providers: &[ProviderInfo]) {
-    // На ЭТАПЕ 6 свяжем с реальным combo провайдеров.
+    static W_SHOP_LABEL: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
+    /// Активный провайдер (для reload по кнопке «↻ Обновить»).
+    static ACTIVE_PROVIDER: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
 }
 
 pub fn build(cs: &CommandSender) -> GtkBox {
@@ -36,22 +36,25 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&title);
 
     root.append(&Label::builder()
-        .label("Выберите провайдера, чтобы увидеть список отчётов. Клик по отчёту переносит его во вкладку «Загрузка».")
+        .label("Магазин выбирается во вкладке «Магазин». Здесь — список отчётов активного маркетплейса. Клик по отчёту переносит его во вкладку «Загрузка».")
         .css_classes(["dim-label"])
         .halign(gtk4::Align::Start)
         .wrap(true)
         .build());
 
-    // Выбор провайдера.
+    // Read-only индикатор активного магазина + кнопка обновления.
     let row = GtkBox::new(Orientation::Horizontal, 8);
-    let provider_combo = ComboBoxText::new();
-    provider_combo.append_text("test");
-    provider_combo.append_text("ozon");
-    provider_combo.append_text("wildberries");
-    provider_combo.set_active(Some(0));
-    let load_btn = Button::builder().label("Загрузить список отчётов").build();
-    row.append(&Label::new(Some("Провайдер:")));
-    row.append(&provider_combo);
+    let shop_label = Label::builder()
+        .label("Магазин: не выбран — выберите во вкладке «Магазин».")
+        .css_classes(["heading"])
+        .halign(gtk4::Align::Start)
+        .wrap(true)
+        .build();
+    let load_btn = Button::builder()
+        .label("↻ Обновить")
+        .tooltip_text("Перезагрузить список отчётов активного маркетплейса")
+        .build();
+    row.append(&shop_label);
     row.append(&load_btn);
     root.append(&row);
 
@@ -60,35 +63,64 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
     list_box.set_vexpand(true);
     root.append(&list_box);
-    LIST_WIDGET.with(|lw| *lw.borrow_mut() = Some(list_box.clone()));
 
+    W_SHOP_LABEL.with(|w| *w.borrow_mut() = Some(shop_label.clone()));
+    LIST_WIDGET.with(|lw| *lw.borrow_mut() = Some(list_box.clone()));
+    CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
+
+    // «↻ Обновить» — перезагрузить отчёты активного провайдера.
     let cs1 = cs.clone();
-    let list_box1 = list_box.clone();
     load_btn.connect_clicked(move |_| {
-        // очищаем список
-        while let Some(child) = list_box1.first_child() {
-            list_box1.remove(&child);
+        let pid = ACTIVE_PROVIDER.with(|p| p.borrow().clone());
+        if let Some(pid) = pid {
+            // Очищаем список + индикатор загрузки.
+            if let Some(lb) = LIST_WIDGET.with(|lw| lw.borrow().clone()) {
+                while let Some(child) = lb.first_child() {
+                    lb.remove(&child);
+                }
+                lb.append(&Label::new(Some("Загрузка…")));
+            }
+            cs1.send(crate::channels::UiCommand::LoadReports(pid));
         }
-        list_box1.append(&Label::new(Some("Загрузка…")));
-        let pid = provider_combo
-            .active_text()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        cs1.send(crate::channels::UiCommand::LoadReports(pid));
     });
 
-    // Клик по отчёту -> подсказка, что фактический выбор отчёта делается
-    // во вкладке «Загрузка» (там же выбираются профиль и фильтры).
+    // Клик по отчёту -> подсказка перейти во вкладку «Загрузка».
     list_box.connect_selected_rows_changed(move |lb| {
         if let Some(row) = lb.selected_row() {
             if let Some(label) = row.child().and_then(|c| c.downcast::<Label>().ok()) {
                 label.set_tooltip_text(Some("Перейдите во вкладку «Загрузка» для выгрузки"));
-                let _ = &label; // подавление unused
             }
         }
     });
 
     root
+}
+
+/// Хук: активный магазин изменён → обновляем read-only лейбл и перезагружаем
+/// список отчётов нового провайдера.
+pub fn on_active_shop_changed(
+    provider_id: &str,
+    provider_display_name: &str,
+    seller_name: Option<&str>,
+    profile_name: &str,
+) {
+    ACTIVE_PROVIDER.with(|p| *p.borrow_mut() = Some(provider_id.to_string()));
+    W_SHOP_LABEL.with(|w| {
+        if let Some(l) = w.borrow().as_ref() {
+            let display = seller_name.unwrap_or(profile_name);
+            l.set_text(&format!("Магазин: {provider_display_name} — {display}"));
+        }
+    });
+    // Перезагружаем отчёты.
+    if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
+        if let Some(lb) = LIST_WIDGET.with(|lw| lw.borrow().clone()) {
+            while let Some(child) = lb.first_child() {
+                lb.remove(&child);
+            }
+            lb.append(&Label::new(Some("Загрузка…")));
+        }
+        cs.send(crate::channels::UiCommand::LoadReports(provider_id.to_string()));
+    }
 }
 
 /// Обработчик «отчёты загружены» — перерисовывает список.

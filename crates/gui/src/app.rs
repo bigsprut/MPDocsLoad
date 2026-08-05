@@ -19,8 +19,8 @@ use mdwf_storage::{Catalog, FileStore, FileStoreConfig, FileNameContext, FolderS
 use mdwf_test_provider::TestProvider;
 
 use crate::channels::{
-    AuthFieldInfo, AuthFieldKindInfo, CommandSender, EventForwarder, ProviderInfo, ReportInfo,
-    UiCommand, UiEvent,
+    ActiveShop, AuthFieldInfo, AuthFieldKindInfo, CommandSender, EventForwarder, ProviderInfo,
+    ReportInfo, UiCommand, UiEvent,
 };
 use crate::theme;
 
@@ -133,6 +133,8 @@ impl App {
             // После построения окна — загружаем начальные данные.
             cs.send(UiCommand::LoadProviders);
             cs.send(UiCommand::LoadProfiles);
+            // Загружаем сохранённый активный магазин (выбор из прошлого сеанса).
+            cs.send(UiCommand::LoadActiveShop);
             // Загружаем сохранённое состояние экрана «Загрузка».
             cs.send(UiCommand::LoadDownloadState);
         });
@@ -235,6 +237,43 @@ async fn run_command_loop(
             UiCommand::CheckProfile(name) => {
                 let outcome = check_profile(&domain, &name).await;
                 fwd.forward(UiEvent::ProfileChecked(outcome));
+            }
+            UiCommand::SelectShop {
+                provider_id,
+                profile_name,
+            } => {
+                // Persist активного магазина в ui_state (единый источник правды).
+                if let Some(cat) = domain.catalog.read().as_ref() {
+                    let shop = ActiveShop {
+                        provider_id: provider_id.clone(),
+                        profile_name: profile_name.clone(),
+                    };
+                    let json = serde_json::to_string(&shop).unwrap_or_default();
+                    if let Err(e) = cat.set_ui_state("active_shop", &json) {
+                        tracing::warn!(error = %e, "failed to save active shop");
+                    }
+                }
+                // Запрашиваем имя продавца из API для заголовка окна.
+                // Ошибка fetch не блокирует смену магазина — seller_name = None.
+                let seller_name = fetch_seller_name(&domain, &provider_id, &profile_name).await;
+                let provider_display_name = match domain.registry.require(&provider_id) {
+                    Ok(p) => p.display_name().to_string(),
+                    Err(_) => provider_id.clone(),
+                };
+                fwd.forward(UiEvent::ActiveShopChanged {
+                    provider_id,
+                    provider_display_name,
+                    seller_name,
+                    profile_name,
+                });
+            }
+            UiCommand::LoadActiveShop => {
+                let shop = domain.catalog.read().as_ref().and_then(|cat| {
+                    cat.get_ui_state("active_shop").ok().flatten().and_then(
+                        |json| serde_json::from_str::<ActiveShop>(&json).ok(),
+                    )
+                });
+                fwd.forward(UiEvent::ActiveShopLoaded(shop));
             }
             UiCommand::LoadReports(provider_id) => {
                 let outcome = load_reports(&domain, &provider_id).await;
@@ -387,6 +426,32 @@ async fn check_profile(domain: &Domain, name: &str) -> Result<mdwf_core::HealthS
         .health_check(auth.as_ref())
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Запрашивает имя продавца из API (Ozon `/v1/seller/info` → company.name).
+/// При любой ошибке (нет эндпоинта у WB, сеть, auth) возвращает `None` —
+/// заголовок покажет локальное имя профиля. НЕ блокирует смену магазина.
+async fn fetch_seller_name(
+    domain: &Domain,
+    provider_id: &str,
+    profile_name: &str,
+) -> Option<String> {
+    let profile = match read_profile_with_secrets(domain, profile_name).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::debug!(error = %e, "fetch_seller_name: profile read failed");
+            return None;
+        }
+    };
+    let provider = domain.registry.require(provider_id).ok()?;
+    let auth = provider.authenticator(&profile).await.ok()?;
+    match provider.account_display_name(auth.as_ref()).await {
+        Ok(name) => name,
+        Err(e) => {
+            tracing::debug!(error = %e, "fetch_seller_name: API call failed");
+            None
+        }
+    }
 }
 
 async fn load_reports(domain: &Domain, provider_id: &str) -> Result<Vec<ReportInfo>, String> {

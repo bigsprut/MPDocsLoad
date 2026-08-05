@@ -117,3 +117,58 @@ async fn retry_on_429_then_succeed() {
     let status = provider.health_check(auth.as_ref()).await.unwrap();
     assert_eq!(status.level, mdwf_core::HealthLevel::Ok);
 }
+
+/// `/v1/seller/info` → `company.name` (сверено с docs.ozon.ru).
+#[tokio::test]
+async fn account_display_name_from_seller_info() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/seller/info"))
+        .and(header("Client-Id", "7707083"))
+        .and(header("Api-Key", "k"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "company": {
+                "country": "Россия",
+                "inn": "7707083893",
+                "name": "ООО 'Ромашка'",
+                "legal_name": "Общество с ограниченной ответственностью 'Ромашка'"
+            },
+            "ratings": [],
+            "subscription": {"is_premium": false}
+        })))
+        .mount(&server)
+        .await;
+
+    let provider = OzonProvider::with_base_url(&server.uri()).unwrap();
+    let profile = Profile::new("Ozon-1", "ozon")
+        .with_metadata("client_id", "7707083")
+        .with_metadata("api_key", "k");
+    let auth = provider.authenticator(&profile).await.unwrap();
+
+    let name = provider.account_display_name(auth.as_ref()).await.unwrap();
+    assert_eq!(name.as_deref(), Some("ООО 'Ромашка'"));
+}
+
+/// `/v1/seller/info` без `company.name` → `None` (не падаем).
+#[tokio::test]
+async fn account_display_name_missing_field() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/seller/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "company": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let provider = OzonProvider::with_base_url(&server.uri()).unwrap();
+    let profile = Profile::new("Ozon-1", "ozon")
+        .with_metadata("client_id", "1")
+        .with_metadata("api_key", "k");
+    let auth = provider.authenticator(&profile).await.unwrap();
+
+    let name = provider.account_display_name(auth.as_ref()).await.unwrap();
+    assert!(name.is_none());
+}

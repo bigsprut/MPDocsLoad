@@ -1,14 +1,20 @@
 //! Главное окно с боковой навигацией и стеком вкладок (спец. §2.5.2).
+//!
+//! Заголовок окна (header bar) показывает иконку активного маркетплейса и
+//! имя продавца (из API) — обновляется по событию `ActiveShopChanged`.
 
 use glib::clone;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Label, Orientation, Separator, Stack, StackSidebar,
+    Box as GtkBox, Image, Label, Orientation, Separator, Stack, StackSidebar,
 };
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::channels::{CommandSender, UiEvent, ViewId};
+
+/// Префикс путей иконок в gresource-бандле (см. resources.gresource.xml).
+const ICON_PREFIX: &str = "resource:///dev/mdwf/icons";
 
 /// Строит главное окно и показывает его.
 pub fn build_and_present(
@@ -31,8 +37,8 @@ pub fn build_and_present(
     stack.set_vexpand(true);
     stack.set_hexpand(true);
 
-    // Каждая вкладка — своя вьюшка.
-    let profiles_view = crate::views::profiles::build(cs);
+    // Каждая вкладка — своя вьюшка. «Магазин» — первая (источник правды выбора).
+    let shop_view = crate::views::shop::build(cs);
     let reports_view = crate::views::reports::build(cs);
     let download_view = crate::views::download::build(cs);
     let settings_view = crate::views::settings::build(cs);
@@ -40,7 +46,7 @@ pub fn build_and_present(
     let logs_view = crate::views::logs::build(cs);
     let about_view = crate::views::about::build();
 
-    stack.add_titled(&profiles_view, Some(ViewId::Profiles.as_str()), "Профили");
+    stack.add_titled(&shop_view, Some(ViewId::Shop.as_str()), "Магазин");
     stack.add_titled(&reports_view, Some(ViewId::Reports.as_str()), "Отчёты");
     stack.add_titled(&download_view, Some(ViewId::Download.as_str()), "Загрузка");
     stack.add_titled(&settings_view, Some(ViewId::Settings.as_str()), "Настройки");
@@ -80,7 +86,23 @@ pub fn build_and_present(
     let toolbar = adw::ToolbarView::new();
 
     // Верхняя панель заголовка.
-    let header = adw::HeaderBar::builder().show_title(true).build();
+    let header = adw::HeaderBar::builder().build();
+
+    // Кастомный title-widget: иконка маркетплейса + имя продавца.
+    // Обновляется по событию ActiveShopChanged. До выбора — плейсхолдер.
+    let title_icon = Image::builder()
+        .icon_name("text-x-generic-symbolic")
+        .icon_size(gtk4::IconSize::Normal)
+        .margin_end(6)
+        .build();
+    let title_label = Label::builder()
+        .label("Магазин не выбран")
+        .css_classes(["heading"])
+        .build();
+    let title_box = GtkBox::new(Orientation::Horizontal, 0);
+    title_box.append(&title_icon);
+    title_box.append(&title_label);
+    header.set_title_widget(Some(&title_box));
 
     // Меню «Приложение»: пункты «О программе» + «Выход».
     let menu = gtk4::gio::Menu::new();
@@ -103,12 +125,14 @@ pub fn build_and_present(
     // Цикл обработки событий UI: читаем из async_channel receiver в main context.
     {
         let status = status.clone();
+        let title_icon = title_icon.clone();
+        let title_label = title_label.clone();
         let main_ctx = glib::MainContext::default();
         main_ctx.spawn_local(clone!(@strong event_rx => async move {
             // Порождаем таск, читающий receiver; обновляем UI по событию.
             loop {
                 match event_rx.recv().await {
-                    Ok(event) => dispatch_event(&event, &status),
+                    Ok(event) => dispatch_event(&event, &status, &title_icon, &title_label),
                     Err(async_channel::RecvError) => break,
                 }
             }
@@ -175,7 +199,12 @@ fn find_stack(widget: &gtk4::Widget) -> Option<gtk4::Stack> {
 }
 
 /// Маршрутизация событий UI в нужные обработчики.
-fn dispatch_event(event: &UiEvent, status: &Label) {
+fn dispatch_event(
+    event: &UiEvent,
+    status: &Label,
+    title_icon: &Image,
+    title_label: &Label,
+) {
     match event {
         UiEvent::Notify(msg) => {
             status.set_text(msg);
@@ -188,16 +217,53 @@ fn dispatch_event(event: &UiEvent, status: &Label) {
         }
         UiEvent::ProvidersLoaded(list) => {
             status.set_text(&format!("Провайдеров: {}", list.len()));
-            crate::views::reports::on_providers_loaded(list);
-            crate::views::download::on_providers_loaded(list);
+            crate::views::shop::on_providers_loaded(list);
         }
         UiEvent::ProfilesLoaded(list) => {
             status.set_text(&format!("Профилей: {}", list.len()));
-            crate::views::profiles::on_profiles_loaded(list);
-            crate::views::download::on_profiles_loaded(list);
+            crate::views::shop::on_profiles_loaded(list);
         }
         UiEvent::AuthFieldsLoaded { provider_id, fields } => {
-            crate::views::profiles::on_auth_fields_loaded(provider_id, fields);
+            crate::views::shop::on_auth_fields_loaded(provider_id, fields);
+        }
+        UiEvent::ActiveShopLoaded(shop) => {
+            crate::views::shop::on_active_shop_loaded(shop.as_ref());
+        }
+        UiEvent::ActiveShopChanged {
+            provider_id,
+            provider_display_name,
+            seller_name,
+            profile_name,
+        } => {
+            // Обновляем заголовок окна: иконка + имя.
+            update_title(
+                title_icon,
+                title_label,
+                provider_id,
+                provider_display_name,
+                seller_name.as_deref(),
+                profile_name,
+            );
+            // Оповещаем зависимые вкладки (Загрузка, Отчёты).
+            crate::views::download::on_active_shop_changed(
+                provider_id,
+                provider_display_name,
+                seller_name.as_deref(),
+                profile_name,
+            );
+            crate::views::reports::on_active_shop_changed(
+                provider_id,
+                provider_display_name,
+                seller_name.as_deref(),
+                profile_name,
+            );
+            // Локальный статус в shop-вкладке.
+            crate::views::shop::on_active_shop_changed(
+                provider_id,
+                provider_display_name,
+                seller_name.as_deref(),
+                profile_name,
+            );
         }
         UiEvent::ReportsLoaded(res) => {
             match res {
@@ -245,6 +311,29 @@ fn dispatch_event(event: &UiEvent, status: &Label) {
             Err(e) => status.set_text(&format!("Ошибка: {e}")),
         },
     }
+}
+
+/// Обновляет иконку и текст заголовка окна по активному магазину.
+fn update_title(
+    title_icon: &Image,
+    title_label: &Label,
+    provider_id: &str,
+    provider_display_name: &str,
+    seller_name: Option<&str>,
+    profile_name: &str,
+) {
+    // Иконка по provider_id (из gresource), fallback — плейсхолдер магазина.
+    let icon = match provider_id {
+        "ozon" => format!("{ICON_PREFIX}/ozon.svg"),
+        "wildberries" => format!("{ICON_PREFIX}/wildberries.svg"),
+        "test" => format!("{ICON_PREFIX}/test.svg"),
+        _ => format!("{ICON_PREFIX}/shop-placeholder.svg"),
+    };
+    title_icon.set_resource(Some(&icon));
+
+    // Текст: «Маркетплейс — ИмяПродавца» или «Маркетплейс — Профиль» (fallback).
+    let display = seller_name.unwrap_or(profile_name);
+    title_label.set_text(&format!("{provider_display_name} — {display}"));
 }
 
 fn level_str(level: &mdwf_core::HealthLevel) -> &'static str {

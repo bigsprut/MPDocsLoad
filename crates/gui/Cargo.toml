@@ -11,6 +11,9 @@ description = "MDWF GUI: GTK4 + libadwaita (гл. 04)"
 name = "mdwf-gui"
 path = "src/main.rs"
 
+[build-dependencies]
+glib-build-tools.workspace = true
+
 [dependencies]
 mdwf-core.workspace = true
 mdwf-storage.workspace = true

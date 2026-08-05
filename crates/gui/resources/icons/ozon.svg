@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Стилизованная иконка Ozon: синяя (#005bff) закруглённая плитка с буквой O.
+     Не является точной копией защищённого логотипа — опознавательный знак по цвету. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" rx="6" ry="6" fill="#005bff"/>
+  <circle cx="12" cy="12" r="6.2" fill="none" stroke="#ffffff" stroke-width="2.4"/>
+</svg>

@@ -15,22 +15,25 @@ use gtk4::{
     PolicyType, ScrolledWindow,
 };
 
-use mdwf_core::{DocumentEntry, DocumentFilter, DownloadedFile, Profile, ReportParams};
+use mdwf_core::{DocumentEntry, DocumentFilter, DownloadedFile, ReportParams};
 
-use crate::channels::{CommandSender, DocumentCategoryInfo, DocumentSel, DownloadState, ReportInfo};
+use crate::channels::{
+    ActiveShop, CommandSender, DocumentCategoryInfo, DocumentSel, DownloadState, ReportInfo,
+};
 
 thread_local! {
-    static PROVIDERS: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
-    static PROFILES: Rc<RefCell<Vec<Profile>>> = Rc::new(RefCell::new(Vec::new()));
     static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
     static DOCS: Rc<RefCell<Vec<DocumentEntry>>> = Rc::new(RefCell::new(Vec::new()));
     static CHECKS: Rc<RefCell<Vec<(DocumentSel, CheckButton)>>> = Rc::new(RefCell::new(Vec::new()));
     // Командный канал (для авто-запросов при смене выбора).
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
+    /// Активный магазин (из вкладки «Магазин») — единый источник правды выбора.
+    /// None — магазин ещё не выбран, операции выгрузки недоступны.
+    static ACTIVE_SHOP: Rc<RefCell<Option<ActiveShop>>> = Rc::new(RefCell::new(None));
     // Виджеты (сохраняем после build для обновления из событий).
-    static W_PROVIDER: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
-    static W_PROFILE: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
     static W_REPORT: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
+    /// Read-only лейбл активного магазина (обновляется из ActiveShopChanged).
+    static W_SHOP_LABEL: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     static W_RESULT_BOX: Rc<RefCell<Option<GtkBox>>> = Rc::new(RefCell::new(None));
@@ -68,30 +71,49 @@ const MONTH_NAMES: [&str; 12] = [
     "Декабрь",
 ];
 
-/// Хук: провайдеры загружены.
-pub fn on_providers_loaded(providers: &[crate::channels::ProviderInfo]) {
-    PROVIDERS.with(|p| {
-        *p.borrow_mut() = providers
-            .iter()
-            .map(|pr| (pr.id.clone(), pr.display_name.clone()))
-            .collect();
-    });
-    W_PROVIDER.with(|w| {
-        if let Some(combo) = w.borrow().as_ref() {
-            combo.remove_all();
-            for pr in providers {
-                combo.append_text(&format!("{} [{}]", pr.display_name, pr.id));
-            }
-            combo.set_active(Some(0));
-        }
-    });
-    on_provider_changed();
+/// Возвращает provider_id активного магазина (из вкладки «Магазин»).
+fn active_provider_id() -> Option<String> {
+    ACTIVE_SHOP.with(|a| a.borrow().as_ref().map(|s| s.provider_id.clone()))
 }
 
-/// Хук: профили загружены.
-pub fn on_profiles_loaded(profiles: &[Profile]) {
-    PROFILES.with(|p| *p.borrow_mut() = profiles.to_vec());
-    refresh_profile_combo();
+/// Возвращает (provider_id, profile_name) активного магазина.
+fn active_target() -> Option<(String, String)> {
+    ACTIVE_SHOP.with(|a| {
+        a.borrow().as_ref().map(|s| (s.provider_id.clone(), s.profile_name.clone()))
+    })
+}
+
+/// Хук: активный магазин изменён (из вкладки «Магазин» или восстановление).
+/// Обновляем read-only лейбл, перезагружаем список отчётов провайдера.
+pub fn on_active_shop_changed(
+    provider_id: &str,
+    provider_display_name: &str,
+    seller_name: Option<&str>,
+    profile_name: &str,
+) {
+    ACTIVE_SHOP.with(|a| {
+        *a.borrow_mut() = Some(ActiveShop {
+            provider_id: provider_id.to_string(),
+            profile_name: profile_name.to_string(),
+        });
+    });
+    // Read-only лейбл магазина.
+    W_SHOP_LABEL.with(|w| {
+        if let Some(l) = w.borrow().as_ref() {
+            let display = seller_name.unwrap_or(profile_name);
+            l.set_text(&format!("Магазин: {provider_display_name} — {display}"));
+        }
+    });
+    // Перезагружаем отчёты нового провайдера (очистит combo + авто-запрос).
+    if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
+        // Очищаем combo отчётов (покажем «загрузка…»).
+        if let Some(combo) = W_REPORT.with(|w| w.borrow().clone()) {
+            combo.remove_all();
+            combo.append_text("(загрузка…)");
+            combo.set_active(Some(0));
+        }
+        cs.send(crate::channels::UiCommand::LoadReports(provider_id.to_string()));
+    }
 }
 
 /// Хук: категории документов WB загружены → заполняем combo.
@@ -131,10 +153,9 @@ pub fn on_document_categories_loaded(res: &Result<Vec<DocumentCategoryInfo>, Str
 
 /// Хук: отчёты загружены (все уже принадлежат запрошенному провайдеру).
 pub fn on_reports_loaded(reports: &[ReportInfo]) {
-    // Защита от гонки: если пользователь уже сменил провайдер, устаревший
-    // результат (отчёты другого провайдера) игнорируем — иначе он затрёт
-    // актуальный список и категории не загрузятся.
-    let active_pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
+    // Защита от гонки: если пользователь уже сменил магазин (=> провайдера),
+    // устаревший результат игнорируем — иначе он затрёт актуальный список.
+    let active_pid = active_provider_id();
     let result_pid = reports.first().map(|r| r.provider_id.clone());
     if let (Some(active), Some(got)) = (active_pid.as_deref(), result_pid.as_deref()) {
         if active != got {
@@ -215,24 +236,23 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .build());
 
     root.append(&Label::builder()
-        .label("Выберите маркетплейс → профиль → отчёт, задайте фильтры и нажмите «Список документов» (для отчётов-списков) или «Скачать по периоду» (для отчётов по периоду).")
+        .label("Магазин выбирается во вкладке «Магазин». Здесь задайте отчёт и фильтры, затем нажмите «Список документов» (для отчётов-списков) или «Скачать по периоду» (для отчётов по периоду).")
         .css_classes(["dim-label"])
         .halign(gtk4::Align::Start)
         .wrap(true)
         .build());
 
-    // --- Строка 1: провайдер + профиль + отчёт ---
+    // Read-only индикатор активного магазина (обновляется из ActiveShopChanged).
+    let shop_label = Label::builder()
+        .label("Магазин: не выбран — выберите во вкладке «Магазин».")
+        .css_classes(["heading"])
+        .halign(gtk4::Align::Start)
+        .wrap(true)
+        .build();
+    root.append(&shop_label.clone());
+
+    // --- Строка 1: отчёт + обновить (магазин берётся из вкладки «Магазин») ---
     let row1 = GtkBox::new(Orientation::Horizontal, 8);
-
-    let provider_combo = ComboBoxText::new();
-    provider_combo.set_tooltip_text(Some("Маркетплейс"));
-    row1.append(&Label::new(Some("Магазин:")));
-    row1.append(&provider_combo);
-
-    let profile_combo = ComboBoxText::new();
-    profile_combo.set_tooltip_text(Some("Профиль учётных данных"));
-    row1.append(&Label::new(Some("Профиль:")));
-    row1.append(&profile_combo);
 
     let report_combo = ComboBoxText::new();
     report_combo.set_tooltip_text(Some("Тип отчёта"));
@@ -338,7 +358,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     // --- Результат (контейнер: label + кнопка "Открыть папку") ---
     let result_box = GtkBox::new(Orientation::Horizontal, 8);
     let result_label = Label::builder()
-        .label("Готов к работе. Создайте профиль во вкладке «Профили», затем выберите его здесь.")
+        .label("Готов к работе. Выберите магазин во вкладке «Магазин».")
         .halign(gtk4::Align::Start)
         .css_classes(["dim-label"])
         .wrap(true)
@@ -348,8 +368,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&result_box);
 
     // Сохраняем виджеты.
-    W_PROVIDER.with(|w| *w.borrow_mut() = Some(provider_combo.clone()));
-    W_PROFILE.with(|w| *w.borrow_mut() = Some(profile_combo.clone()));
+    W_SHOP_LABEL.with(|w| *w.borrow_mut() = Some(shop_label.clone()));
     W_REPORT.with(|w| *w.borrow_mut() = Some(report_combo.clone()));
     CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
     W_LIST.with(|w| *w.borrow_mut() = Some(list_box.clone()));
@@ -367,14 +386,6 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_YEAR_COMBO.with(|w| *w.borrow_mut() = Some(year_combo.clone()));
     W_LIMIT.with(|w| *w.borrow_mut() = Some(limit_entry.clone()));
 
-    // Смена провайдера → перезагрузка профилей и отчётов + автосохранение.
-    provider_combo.connect_changed(move |_| {
-        on_provider_changed();
-        schedule_save();
-    });
-    profile_combo.connect_changed(move |_| {
-        schedule_save();
-    });
     // Смена отчёта → обновить подсказку режима + доступность кнопок + автосохранение.
     {
         let handler_id = report_combo.connect_changed(move |_| {
@@ -423,11 +434,10 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         schedule_save();
     });
 
-    // «↻ Обновить» — запросить отчёты выбранного провайдера.
+    // «↻ Обновить» — запросить отчёты активного провайдера (из вкладки «Магазин»).
     let cs_rep = cs.clone();
-    let pc = provider_combo.clone();
     load_reports_btn.connect_clicked(move |_| {
-        if let Some(pid) = current_provider_id(&pc) {
+        if let Some(pid) = active_provider_id() {
             cs_rep.send(crate::channels::UiCommand::LoadReports(pid));
         }
     });
@@ -523,27 +533,10 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
 // ===== Хелперы =====
 
-/// Возвращает текущий выбранный provider_id (из combo «Магазин»).
-fn current_provider_id(combo: &ComboBoxText) -> Option<String> {
-    let text = combo.active_text()?.to_string();
-    // Формат: "Wildberries [wildberries]".
-    let id = text.split(" [").nth(1)?.trim_end_matches(']').to_string();
-    Some(id)
-}
-
-/// Возвращает текущий выбранный профиль (provider_id, name) из combo «Профиль».
-fn current_profile() -> Option<(String, String)> {
-    let combo = W_PROFILE.with(|w| w.borrow().clone())?;
-    let text = combo.active_text()?.to_string();
-    // Формат: "Имяпрофиля [provider_id]".
-    let name = text.split(" [").next()?.to_string();
-    let pid = text.split(" [").nth(1)?.trim_end_matches(']').to_string();
-    Some((pid, name))
-}
-
-/// Возвращает (provider_id, profile_name, report_type) для текущего выбора.
+/// Возвращает (provider_id, profile_name, report_type) для активного магазина
+/// и выбранного отчёта. provider/profile — из вкладки «Магазин» (ACTIVE_SHOP).
 fn current_target() -> Option<(String, String, String)> {
-    let (pid, pname) = current_profile()?;
+    let (pid, pname) = active_target()?;
     let rtype = current_report_type()?;
     Some((pid, pname, rtype))
 }
@@ -640,37 +633,17 @@ fn apply_month_to_range(
     date_to.set_text(&to.format("%Y-%m-%d").to_string());
 }
 
-/// Обновить combo профилей под текущего провайдера.
-fn refresh_profile_combo() {
-    let combo = W_PROFILE.with(|w| w.borrow().clone());
-    let Some(combo) = combo else { return };
-    let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
-    let profiles = PROFILES.with(|p| p.borrow().clone());
-    combo.remove_all();
-    let mut any = false;
-    for p in &profiles {
-        if pid.as_deref() == Some(p.provider_id.as_str()) {
-            combo.append_text(&format!("{} [{}]", p.name, p.provider_id));
-            any = true;
-        }
-    }
-    if !any {
-        combo.append_text("(нет профилей — создайте во вкладке «Профили»)");
-    }
-    combo.set_active(Some(0));
-}
-
-/// Запрашивает категории WB только если выбран отчёт wb.documents.
+/// Запрашивает категории WB только если активный магазин = wildberries и выбран
+/// отчёт wb.documents. provider/profile берёт из активного магазина.
 fn maybe_request_categories() {
     let rtype = current_report_type();
-    let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
-
-    if rtype.as_deref() != Some("wb.documents") || pid.as_deref() != Some("wildberries") {
-        return;
-    }
-    let Some((_, pname)) = current_profile() else {
+    let Some((pid, pname)) = active_target() else {
         return;
     };
+
+    if rtype.as_deref() != Some("wb.documents") || pid != "wildberries" {
+        return;
+    }
     let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
         return;
     };
@@ -685,24 +658,6 @@ fn maybe_request_categories() {
         provider_id: "wildberries".into(),
         profile_name: pname,
     });
-}
-
-/// Смена провайдера: обновить combo профилей + автоматически запросить отчёты.
-fn on_provider_changed() {
-    refresh_profile_combo();
-    // Очищаем combo отчётов (покажем «Загрузка…»).
-    if let Some(combo) = W_REPORT.with(|w| w.borrow().clone()) {
-        combo.remove_all();
-        combo.append_text("(загрузка…)");
-        combo.set_active(Some(0));
-    }
-    // Авто-запрос отчётов выбранного провайдера.
-    let pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
-    if let Some(ref pid) = pid {
-        if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
-            cs.send(crate::channels::UiCommand::LoadReports(pid.clone()));
-        }
-    }
 }
 
 /// Обновить подсказку режима и доступность кнопок для выбранного отчёта.
@@ -789,8 +744,11 @@ macro_rules! entry_value {
 
 /// Собирает текущее состояние экрана из виджетов.
 fn collect_state() -> DownloadState {
-    let provider_id = W_PROVIDER.with(|w| w.borrow().as_ref().and_then(current_provider_id));
-    let profile_name = current_profile().map(|(_, n)| n);
+    // provider_id/profile_name берём из активного магазина (вкладка «Магазин»).
+    // Эти поля в DownloadState дублируют ActiveShop (для обратной совместимости
+    // сохранённого JSON), но источник правды выбора — ui_state/active_shop.
+    let (provider_id, profile_name) = active_target()
+        .map_or((None, None), |(pid, pname)| (Some(pid), Some(pname)));
     let report_type = current_report_type();
     DownloadState {
         provider_id,
@@ -868,25 +826,12 @@ pub fn on_download_state_loaded(state: Option<&DownloadState>) {
         W_LIMIT.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
     }
 
-    // 2. Восстанавливаем выбор провайдера в combo (по id).
-    if let Some(pid) = &state.provider_id {
-        let combo = W_PROVIDER.with(|w| w.borrow().clone());
-        if let Some(combo) = &combo {
-            let n = combo.model().map_or(0, |m| m.iter_n_children(None));
-            let suffix = format!(" [{pid}]");
-            for i in 0..n {
-                combo.set_active(Some(i as u32));
-                if let Some(text) = combo.active_text() {
-                    if text.to_string().ends_with(&suffix) {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    // on_provider_changed вызовется автоматически (через connect_changed).
+    // provider_id/profile_name НЕ восстанавливаем здесь — выбор магазина теперь
+    // живет во вкладке «Магазин» и восстанавливается через ActiveShopLoaded.
+    // Поля provider_id/profile_name в DownloadState сохраняются для обратной
+    // совместимости сохранённого JSON, но источником правды не являются.
 
-    // 3. Восстанавливаем выбор отчёта (после загрузки списка отчётов).
+    // Восстанавливаем выбор отчёта (после загрузки списка отчётов активного магазина).
     if let Some(rtype) = &state.report_type {
         // Отложим восстановление: combo отчётов заполнится после LoadReports.
         // Запоминаем желаемый report_type для on_reports_loaded.

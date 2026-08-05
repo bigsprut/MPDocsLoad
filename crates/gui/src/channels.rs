@@ -15,7 +15,9 @@ use mdwf_core::{DocumentEntry, DocumentFilter, DownloadedFile, HealthStatus, Pro
 /// Идентификатор вкладки/раздела UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewId {
-    Profiles,
+    /// Раздел «Магазин»: выбор маркетплейса+профиля + CRUD профилей.
+    /// Заменил отдельную вкладку «Профили» — единый источник правды выбора.
+    Shop,
     Reports,
     Download,
     Settings,
@@ -28,7 +30,7 @@ impl ViewId {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Profiles => "profiles",
+            Self::Shop => "shop",
             Self::Reports => "reports",
             Self::Download => "download",
             Self::Settings => "settings",
@@ -54,6 +56,14 @@ pub enum UiCommand {
     DeleteProfile(String),
     /// Проверить подключение профиля.
     CheckProfile(String),
+    /// Выбрать активный магазин (provider + profile) — persist в ui_state
+    /// и запросить имя продавца из API для заголовка окна.
+    SelectShop {
+        provider_id: String,
+        profile_name: String,
+    },
+    /// Загрузить сохранённый активный магазин (при старте).
+    LoadActiveShop,
     /// Загрузить список отчётов провайдера.
     LoadReports(String),
     /// Загрузить список категорий документов WB (для выпадающего списка).
@@ -99,6 +109,15 @@ pub struct DownloadState {
     pub limit: Option<String>,
 }
 
+/// Активный магазин (выбор маркетплейса + профиля). Сохраняется в `ui_state`
+/// (SQLite `mdwf.db`, ключ `"active_shop"`) — единый источник правды выбора
+/// для всех вкладок (Загрузка, Отчёты). `profile_name` уникален в рамках БД.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ActiveShop {
+    pub provider_id: String,
+    pub profile_name: String,
+}
+
 /// События из доменного слоя в UI.
 #[derive(Debug, Clone)]
 pub enum UiEvent {
@@ -117,6 +136,20 @@ pub enum UiEvent {
     ProfileDeleted(Result<(), String>),
     /// Результат проверки подключения.
     ProfileChecked(Result<HealthStatus, String>),
+    /// Активный магазин изменился (выбор пользователя или восстановление).
+    /// `seller_name` — имя продавца из API (Ozon company.name), может быть None
+    /// (WB не предоставляет, или ошибка сети — тогда в заголовке имя профиля).
+    ActiveShopChanged {
+        provider_id: String,
+        /// Статичное имя маркетплейса (напр. «Ozon»).
+        provider_display_name: String,
+        seller_name: Option<String>,
+        /// Имя профиля (локальное имя, заданное пользователем) — fallback
+        /// для заголовка, если seller_name = None.
+        profile_name: String,
+    },
+    /// Сохранённый активный магазин загружен (при старте, из ui_state).
+    ActiveShopLoaded(Option<ActiveShop>),
     /// Список отчётов загружен.
     ReportsLoaded(Result<Vec<ReportInfo>, String>),
     /// Список документов получен.

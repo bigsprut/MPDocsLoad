@@ -43,6 +43,19 @@ pub trait MarketplaceProvider: Send + Sync + 'static {
 
     /// Проверка работоспособности API (auth + network + истечение ключа).
     async fn health_check(&self, auth: &dyn Authenticator) -> CoreResult<HealthStatus>;
+
+    /// Человекочитаемое имя продавца/кабинета из API (напр. `company.name`
+    /// из Ozon `/v1/seller/info`). Используется GUI для заголовка окна.
+    ///
+    /// Возвращает `None`, если провайдер не предоставляет имя (WB — нет
+    /// известного эндпоинта) или API недоступно. Реализация по умолчанию —
+    /// `Ok(None)` (для mock/провайдеров без такого вызова).
+    async fn account_display_name(
+        &self,
+        _auth: &dyn Authenticator,
+    ) -> CoreResult<Option<String>> {
+        Ok(None)
+    }
 }
 
 /// Тип-псевдоним для arc-ссылки на провайдера.

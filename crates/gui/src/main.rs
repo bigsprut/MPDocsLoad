@@ -62,6 +62,11 @@ fn main() -> Result<ExitCode> {
 
     tracing::info!("MDWF GUI starting (v{})", env!("CARGO_PKG_VERSION"));
 
+    // Регистрируем gresource-бандл (иконки маркетплейсов) ДО построения окна.
+    // build.rs через glib-compile-resources собирает OUT_DIR/compiled.gresource.
+    gio::resources_register_include!("compiled.gresource")
+        .expect("failed to register gresource bundle");
+
     let app = App::new()?;
     Ok(app.run())
 }

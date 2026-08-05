@@ -145,6 +145,21 @@ impl MarketplaceProvider for OzonProvider {
             }
         }
     }
+
+    /// Имя продавца из Ozon `/v1/seller/info` → `company.name`.
+    ///
+    /// Сверено с `docs/ozon-seller-api-reference.md`: POST с пустым телом,
+    /// заголовки `Client-Id` + `Api-Key` ставит аутентификатор. Ответ —
+    /// `company` на верхнем уровне (без обёртки `result`, как у report-API).
+    /// При ошибке сети/парсинга возвращаем `None` (заголовок покажет имя профиля).
+    async fn account_display_name(
+        &self,
+        auth: &dyn Authenticator,
+    ) -> CoreResult<Option<String>> {
+        debug!("Ozon account name via /v1/seller/info");
+        let resp = self.client.post("/v1/seller/info", &json!({}), auth).await?;
+        Ok(resp["company"]["name"].as_str().map(str::to_string))
+    }
 }
 
 #[cfg(test)]

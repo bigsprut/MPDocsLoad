@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  GResource-бандл MDWF: иконки маркетплейсов для заголовка окна.
+  Пути: /dev/mdwf/icons/<name>.svg. Регистрируются в main.rs через
+  glib::resources_register_include!("resources").
+
+  SVG стилизованы (цвет + буква), НЕ являются точными копиями защищённых
+  логотипов брендов — только опознавательный знак по цвету/букве.
+-->
+<gresources>
+  <gresource prefix="/dev/mdwf/icons">
+    <file alias="ozon.svg" compressed="true">icons/ozon.svg</file>
+    <file alias="wildberries.svg" compressed="true">icons/wildberries.svg</file>
+    <file alias="test.svg" compressed="true">icons/test.svg</file>
+    <file alias="shop-placeholder.svg" compressed="true">icons/shop-placeholder.svg</file>
+  </gresource>
+</gresources>
