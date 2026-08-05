@@ -90,18 +90,6 @@ impl App {
 
         info!(?prov.data_dir, ?prov.db_path, ?prov.output_dir, "config loaded");
 
-        // Переход на keyring-only хранение секретов: старые профили (с секретами
-        // в auth_metadata открытым текстом) сбрасываем — пользователь создаст их
-        // заново, секреты уйдут в OS keyring. Миграции нет. Только при use_keychain
-        // (при InMemory dev-режиме БД не трогаем).
-        if prov.raw.security.use_keychain {
-            if let Err(e) = catalog.clear_profiles() {
-                warn!(error = %e, "failed to clear profiles for keyring migration");
-            } else {
-                info!("cleared all profiles (secrets are now keyring-only)");
-            }
-        }
-
         let domain = Arc::new(Domain {
             registry,
             catalog: RwLock::new(Some(catalog)),

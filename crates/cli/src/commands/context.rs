@@ -56,15 +56,6 @@ impl Context {
             .register(Arc::new(WildberriesProvider::new()?) as ProviderRef)
             .ok();
 
-        // Переход на keyring-only: сбрасываем старые профили (с секретами в БД).
-        // Пользователь создаст их заново, секреты уйдут в keyring. Только при
-        // use_keychain (dev-режим InMemory не трогаем).
-        if prov.raw.security.use_keychain {
-            if let Err(e) = catalog.clear_profiles() {
-                eprintln!("предупреждение: не удалось сбросить профили: {e}");
-            }
-        }
-
         Ok(Self {
             registry,
             catalog,
