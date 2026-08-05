@@ -1846,6 +1846,7 @@ dependencies = [
  "anyhow",
  "axum",
  "mdwf-core",
+ "mdwf-secrets",
  "mdwf-storage",
  "serde",
  "serde_json",

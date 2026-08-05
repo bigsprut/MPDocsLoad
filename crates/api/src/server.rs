@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use mdwf_core::{CancelToken, NoopProgress, ProviderRegistry, ReportParams};
+use mdwf_secrets::SecretStore;
 use mdwf_storage::Catalog;
 
 /// Состояние приложения, разделяемое между обработчиками.
@@ -20,6 +21,9 @@ use mdwf_storage::Catalog;
 pub struct AppState {
     pub registry: Arc<ProviderRegistry>,
     pub catalog: Arc<Catalog>,
+    /// Хранилище секретов (keyring). Секреты профилей хранятся только здесь,
+    /// в БД их нет — поэтому перед authenticator их нужно подмешать in-memory.
+    pub secrets: Arc<dyn SecretStore>,
 }
 
 /// Запускает REST API сервер на указанном адресе.
@@ -147,6 +151,12 @@ async fn download(
         .registry
         .require(&profile.provider_id)
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    // Подмешиваем секреты из keyring перед authenticator (в БД секретов нет).
+    let caps = provider.capabilities();
+    let secret_fields = mdwf_secrets::secret_field_ids(caps);
+    let profile = mdwf_secrets::load_profile_secrets(profile, &secret_fields, state.secrets.as_ref())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let auth = provider
         .authenticator(&profile)
         .await

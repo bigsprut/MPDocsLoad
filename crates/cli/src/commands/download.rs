@@ -13,10 +13,7 @@ use crate::exit_code::ExitCode;
 use crate::DownloadArgs;
 
 pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
-    let profile = ctx
-        .catalog
-        .get_profile_by_name(&args.profile)?
-        .ok_or_else(|| anyhow::anyhow!("профиль '{}' не найден", args.profile))?;
+    let profile = ctx.profile_with_secrets(&args.profile).await?;
     let provider = ctx.registry.require(&profile.provider_id)?;
     let auth = provider.authenticator(&profile).await?;
 

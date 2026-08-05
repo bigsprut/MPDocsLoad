@@ -9,10 +9,15 @@
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::missing_errors_doc)]
 
+pub mod account;
 pub mod keychain;
 pub mod memory;
 pub mod os_keychain;
 
+pub use account::{
+    account_key, delete_profile_secrets, load_profile_secrets, secret_field_ids,
+    store_profile_secrets,
+};
 pub use keychain::{KEYCHAIN_SERVICE, SecretStore};
 pub use memory::InMemorySecretStore;
 pub use os_keychain::OsKeychain;

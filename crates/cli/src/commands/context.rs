@@ -56,6 +56,15 @@ impl Context {
             .register(Arc::new(WildberriesProvider::new()?) as ProviderRef)
             .ok();
 
+        // Переход на keyring-only: сбрасываем старые профили (с секретами в БД).
+        // Пользователь создаст их заново, секреты уйдут в keyring. Только при
+        // use_keychain (dev-режим InMemory не трогаем).
+        if prov.raw.security.use_keychain {
+            if let Err(e) = catalog.clear_profiles() {
+                eprintln!("предупреждение: не удалось сбросить профили: {e}");
+            }
+        }
+
         Ok(Self {
             registry,
             catalog,
@@ -68,5 +77,23 @@ impl Context {
     /// Сохраняет профиль в каталог.
     pub fn save_profile(&self, profile: &mdwf_core::Profile) -> Result<i64> {
         Ok(self.catalog.upsert_profile(profile)?)
+    }
+
+    /// Читает профиль по имени и подмешивает секреты из keyring (для передачи
+    /// в `provider.authenticator`). Секреты хранятся только в keyring, в БД их
+    /// нет — поэтому перед вызовом провайдера их нужно достать и вставить в
+    /// auth_metadata in-memory.
+    pub async fn profile_with_secrets(&self, name: &str) -> Result<mdwf_core::Profile> {
+        let profile = self
+            .catalog
+            .get_profile_by_name(name)?
+            .ok_or_else(|| anyhow::anyhow!("профиль '{name}' не найден"))?;
+        let provider = self.registry.require(&profile.provider_id)?;
+        let caps = provider.capabilities();
+        let secret_fields = mdwf_secrets::secret_field_ids(caps);
+        Ok(
+            mdwf_secrets::load_profile_secrets(profile, &secret_fields, self.secrets.as_ref())
+                .await?,
+        )
     }
 }

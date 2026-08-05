@@ -147,6 +147,17 @@ impl Catalog {
         Ok(())
     }
 
+    /// Удаляет **все** профили. Используется при переходе на keyring-only
+    /// хранение секретов: старые профили (с секретами в `auth_metadata`)
+    /// становятся нерабочими, поэтому сбрасываются — пользователь создаёт
+    /// их заново, секреты уходят в keyring.
+    pub fn clear_profiles(&self) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM profiles", params![])
+            .map_err(map_sqlite_err)?;
+        Ok(())
+    }
+
     // ----- Загрузки -----
 
     /// Записывает факт скачивания файла. Дедупликация через UNIQUE-индекс:

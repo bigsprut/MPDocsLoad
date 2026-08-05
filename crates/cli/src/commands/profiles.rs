@@ -33,6 +33,13 @@ pub async fn run(ctx: &Context, action: ProfilesCmd) -> Result<ExitCode> {
             if let Some(t) = token {
                 profile = profile.with_metadata("token", t);
             }
+            // Секреты выносим в keyring, в auth_metadata оставляем только
+            // несекретные поля (напр. client_id). В SQLite секреты не пишем.
+            let provider_ref = ctx.registry.require(&provider)?;
+            let caps = provider_ref.capabilities();
+            let secret_fields = mdwf_secrets::secret_field_ids(caps);
+            mdwf_secrets::store_profile_secrets(&mut profile, &secret_fields, ctx.secrets.as_ref())
+                .await?;
             let id = ctx.save_profile(&profile)?;
             println!("Профиль '{}' сохранён (id={id}, провайдер={provider}).", profile.name);
             Ok(ExitCode::Success)
@@ -49,6 +56,20 @@ pub async fn run(ctx: &Context, action: ProfilesCmd) -> Result<ExitCode> {
                     return Ok(ExitCode::Success);
                 }
             }
+            // Удаляем секреты из keyring до удаления профиля из БД.
+            if let Some(profile) = ctx.catalog.get_profile_by_name(&name)? {
+                if let Ok(provider) = ctx.registry.require(&profile.provider_id) {
+                    let caps = provider.capabilities();
+                    let secret_fields = mdwf_secrets::secret_field_ids(caps);
+                    let _ = mdwf_secrets::delete_profile_secrets(
+                        &profile.provider_id,
+                        &profile.name,
+                        &secret_fields,
+                        ctx.secrets.as_ref(),
+                    )
+                    .await;
+                }
+            }
             ctx.catalog.delete_profile(&name)?;
             println!("Профиль '{name}' удалён.");
             Ok(ExitCode::Success)
@@ -59,6 +80,15 @@ pub async fn run(ctx: &Context, action: ProfilesCmd) -> Result<ExitCode> {
                 .get_profile_by_name(&name)?
                 .ok_or_else(|| anyhow::anyhow!("профиль '{name}' не найден"))?;
             let provider = ctx.registry.require(&profile.provider_id)?;
+            // Подмешиваем секреты из keyring перед authenticator.
+            let caps = provider.capabilities();
+            let secret_fields = mdwf_secrets::secret_field_ids(caps);
+            let profile = mdwf_secrets::load_profile_secrets(
+                profile,
+                &secret_fields,
+                ctx.secrets.as_ref(),
+            )
+            .await?;
             let auth = provider.authenticator(&profile).await?;
             match provider.health_check(auth.as_ref()).await {
                 Ok(status) => {

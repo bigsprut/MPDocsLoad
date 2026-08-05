@@ -90,6 +90,18 @@ impl App {
 
         info!(?prov.data_dir, ?prov.db_path, ?prov.output_dir, "config loaded");
 
+        // Переход на keyring-only хранение секретов: старые профили (с секретами
+        // в auth_metadata открытым текстом) сбрасываем — пользователь создаст их
+        // заново, секреты уйдут в OS keyring. Миграции нет. Только при use_keychain
+        // (при InMemory dev-режиме БД не трогаем).
+        if prov.raw.security.use_keychain {
+            if let Err(e) = catalog.clear_profiles() {
+                warn!(error = %e, "failed to clear profiles for keyring migration");
+            } else {
+                info!("cleared all profiles (secrets are now keyring-only)");
+            }
+        }
+
         let domain = Arc::new(Domain {
             registry,
             catalog: RwLock::new(Some(catalog)),
@@ -180,20 +192,55 @@ async fn run_command_loop(
                 };
                 fwd.forward(UiEvent::ProfilesLoaded(result));
             }
-            UiCommand::SaveProfile(p) => {
-                let outcome: Result<i64, String> = match domain.catalog.read().as_ref() {
-                    Some(cat) => cat.upsert_profile(&p).map_err(|e| e.to_string()),
-                    None => Err("каталог не открыт".into()),
-                };
+            UiCommand::SaveProfile(mut p) => {
+                // Выносим секреты в keyring, в auth_metadata оставляем только
+                // несекретные поля (напр. client_id). В SQLite секреты не пишем.
+                let outcome: Result<i64, String> = async {
+                    let provider = domain
+                        .registry
+                        .require(&p.provider_id)
+                        .map_err(|e| e.to_string())?;
+                    let caps = provider.capabilities();
+                    let secret_fields = mdwf_secrets::secret_field_ids(caps);
+                    mdwf_secrets::store_profile_secrets(
+                        &mut p,
+                        &secret_fields,
+                        domain.secrets.as_ref(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    let cat = domain.catalog.read();
+                    let cat = cat.as_ref().ok_or("каталог не открыт")?;
+                    cat.upsert_profile(&p).map_err(|e| e.to_string())
+                }
+                .await;
                 fwd.forward(UiEvent::ProfileSaved(outcome));
                 // Перезагружаем список.
                 let _ = reload_profiles(&domain, &fwd).await;
             }
             UiCommand::DeleteProfile(name) => {
-                let outcome: Result<(), String> = match domain.catalog.read().as_ref() {
-                    Some(cat) => cat.delete_profile(&name).map_err(|e| e.to_string()),
-                    None => Err("каталог не открыт".into()),
-                };
+                // Сначала удаляем секреты профиля из keyring, потом — строку из БД.
+                let outcome: Result<(), String> = async {
+                    // Читаем профиль, чтобы знать provider_id (для capabilities/key).
+                    if let Ok(Some(profile)) = read_profile_opt(&domain, &name) {
+                        let provider = domain.registry.require(&profile.provider_id).ok();
+                        if let Some(provider) = provider {
+                            let caps = provider.capabilities();
+                            let secret_fields = mdwf_secrets::secret_field_ids(caps);
+                            let _ = mdwf_secrets::delete_profile_secrets(
+                                &profile.provider_id,
+                                &profile.name,
+                                &secret_fields,
+                                domain.secrets.as_ref(),
+                            )
+                            .await;
+                        }
+                    }
+                    let cat = domain.catalog.read();
+                    let cat = cat.as_ref().ok_or("каталог не открыт")?;
+                    cat.delete_profile(&name).map_err(|e| e.to_string())
+                }
+                .await;
                 fwd.forward(UiEvent::ProfileDeleted(outcome));
                 let _ = reload_profiles(&domain, &fwd).await;
             }
@@ -294,6 +341,9 @@ fn list_profiles_sync(domain: &Domain) -> Vec<mdwf_core::Profile> {
 }
 
 /// Синхронное чтение профиля по имени (guard живёт только внутри функции).
+/// Возвращает профиль **без секретов** (в auth_metadata только несекретные поля).
+/// Для API-вызовов используйте `read_profile_with_secrets` — она подмешает
+/// секреты из keyring.
 fn read_profile(domain: &Domain, name: &str) -> Result<mdwf_core::Profile, String> {
     let guard = domain.catalog.read();
     let cat = guard.as_ref().ok_or("каталог не открыт")?;
@@ -302,8 +352,41 @@ fn read_profile(domain: &Domain, name: &str) -> Result<mdwf_core::Profile, Strin
         .ok_or_else(|| format!("профиль '{name}' не найден"))
 }
 
-async fn check_profile(domain: &Domain, name: &str) -> Result<mdwf_core::HealthStatus, String> {
+/// Как `read_profile`, но возвращает Option (None если каталог закрыт или профиль
+/// не найден). Удобно для необязательных операций (напр. удаление секрета при
+/// удалении профиля — профиль мог быть уже удалён).
+fn read_profile_opt(domain: &Domain, name: &str) -> Result<Option<mdwf_core::Profile>, String> {
+    let guard = domain.catalog.read();
+    let cat = match guard.as_ref() {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    cat.get_profile_by_name(name)
+        .map_err(|e| e.to_string())
+}
+
+/// Читает профиль и подмешивает секреты из keyring (для передачи в
+/// `provider.authenticator`). Секреты хранятся только в keyring, в БД их нет —
+/// поэтому перед вызовом провайдера их нужно достать и вставить в auth_metadata
+/// in-memory. Провайдеры читают секрет из auth_metadata как раньше.
+async fn read_profile_with_secrets(
+    domain: &Domain,
+    name: &str,
+) -> Result<mdwf_core::Profile, String> {
     let profile = read_profile(domain, name)?;
+    let provider = domain
+        .registry
+        .require(&profile.provider_id)
+        .map_err(|e| e.to_string())?;
+    let caps = provider.capabilities();
+    let secret_fields = mdwf_secrets::secret_field_ids(caps);
+    mdwf_secrets::load_profile_secrets(profile, &secret_fields, domain.secrets.as_ref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn check_profile(domain: &Domain, name: &str) -> Result<mdwf_core::HealthStatus, String> {
+    let profile = read_profile_with_secrets(domain, name).await?;
     let provider = domain
         .registry
         .require(&profile.provider_id)
@@ -344,7 +427,7 @@ async fn load_document_categories(
     provider_id: &str,
     profile_name: &str,
 ) -> Result<Vec<crate::channels::DocumentCategoryInfo>, String> {
-    let profile = read_profile(domain, profile_name)?;
+    let profile = read_profile_with_secrets(domain, profile_name).await?;
     let provider = domain
         .registry
         .require(provider_id)
@@ -417,7 +500,7 @@ async fn list_documents(
     progress: std::sync::Arc<dyn mdwf_core::ProgressCallback>,
     cancel: CancellationToken,
 ) -> Result<Vec<mdwf_core::DocumentEntry>, String> {
-    let profile = read_profile(domain, profile_name)?;
+    let profile = read_profile_with_secrets(domain, profile_name).await?;
     let provider = domain
         .registry
         .require(provider_id)
@@ -456,7 +539,7 @@ async fn do_download(
     cancel: CancellationToken,
     fwd: &EventForwarder,
 ) -> Result<crate::channels::DownloadResult, String> {
-    let profile = read_profile(domain, profile_name)?;
+    let profile = read_profile_with_secrets(domain, profile_name).await?;
     let provider = domain
         .registry
         .require(provider_id)

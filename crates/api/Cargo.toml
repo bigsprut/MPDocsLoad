@@ -13,6 +13,7 @@ server = []
 
 [dependencies]
 mdwf-core.workspace = true
+mdwf-secrets.workspace = true
 mdwf-storage.workspace = true
 serde.workspace = true
 serde_json.workspace = true

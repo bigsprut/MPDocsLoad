@@ -128,6 +128,15 @@ impl JobExecutor for CliJobExecutor<'_> {
             .ok_or_else(|| mdwf_core::CoreError::ProfileNotFound(format!("id={}", req.profile_id)))?;
 
         let provider = self.ctx.registry.require(&profile.provider_id)?;
+        // Подмешиваем секреты из keyring перед authenticator.
+        let caps = provider.capabilities();
+        let secret_fields = mdwf_secrets::secret_field_ids(caps);
+        let profile = mdwf_secrets::load_profile_secrets(
+            profile,
+            &secret_fields,
+            self.ctx.secrets.as_ref(),
+        )
+        .await?;
         let auth = provider.authenticator(&profile).await?;
         let progress = Arc::new(NoopProgress) as Arc<dyn mdwf_core::ProgressCallback>;
 

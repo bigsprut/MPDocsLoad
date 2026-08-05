@@ -37,8 +37,16 @@ pub async fn run(ctx: &Context) -> Result<ExitCode> {
     if !profiles.is_empty() {
         println!("\nПроверка подключений:");
         for p in &profiles {
-            match ctx.registry.require(&p.provider_id) {
-                Ok(provider) => match provider.authenticator(p).await {
+            // Подмешиваем секреты из keyring перед authenticator.
+            let profile = match ctx.profile_with_secrets(&p.name).await {
+                Ok(prof) => prof,
+                Err(e) => {
+                    println!("  {} ({}) → load secrets error: {e}", p.name, p.provider_id);
+                    continue;
+                }
+            };
+            match ctx.registry.require(&profile.provider_id) {
+                Ok(provider) => match provider.authenticator(&profile).await {
                     Ok(auth) => match provider.health_check(auth.as_ref()).await {
                         Ok(status) => {
                             let level = match status.level {
