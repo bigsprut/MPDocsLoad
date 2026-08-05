@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::NaiveDate;
+use chrono::Datelike;
 use serde_json::json;
 
 use mdwf_core::{
@@ -439,7 +439,7 @@ impl Report for OzonReport {
         _progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
-        let body = build_download_body(params);
+        let body = build_download_body(&self.type_id, params);
         let json = self.client.post(self.endpoint, &body, auth).await?;
         let content = serde_json::to_vec_pretty(&json)
             .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
@@ -471,21 +471,76 @@ fn build_query_body(filter: &DocumentFilter) -> serde_json::Value {
 }
 
 /// Строит тело запроса для download из параметров.
-fn build_download_body(params: &ReportParams) -> serde_json::Value {
+///
+/// Формат тела зависит от type_id — разные эндпоинты Ozon ждут разные схемы
+/// периода (сверено с официальным swagger.json API v2.1):
+/// - `month`+`year` как integer: realization, realization_posting.
+/// - `day`+`month`+`year` как integer: realization_by_day.
+/// - `date` как строка YYYY-MM: compensation, decompensation, b2b_sales,
+///   mutual_settlement (async-отчёты).
+/// - `date_from`+`date_to` как YYYY-MM-DD: balance, buyout.
+/// - прочие (cash_flow, analytics) требуют сложных схем и обрабатываются
+///   отдельно — здесь для них собирается body из params.values как есть.
+fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Value {
     let mut body = json!({});
-    if let Some(p) = &params.period {
-        // Месячный формат YYYY-MM.
-        if p.len() == 7 {
-            body["month"] = json!(p);
-        } else if NaiveDate::parse_from_str(p, "%Y-%m-%d").is_ok() {
-            body["date"] = json!(p);
+    let period = params.period.as_deref();
+    // date_from/date_to из params.values (заполняются UI как YYYY-MM-DD).
+    let date_from = params.get("date_from").map(str::to_string);
+    let date_to = params.get("date_to").map(str::to_string);
+
+    match type_id {
+        // month + year как integer (строка YYYY-MM → числа).
+        "ozon.realization" | "ozon.realization_posting" => {
+            if let Some(p) = period {
+                if let Some((y, m)) = date_format::parse_year_month(p) {
+                    body["year"] = json!(y);
+                    body["month"] = json!(m);
+                }
+            }
+        }
+        // day + month + year как integer (period в формате YYYY-MM-DD).
+        "ozon.realization_by_day" => {
+            if let Some(p) = period {
+                if let Some(d) = date_format::parse_date_only(p) {
+                    body["year"] = json!(d.year());
+                    body["month"] = json!(d.month());
+                    body["day"] = json!(d.day());
+                }
+            }
+        }
+        // date_from + date_to как YYYY-MM-DD.
+        "ozon.balance" | "ozon.buyout" => {
+            if let Some(df) = &date_from {
+                body["date_from"] = json!(df);
+            }
+            if let Some(dt) = &date_to {
+                body["date_to"] = json!(dt);
+            }
+        }
+        // date как строка YYYY-MM (async-отчёты).
+        "ozon.compensation" | "ozon.decompensation" | "ozon.b2b_sales"
+        | "ozon.mutual_settlement" => {
+            if let Some(p) = period {
+                body["date"] = json!(p);
+            }
+        }
+        _ => {
+            // Прочие отчёты (cash_flow, analytics, act_discrepancy): собираем
+            // body из params.values как есть — эти отчёты требуют сложных схем
+            // и обрабатываются отдельно. period (любой формат) → date.
+            if let Some(p) = period {
+                body["date"] = json!(p);
+            }
         }
     }
+
+    // ids — для Browsable-режима (если есть).
     if let Some(ids) = params.get("ids") {
         body["ids"] = json!(ids.split(',').collect::<Vec<_>>());
     }
+    // Произвольные параметры из values (кроме служебных ключей).
     for (k, v) in &params.values {
-        if k != "ids" {
+        if !matches!(k.as_str(), "ids" | "date_from" | "date_to") {
             body[k.as_str()] = json!(v);
         }
     }
@@ -613,7 +668,7 @@ impl Report for OzonAsyncReport {
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
         // Шаг 1: запрос отчёта → получаем code.
-        let body = build_download_body(params);
+        let body = build_download_body(&self.type_id, params);
         let resp = self.client.post(self.endpoint, &body, auth).await?;
 
         // Извлекаем code: {result:{code:"..."}}.
@@ -685,6 +740,81 @@ impl Report for OzonAsyncReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_body_realization_month_year_int() {
+        // regression: раньше шла строка "2026-03" → Ozon 400 invalid int32.
+        let params = ReportParams {
+            period: Some("2026-03".into()),
+            ..Default::default()
+        };
+        let body = build_download_body("ozon.realization", &params);
+        assert_eq!(body["year"], 2026);
+        assert_eq!(body["month"], 3);
+        // Не строка, а число.
+        assert!(body["month"].is_number());
+    }
+
+    #[test]
+    fn build_body_realization_posting_same_as_realization() {
+        let params = ReportParams {
+            period: Some("2025-12".into()),
+            ..Default::default()
+        };
+        let body = build_download_body("ozon.realization_posting", &params);
+        assert_eq!(body["year"], 2025);
+        assert_eq!(body["month"], 12);
+    }
+
+    #[test]
+    fn build_body_realization_by_day_three_ints() {
+        let params = ReportParams {
+            period: Some("2026-07-15".into()),
+            ..Default::default()
+        };
+        let body = build_download_body("ozon.realization_by_day", &params);
+        assert_eq!(body["year"], 2026);
+        assert_eq!(body["month"], 7);
+        assert_eq!(body["day"], 15);
+    }
+
+    #[test]
+    fn build_body_balance_date_from_to() {
+        let params = ReportParams::default()
+            .with("date_from", "2026-07-01")
+            .with("date_to", "2026-07-31");
+        let body = build_download_body("ozon.balance", &params);
+        assert_eq!(body["date_from"], "2026-07-01");
+        assert_eq!(body["date_to"], "2026-07-31");
+    }
+
+    #[test]
+    fn build_body_buyout_date_from_to() {
+        let params = ReportParams::default()
+            .with("date_from", "2026-07-01")
+            .with("date_to", "2026-07-31");
+        let body = build_download_body("ozon.buyout", &params);
+        assert_eq!(body["date_from"], "2026-07-01");
+        assert_eq!(body["date_to"], "2026-07-31");
+    }
+
+    #[test]
+    fn build_body_async_reports_date_yyyy_mm() {
+        // compensation/decompensation/b2b_sales/mutual_settlement ждут date=YYYY-MM.
+        for tid in [
+            "ozon.compensation",
+            "ozon.decompensation",
+            "ozon.b2b_sales",
+            "ozon.mutual_settlement",
+        ] {
+            let params = ReportParams {
+                period: Some("2026-03".into()),
+                ..Default::default()
+            };
+            let body = build_download_body(tid, &params);
+            assert_eq!(body["date"], "2026-03", "{tid}");
+        }
+    }
 
     #[test]
     fn reports_count_is_16() {
