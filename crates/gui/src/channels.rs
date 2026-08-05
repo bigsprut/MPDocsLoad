@@ -73,9 +73,9 @@ pub enum UiCommand {
         provider_id: String,
         profile_name: String,
         report_type: String,
-        /// Для Browsable: id выбранных документов.
-        /// Для Period: пусто (использует params.period).
-        document_ids: Vec<String>,
+        /// Для Browsable: выбранные документы (с человекочитаемым именем и
+        /// предпочтительным расширением). Для Period: пусто (params.period).
+        documents: Vec<DocumentSel>,
         params: mdwf_core::ReportParams,
     },
     /// Отмена текущей операции.
@@ -122,7 +122,7 @@ pub enum UiEvent {
     /// Список документов получен.
     DocumentsListed(Result<Vec<DocumentEntry>, String>),
     /// Список категорий документов WB получен.
-    DocumentCategoriesLoaded(Result<Vec<String>, String>),
+    DocumentCategoriesLoaded(Result<Vec<DocumentCategoryInfo>, String>),
     /// Скачивание завершено (с полными путями к сохранённым файлам).
     DownloadFinished(Result<DownloadResult, String>),
     /// Прогресс операции.
@@ -180,6 +180,30 @@ pub struct ReportInfo {
     pub is_browsable: bool,
     /// Какому провайдеру принадлежит отчёт (чтобы не угадывать из префикса type_id).
     pub provider_id: String,
+}
+
+/// Категория документа для выпадающего списка в UI.
+/// `label` — то, что видит пользователь (русское название, напр. «УПД»);
+/// `value` — технический идентификатор, который WB ожидает в параметре category
+/// (напр. «upd»). Разделение нужно, чтобы показывать понятные имена, не ломая API.
+#[derive(Debug, Clone)]
+pub struct DocumentCategoryInfo {
+    pub label: String,
+    pub value: String,
+}
+
+/// Выбранный пользователем документ для скачивания (Browsable-режим).
+///
+/// `id` — технический идентификатор провайдера (для WB это `serviceName`,
+/// передаётся в `/documents/download`). `name` — человекочитаемое имя
+/// (напр. «УПД №123»), используется как базовое имя файла на диске.
+/// `extension` — предпочтительный формат из ответа `/documents/list`
+/// (напр. `xml`), переопределяется реальным из ответа `/documents/download`.
+#[derive(Debug, Clone)]
+pub struct DocumentSel {
+    pub id: String,
+    pub name: Option<String>,
+    pub extension: Option<String>,
 }
 
 /// Отправитель команд в tokio-сторону (клонируется для виджетов).

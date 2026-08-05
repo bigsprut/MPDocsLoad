@@ -14,7 +14,6 @@
 use base64::Engine;
 use chrono::NaiveDate;
 use serde::Deserialize;
-use serde_json::json;
 use tracing::debug;
 
 use mdwf_core::{Authenticator, CoreError, CoreResult, DocumentEntry};
@@ -57,17 +56,29 @@ impl Default for ListDocumentsParams {
 }
 
 /// Элемент списка документов WB (поле documents[]. из ответа).
+///
+/// Поля сверены с официальной OpenAPI-спецификацией (GetListDataDocumentsInner):
+/// serviceName, name, category, extensions, creationTime, viewed.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WbDocument {
     /// Уникальный ID документа (дока: передаётся как serviceName в /download).
-    #[serde(rename = "serviceName")]
-    pub service_name: String,
+    #[serde(rename = "serviceName", default)]
+    pub service_name: Option<String>,
+    /// Человекочитаемое название документа — показываем в UI.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Название категории документа (значение поля `title` из /categories).
     #[serde(default)]
     pub category: Option<String>,
+    /// Доступные форматы файла (напр. `zip`, `xml`).
     #[serde(default)]
-    pub amount: Option<f64>,
+    pub extensions: Option<Vec<String>>,
+    /// Дата и время создания документа (ISO 8601, напр. "2026-07-01T10:00:00Z").
+    #[serde(rename = "creationTime", default)]
+    pub creation_time: Option<String>,
+    /// Выгружен ли документ в личном кабинете.
     #[serde(default)]
-    pub date: Option<String>,
+    pub viewed: Option<bool>,
 }
 
 /// Subclient для Documents API.
@@ -160,12 +171,15 @@ impl<'a> DocumentsClient<'a> {
 
     /// Скачивание одного документа. Ответ: {"data":{"fileName","extension","document"(base64)}}.
     /// Параметры (дока): serviceName (required) + extension (required).
+    ///
+    /// Возвращает байты документа И метаданные (реальный формат, имя файла),
+    /// которые WB сообщает в ответе — раньше они выбрасывались.
     pub async fn download_one(
         &self,
         auth: &dyn Authenticator,
         service_name: &str,
         extension: &str,
-    ) -> CoreResult<Vec<u8>> {
+    ) -> CoreResult<WbDownloadedDoc> {
         debug!(service_name, extension, "WB documents: download one");
         let json = self
             .http
@@ -176,65 +190,95 @@ impl<'a> DocumentsClient<'a> {
                 auth,
             )
             .await?;
-        // Формат: {"data": {"document": "<base64>"}}.
-        let b64 = json
-            .get("data")
-            .and_then(|d| d.get("document"))
+        let data = json.get("data").ok_or_else(|| {
+            CoreError::Internal("WB download: нет поля data".into())
+        })?;
+        // base64-контент документа (обязательное поле).
+        let b64 = data
+            .get("document")
             .and_then(|f| f.as_str())
             .ok_or_else(|| CoreError::Internal("WB download: нет поля data.document".into()))?;
-        base64::engine::general_purpose::STANDARD
+        let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
-            .map_err(|e| CoreError::Internal(format!("base64 decode: {e}")))
-    }
-
-    /// Батч-скачивание до 50 документов через /download/all.
-    /// Тело: {"params":[{"serviceName","extension"}, ...]}. Ответ как у /download.
-    pub async fn download_batch(
-        &self,
-        auth: &dyn Authenticator,
-        items: &[(String, String)], // (serviceName, extension)
-    ) -> CoreResult<Vec<u8>> {
-        debug!(count = items.len(), "WB documents: download batch");
-        if items.is_empty() {
-            return Err(CoreError::InvalidParameter("пустой батч".into()));
-        }
-        if items.len() > 50 {
-            return Err(CoreError::InvalidParameter(format!(
-                "лимит батча 50, получено {}",
-                items.len()
-            )));
-        }
-        let params: Vec<serde_json::Value> = items
-            .iter()
-            .map(|(name, ext)| json!({"serviceName": name, "extension": ext}))
-            .collect();
-        let body = json!({"params": params});
-        let json = self
-            .http
-            .post(WbDomain::Documents, "/api/v1/documents/download/all", &body, auth)
-            .await?;
-        let b64 = json
-            .get("data")
-            .and_then(|d| d.get("document"))
-            .and_then(|f| f.as_str())
-            .ok_or_else(|| CoreError::Internal("WB download/all: нет data.document".into()))?;
-        base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .map_err(|e| CoreError::Internal(format!("base64 decode: {e}")))
+            .map_err(|e| CoreError::Internal(format!("base64 decode: {e}")))?;
+        // Реальный формат из ответа; если WB не вернул — оставляем запрошенный.
+        let ext = data
+            .get("extension")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| extension.to_string());
+        let file_name = data
+            .get("fileName")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|s| !s.is_empty());
+        Ok(WbDownloadedDoc {
+            bytes,
+            extension: ext,
+            file_name,
+        })
     }
 }
 
+/// Результат скачивания документа: байты + метаданные из ответа WB.
+/// Поля `extension` и `file_name` берутся напрямую из ответа
+/// `/documents/download` (поля `extension`, `fileName`).
+#[derive(Debug, Clone)]
+pub struct WbDownloadedDoc {
+    pub bytes: Vec<u8>,
+    /// Реальный формат из ответа WB; fallback на запрошенный.
+    pub extension: String,
+    /// Человекочитаемое имя файла из ответа WB (если есть).
+    pub file_name: Option<String>,
+}
+
 /// Преобразует WbDocument в DocumentEntry для UI.
+///
+/// `category` — запасное значение категории (передаётся вызовом из
+/// `WbDocumentsReport::list`), используется если в самом документе её нет.
 #[must_use]
 pub fn wb_document_to_entry(doc: &WbDocument, category: &str) -> DocumentEntry {
-    let mut e = DocumentEntry::new(doc.service_name.clone(), doc.service_name.clone());
-    e.category = category.to_string();
-    e.extensions = vec!["zip".into(), "xml".into()];
-    e.size_hint = doc.amount.map(|a| a as u64);
-    if let Some(date_str) = &doc.date {
-        e.date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok();
+    // serviceName — обязательный технический идентификатор для /download.
+    // На случай если WB вернёт документ без него, формируем запасной id.
+    let id = doc.service_name.clone().unwrap_or_else(|| {
+        doc.name
+            .clone()
+            .unwrap_or_else(|| "wb-document".to_string())
+    });
+    // Отображаемое имя: осмысленное `name`, иначе категория, иначе id.
+    let display = doc
+        .name
+        .clone()
+        .filter(|n| !n.is_empty())
+        .or_else(|| doc.category.clone())
+        .unwrap_or_else(|| id.clone());
+    let mut e = DocumentEntry::new(id, display);
+    e.category = doc
+        .category
+        .clone()
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| category.to_string());
+    // Форматы берём из ответа; если WB их не вернул — оставляем пусто,
+    // а не хардкод (раньше тут было зашито ["zip","xml"]).
+    e.extensions = doc.extensions.clone().unwrap_or_default();
+    // Дата создания документа (поле creationTime, ISO 8601).
+    if let Some(date_str) = &doc.creation_time {
+        e.date = parse_creation_time(date_str);
     }
     e
+}
+
+/// Парсит creationTime (ISO 8601 с временем или только дата) в NaiveDate.
+fn parse_creation_time(s: &str) -> Option<NaiveDate> {
+    // Полный datetime: 2026-07-01T10:00:00Z или 2026-07-01T10:00:00+03:00.
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.date_naive());
+    }
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Some(dt.date());
+    }
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
 /// Форматирует дату как YYYY-MM-DD (дока: beginTime/endTime в формате даты).
@@ -253,15 +297,52 @@ mod tests {
     #[test]
     fn wb_doc_to_entry_basic() {
         let doc = WbDocument {
-            service_name: "redeem-notification-44841941".into(),
+            service_name: Some("redeem-notification-44841941".into()),
+            name: Some("Уведомление о выкупе №44841941".into()),
             category: Some("redeem-notification".into()),
-            amount: Some(100.0),
-            date: Some("2026-07-01".into()),
+            extensions: Some(vec!["zip".into(), "xml".into()]),
+            creation_time: Some("2026-07-01T10:00:00Z".into()),
+            viewed: Some(true),
         };
         let e = wb_document_to_entry(&doc, "redeem-notification");
         assert_eq!(e.id, "redeem-notification-44841941");
+        // Показываем человекочитаемое name, а не serviceName.
+        assert_eq!(e.display_name, "Уведомление о выкупе №44841941");
         assert_eq!(e.category, "redeem-notification");
+        assert_eq!(e.extensions, vec!["zip", "xml"]);
         assert_eq!(e.date, Some(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()));
+    }
+
+    #[test]
+    fn wb_doc_to_entry_fallback_to_category_then_id() {
+        // Нет name → берём category; нет serviceName → запасной id из name.
+        let doc = WbDocument {
+            service_name: None,
+            name: None,
+            category: Some("upd".into()),
+            extensions: None,
+            creation_time: None,
+            viewed: None,
+        };
+        let e = wb_document_to_entry(&doc, "");
+        // id отсутствует в serviceName и name → запасной.
+        assert_eq!(e.id, "wb-document");
+        assert_eq!(e.display_name, "upd"); // category как отображаемое имя
+        assert!(e.extensions.is_empty());
+    }
+
+    #[test]
+    fn wb_doc_creation_time_date_only() {
+        let doc = WbDocument {
+            service_name: Some("s1".into()),
+            name: None,
+            category: None,
+            extensions: None,
+            creation_time: Some("2026-06-15".into()),
+            viewed: None,
+        };
+        let e = wb_document_to_entry(&doc, "");
+        assert_eq!(e.date, Some(NaiveDate::from_ymd_opt(2026, 6, 15).unwrap()));
     }
 
     #[test]

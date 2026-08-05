@@ -81,7 +81,10 @@ fn default_output_dir() -> String {
     "~/Documents/MDWF/downloads".into()
 }
 fn default_file_name_template() -> String {
-    "{provider}_{profile}_{report}_{period}.{ext}".into()
+    // {doc_id} включён по умолчанию: для Browsable-отчётов (документы WB)
+    // это даёт уникальные осмысленные имена; для Period-отчётов сегмент
+    // doc_id отсутствует и нормализацией вырезается (см. storage::naming).
+    "{provider}_{profile}_{report}_{doc_id}_{period}.{ext}".into()
 }
 fn default_folder_structure() -> String {
     "by_provider_period".into()

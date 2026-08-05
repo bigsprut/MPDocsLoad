@@ -23,3 +23,6 @@ Cargo.lock.bak
 *.swp
 .DS_Store
 Thumbs.db
+
+# AI assistant workspace (планы диалогов и пр. служебные файлы)
+.zcode/

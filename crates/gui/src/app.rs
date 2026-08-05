@@ -242,12 +242,12 @@ async fn run_command_loop(
                 provider_id,
                 profile_name,
                 report_type,
-                document_ids,
+                documents,
                 params,
             } => {
                 let cancel = CancellationToken::new();
                 let outcome =
-                    do_download(&domain, &provider_id, &profile_name, &report_type, document_ids, params, cancel, &fwd)
+                    do_download(&domain, &provider_id, &profile_name, &report_type, documents, params, cancel, &fwd)
                         .await;
                 fwd.forward(UiEvent::DownloadFinished(outcome));
             }
@@ -340,7 +340,7 @@ async fn load_document_categories(
     domain: &Domain,
     provider_id: &str,
     profile_name: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<crate::channels::DocumentCategoryInfo>, String> {
     let profile = read_profile(domain, profile_name)?;
     let provider = domain
         .registry
@@ -362,7 +362,18 @@ async fn load_document_categories(
         )
         .await
         .map_err(|e| e.to_string())?;
-    Ok(entries.into_iter().map(|e| e.id).collect())
+    Ok(entries
+        .into_iter()
+        .map(|e| crate::channels::DocumentCategoryInfo {
+            // display_name у WbCategoriesReport = title (если есть) либо name.
+            label: if e.display_name.is_empty() {
+                e.id.clone()
+            } else {
+                e.display_name
+            },
+            value: e.id,
+        })
+        .collect())
 }
 
 /// Загружает поля формы авторизации провайдера (для динамической отрисовки).
@@ -417,13 +428,25 @@ async fn list_documents(
         .map_err(|e| e.to_string())
 }
 
+/// Сериализуемая мета выбранного документа: передаётся в провайдер через
+/// `params.values["doc_meta"]` (JSON-массив). Провайдер использует `name`
+/// как базовое имя файла, `extension` — как предпочтительный формат.
+#[derive(serde::Serialize)]
+struct DocMetaItem {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extension: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn do_download(
     domain: &Domain,
     provider_id: &str,
     profile_name: &str,
     report_type: &str,
-    document_ids: Vec<String>,
+    documents: Vec<crate::channels::DocumentSel>,
     mut params: mdwf_core::ReportParams,
     cancel: CancellationToken,
     fwd: &EventForwarder,
@@ -439,8 +462,24 @@ async fn do_download(
         .map_err(|e| e.to_string())?;
     let report = provider.report(report_type).await.map_err(|e| e.to_string())?;
 
-    if !document_ids.is_empty() {
-        params.values.insert("ids".into(), document_ids.join(","));
+    if !documents.is_empty() {
+        // "ids" — CSV для совместимости (напр. CLI-логика).
+        let ids: Vec<&str> = documents.iter().map(|d| d.id.as_str()).collect();
+        params.values.insert("ids".into(), ids.join(","));
+        // "doc_meta" — JSON-массив {id,name,extension}, чтобы провайдер
+        // знал человекочитаемое имя (для имени файла) и предпочтительное
+        // расширение. Сериализация не должна падать на корректных данных.
+        let meta: Vec<DocMetaItem> = documents
+            .iter()
+            .map(|d| DocMetaItem {
+                id: d.id.clone(),
+                name: d.name.clone(),
+                extension: d.extension.clone(),
+            })
+            .collect();
+        if let Ok(json) = serde_json::to_string(&meta) {
+            params.values.insert("doc_meta".into(), json);
+        }
     }
     params.provider_id = Some(provider_id.into());
     params.profile_name = Some(profile_name.into());

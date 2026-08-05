@@ -17,14 +17,14 @@ use gtk4::{
 
 use mdwf_core::{DocumentEntry, DocumentFilter, DownloadedFile, Profile, ReportParams};
 
-use crate::channels::{CommandSender, DownloadState, ReportInfo};
+use crate::channels::{CommandSender, DocumentCategoryInfo, DocumentSel, DownloadState, ReportInfo};
 
 thread_local! {
     static PROVIDERS: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
     static PROFILES: Rc<RefCell<Vec<Profile>>> = Rc::new(RefCell::new(Vec::new()));
     static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
     static DOCS: Rc<RefCell<Vec<DocumentEntry>>> = Rc::new(RefCell::new(Vec::new()));
-    static CHECKS: Rc<RefCell<Vec<(String, CheckButton)>>> = Rc::new(RefCell::new(Vec::new()));
+    static CHECKS: Rc<RefCell<Vec<(DocumentSel, CheckButton)>>> = Rc::new(RefCell::new(Vec::new()));
     // Командный канал (для авто-запросов при смене выбора).
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
     // Виджеты (сохраняем после build для обновления из событий).
@@ -44,6 +44,9 @@ thread_local! {
     static W_DATE_TO: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_MONTH: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_LIMIT: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
+    /// Карта: отображаемое имя категории → технический идентификатор (для WB API).
+    /// Заполняется при загрузке категорий, используется в build_filter.
+    static CATEGORIES: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
 }
 
 /// Хук: провайдеры загружены.
@@ -73,11 +76,18 @@ pub fn on_profiles_loaded(profiles: &[Profile]) {
 }
 
 /// Хук: категории документов WB загружены → заполняем combo.
-pub fn on_document_categories_loaded(res: &Result<Vec<String>, String>) {
+///
+/// В combo показываем человекочитаемый `label` (русское название, напр. «УПД»),
+/// а в `CATEGORIES` храним карту `label → value`, чтобы при сборке фильтра
+/// переводить выбранное имя обратно в технический идентификатор (`value`),
+/// который WB ожидает в параметре `category`.
+pub fn on_document_categories_loaded(res: &Result<Vec<DocumentCategoryInfo>, String>) {
     let combo = W_CATEGORY_COMBO.with(|w| w.borrow().clone());
     let Some(combo) = combo else { return };
     combo.remove_all();
     combo.append_text("(все)");
+    // Очищаем карту перед заполнением — список мог быть перезагружен.
+    CATEGORIES.with(|c| c.borrow_mut().clear());
     match res {
         Err(e) => {
             combo.append_text(&format!("(ошибка: {e})"));
@@ -86,8 +96,14 @@ pub fn on_document_categories_loaded(res: &Result<Vec<String>, String>) {
             combo.append_text("(нет категорий)");
         }
         Ok(cats) => {
-            for c in cats {
-                combo.append_text(c);
+            CATEGORIES.with(|c| {
+                *c.borrow_mut() = cats
+                    .iter()
+                    .map(|cat| (cat.label.clone(), cat.value.clone()))
+                    .collect();
+            });
+            for cat in cats {
+                combo.append_text(&cat.label);
             }
         }
     }
@@ -96,9 +112,33 @@ pub fn on_document_categories_loaded(res: &Result<Vec<String>, String>) {
 
 /// Хук: отчёты загружены (все уже принадлежат запрошенному провайдеру).
 pub fn on_reports_loaded(reports: &[ReportInfo]) {
+    // Защита от гонки: если пользователь уже сменил провайдер, устаревший
+    // результат (отчёты другого провайдера) игнорируем — иначе он затрёт
+    // актуальный список и категории не загрузятся.
+    let active_pid = W_PROVIDER.with(|wp| wp.borrow().as_ref().and_then(current_provider_id));
+    let result_pid = reports.first().map(|r| r.provider_id.clone());
+    if let (Some(active), Some(got)) = (active_pid.as_deref(), result_pid.as_deref()) {
+        if active != got {
+            tracing::debug!(
+                "on_reports_loaded: игнорируем устаревший результат \
+                 (провайдер {got:?}, сейчас активен {active:?})"
+            );
+            return;
+        }
+    }
+
     REPORTS.with(|r| *r.borrow_mut() = reports.to_vec());
     let combo = W_REPORT.with(|w| w.borrow().clone());
     let Some(combo) = combo else { return };
+
+    // Блокируем connect_changed на время программной перестройки combo,
+    // чтобы не вызвать каскад лишних maybe_request_categories.
+    REPORT_CHANGED_HANDLER.with(|h| {
+        if let Some(id) = h.borrow().as_ref() {
+            combo.block_signal(id);
+        }
+    });
+
     combo.remove_all();
     if reports.is_empty() {
         combo.append_text("(нет отчётов)");
@@ -129,8 +169,16 @@ pub fn on_reports_loaded(reports: &[ReportInfo]) {
     } else {
         combo.set_active(Some(0));
     }
+
+    REPORT_CHANGED_HANDLER.with(|h| {
+        if let Some(id) = h.borrow().as_ref() {
+            combo.unblock_signal(id);
+        }
+    });
+
     update_mode_hint();
-    // Явно запрашиваем категории, т.к. set_active может не вызвать connect_changed.
+    // Явно запрашиваем категории, т.к. set_active при заблокированном сигнале
+    // не вызовет connect_changed.
     maybe_request_categories();
 }
 
@@ -282,12 +330,15 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         schedule_save();
     });
     // Смена отчёта → обновить подсказку режима + доступность кнопок + автосохранение.
-    report_combo.connect_changed(move |_| {
-        update_mode_hint();
-        // Запрашиваем категории WB только при выборе отчёта wb.documents.
-        maybe_request_categories();
-        schedule_save();
-    });
+    {
+        let handler_id = report_combo.connect_changed(move |_| {
+            update_mode_hint();
+            // Запрашиваем категории WB только при выборе отчёта wb.documents.
+            maybe_request_categories();
+            schedule_save();
+        });
+        REPORT_CHANGED_HANDLER.with(|h| *h.borrow_mut() = Some(handler_id));
+    }
     update_mode_hint();
 
     // Автосохранение при изменении полей ввода.
@@ -347,23 +398,23 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             notify("Выберите профиль и отчёт.");
             return;
         };
-        let ids: Vec<String> = CHECKS.with(|c| {
+        let docs: Vec<DocumentSel> = CHECKS.with(|c| {
             c.borrow()
                 .iter()
                 .filter(|(_, cb)| cb.is_active())
-                .map(|(id, _)| id.clone())
+                .map(|(sel, _)| sel.clone())
                 .collect()
         });
-        if ids.is_empty() {
+        if docs.is_empty() {
             notify("Отметьте документы в списке выше.");
             return;
         }
-        let n = ids.len();
+        let n = docs.len();
         cs_dl.send(crate::channels::UiCommand::Download {
             provider_id: pid,
             profile_name: pname,
             report_type: rtype,
-            document_ids: ids,
+            documents: docs,
             params: ReportParams::new(),
         });
         notify(&format!("Скачивание {n} документов…"));
@@ -390,7 +441,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             provider_id: pid,
             profile_name: pname,
             report_type: rtype,
-            document_ids: Vec::new(),
+            documents: Vec::new(),
             params,
         });
         notify(&format!("Генерация отчёта за период {period}…"));
@@ -548,7 +599,17 @@ fn build_filter(category: &ComboBoxText, date_from: &Entry, date_to: &Entry, lim
     if let Some(cat) = category.active_text() {
         let cat = cat.to_string();
         if cat != "(все)" && !cat.is_empty() {
-            f.category = Some(cat);
+            // Переводим выбранное отображаемое имя (label) в технический
+            // идентификатор (value), который WB ожидает в параметре category.
+            let resolved = CATEGORIES.with(|c| {
+                c.borrow()
+                    .iter()
+                    .find(|(label, _)| label == &cat)
+                    .map(|(_, value)| value.clone())
+            });
+            // Если перевод не найден (напр. служебные пункты combo),
+            // категорию не передаём — WB вернёт документы всех категорий.
+            f.category = resolved;
         }
     }
     if let Ok(d) = NaiveDate::parse_from_str(&date_from.text(), "%Y-%m-%d") {
@@ -666,6 +727,10 @@ pub fn on_download_state_loaded(state: Option<&DownloadState>) {
 thread_local! {
     /// Желаемый report_type, который нужно выбрать после загрузки списка отчётов.
     static PENDING_REPORT: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    /// Handler id сигнала connect_changed у report_combo — чтобы блокировать
+    /// его на время программной перестройки combo.
+    static REPORT_CHANGED_HANDLER: Rc<RefCell<Option<glib::SignalHandlerId>>> =
+        Rc::new(RefCell::new(None));
 }
 
 fn notify(msg: &str) {
@@ -736,7 +801,19 @@ fn render_list(docs: &[DocumentEntry]) {
             let size = doc.size_hint.map(human_size).unwrap_or_default();
             row.append(&Label::builder().label(&size).width_chars(10).xalign(0.0).build());
 
-            CHECKS.with(|c| c.borrow_mut().push((doc.id.clone(), cb)));
+            CHECKS.with(|c| {
+                c.borrow_mut().push((
+                    DocumentSel {
+                        id: doc.id.clone(),
+                        // display_name — человекочитаемое имя (поле name из WB);
+                        // станет базовым именем файла на диске.
+                        name: Some(doc.display_name.clone()),
+                        // Первый доступный формат — предпочтительный для скачивания.
+                        extension: doc.extensions.first().cloned(),
+                    },
+                    cb,
+                ));
+            });
             list_box.append(&row);
         }
     });

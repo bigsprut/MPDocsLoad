@@ -42,7 +42,7 @@ impl Default for FileStoreConfig {
     fn default() -> Self {
         Self {
             output_dir: PathBuf::from("downloads"),
-            file_name_template: "{provider}_{profile}_{report}_{period}.{ext}".to_string(),
+            file_name_template: "{provider}_{profile}_{report}_{doc_id}_{period}.{ext}".to_string(),
             folder_structure: FolderStructure::default(),
             compute_hash: true,
         }

@@ -707,31 +707,48 @@ impl Report for WbDocumentsReport {
             return Ok(Vec::new());
         }
 
-        let docs_client = crate::documents::DocumentsClient::new(&self.client);
-        if ids.len() <= 50 {
-            let items: Vec<(String, String)> = ids
-                .iter()
-                .map(|s| ((*s).to_string(), "zip".to_string()))
-                .collect();
-            let bytes = docs_client.download_batch(auth, &items).await?;
-            return Ok(vec![DownloadedFile::with_content(
-                "wb_documents_batch.zip".to_string(),
-                "zip",
-                bytes,
-            )]);
-        }
+        // Мета документов (id → name, extension), переданная из UI через
+        // params.values["doc_meta"] (JSON-массив). Позволяет использовать
+        // человекочитаемое имя как имя файла и предпочтительный формат.
+        let meta: std::collections::HashMap<String, DocMeta> = params
+            .get("doc_meta")
+            .and_then(|json| serde_json::from_str::<Vec<DocMeta>>(json).ok())
+            .map(|v| v.into_iter().map(|m| (m.id.clone(), m)).collect())
+            .unwrap_or_default();
 
+        let docs_client = crate::documents::DocumentsClient::new(&self.client);
         let mut files = Vec::new();
         for id in ids {
-            let bytes = docs_client.download_one(auth, id, "zip").await?;
-            files.push(DownloadedFile::with_content(
-                format!("wb_doc_{id}.zip"),
-                "zip",
-                bytes,
-            ));
+            // Предпочтительный формат: из меты UI, иначе "zip".
+            let requested_ext = meta.get(id).and_then(|m| m.extension.as_deref())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("zip");
+            let downloaded = docs_client.download_one(auth, id, requested_ext).await?;
+            // source_id = человекочитаемое имя (поле name из /list), если есть —
+            // оно станет базовым именем файла на диске ({doc_id}).
+            let source_id = meta.get(id).and_then(|m| m.name.clone());
+            let mut f = DownloadedFile::with_content(
+                // file_name здесь не важен — FileStore всё равно пересоберёт имя
+                // из шаблона; оставим serviceName для отладки.
+                format!("wb_doc_{id}"),
+                downloaded.extension,
+                downloaded.bytes,
+            );
+            f.source_id = source_id;
+            files.push(f);
         }
         Ok(files)
     }
+}
+
+/// Метаданные выбранного документа из UI (десериализуются из params `doc_meta`).
+#[derive(serde::Deserialize)]
+struct DocMeta {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    extension: Option<String>,
 }
 
 // =========================================================================
@@ -781,7 +798,9 @@ impl Report for WbCategoriesReport {
         Ok(cats
             .iter()
             .map(|c| {
-                let mut e = DocumentEntry::new(c.name.clone(), c.name.clone());
+                // display_name = человекочитаемое название (title), иначе name.
+                let label = c.title.clone().unwrap_or_else(|| c.name.clone());
+                let mut e = DocumentEntry::new(c.name.clone(), label);
                 e.category = c.name.clone();
                 e
             })
