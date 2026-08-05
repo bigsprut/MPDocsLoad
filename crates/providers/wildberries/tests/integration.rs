@@ -99,7 +99,7 @@ async fn documents_api_three_step_pattern() {
         ..Default::default()
     };
     let entries = report
-        .list(auth.as_ref(), &filter, mdwf_core::CancelToken::new())
+        .list(auth.as_ref(), &filter, std::sync::Arc::new(mdwf_core::NoopProgress) as std::sync::Arc<dyn mdwf_core::ProgressCallback>, mdwf_core::CancelToken::new())
         .await
         .unwrap();
     assert_eq!(entries.len(), 2);
@@ -178,7 +178,7 @@ async fn documents_api_paginates_list() {
         ..Default::default()
     };
     let entries = report
-        .list(auth.as_ref(), &filter, mdwf_core::CancelToken::new())
+        .list(auth.as_ref(), &filter, std::sync::Arc::new(mdwf_core::NoopProgress) as std::sync::Arc<dyn mdwf_core::ProgressCallback>, mdwf_core::CancelToken::new())
         .await
         .unwrap();
     assert_eq!(entries.len(), 1);
@@ -192,7 +192,7 @@ async fn documents_api_paginates_list() {
         ..Default::default()
     };
     let entries_all = report
-        .list(auth.as_ref(), &filter_all, mdwf_core::CancelToken::new())
+        .list(auth.as_ref(), &filter_all, std::sync::Arc::new(mdwf_core::NoopProgress) as std::sync::Arc<dyn mdwf_core::ProgressCallback>, mdwf_core::CancelToken::new())
         .await
         .unwrap();
     assert_eq!(entries_all.len(), 2);
@@ -222,7 +222,7 @@ async fn categories_report_lists_categories() {
     let report = provider.report("wb.documents_categories").await.unwrap();
 
     let cats = report
-        .list(auth.as_ref(), &mdwf_core::DocumentFilter::default(), mdwf_core::CancelToken::new())
+        .list(auth.as_ref(), &mdwf_core::DocumentFilter::default(), std::sync::Arc::new(mdwf_core::NoopProgress) as std::sync::Arc<dyn mdwf_core::ProgressCallback>, mdwf_core::CancelToken::new())
         .await
         .unwrap();
     assert_eq!(cats.len(), 3);

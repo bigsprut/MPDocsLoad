@@ -427,6 +427,7 @@ impl Report for WbReport {
         &self,
         auth: &dyn mdwf_core::Authenticator,
         filter: &DocumentFilter,
+        _progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
         let json = self.fetch(auth, filter).await?;
@@ -665,6 +666,7 @@ impl Report for WbDocumentsReport {
         &self,
         auth: &dyn mdwf_core::Authenticator,
         filter: &DocumentFilter,
+        progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
         let docs_client = crate::documents::DocumentsClient::new(&self.client);
@@ -683,8 +685,14 @@ impl Report for WbDocumentsReport {
         // выгружаем все). Запросы идут через per-domain rate-limiter (1 req/10с burst 5).
         let ceiling = filter.limit; // None = без ограничения.
 
+        // Сигналим начало: пользователь видит, что процесс пошёл.
+        progress.report(mdwf_core::ProgressUpdate::message(
+            "Загрузка списка документов…",
+        ));
+
         let mut all: Vec<crate::documents::WbDocument> = Vec::new();
         let mut offset: u32 = 0;
+        let mut page_no: u32 = 0;
         for _ in 0..WB_DOCS_MAX_PAGES {
             // Если уже набрали ceiling — стоп.
             if let Some(max) = ceiling {
@@ -692,6 +700,7 @@ impl Report for WbDocumentsReport {
                     break;
                 }
             }
+            page_no = page_no.saturating_add(1);
             let params = crate::documents::ListDocumentsParams {
                 category: if category.is_empty() {
                     None
@@ -707,6 +716,42 @@ impl Report for WbDocumentsReport {
             let page = docs_client.list_documents(auth, &params).await?;
             let got = page.len();
             all.extend(page);
+            // Живой прогресс: сколько уже накоплено и какая страница.
+            // total известен только при заданном ceiling (limit пользователя);
+            // иначе fraction=None — индикатор «качается» без процента.
+            let total = ceiling.map(|m| u64::from(m.max(all.len() as u32)));
+            #[allow(clippy::cast_precision_loss)]
+            let fraction = total.map(|t| {
+                if t == 0 {
+                    1.0
+                } else {
+                    (all.len() as f64 / t as f64).clamp(0.0, 1.0)
+                }
+            });
+            // Сообщение: «Получено 150 документов, всего: 500, страница 4».
+            // Долю ceiling вычисляем отдельно, чтобы не вкладывать format!.
+            let total_suffix = match ceiling {
+                Some(max) => max.max(all.len() as u32).to_string(),
+                None => String::new(),
+            };
+            let msg = match ceiling {
+                Some(_) => format!(
+                    "Получено {got} {word}, всего: {total_suffix}, страница {page_no}",
+                    got = all.len(),
+                    word = num_words(all.len(), "документ", "документа", "документов"),
+                ),
+                None => format!(
+                    "Получено {got} {word}, страница {page_no}",
+                    got = all.len(),
+                    word = num_words(all.len(), "документ", "документа", "документов"),
+                ),
+            };
+            progress.report(mdwf_core::ProgressUpdate {
+                fraction,
+                message: msg,
+                current: Some(all.len() as u64),
+                total,
+            });
             // Неполная страница — это последняя (дока не возвращает total).
             if (got as u32) < WB_DOCS_PAGE_SIZE {
                 break;
@@ -797,6 +842,23 @@ struct DocMeta {
     extension: Option<String>,
 }
 
+/// Согласует слово с числом: одна/две/пять форм. Используется для человекочитаемых
+/// сообщений прогресса: num_words(1, "документ", "документа", "документов") → "документ",
+/// num_words(2, ...) → "документа", num_words(5, ...) → "документов".
+fn num_words(n: usize, one: &str, few: &str, many: &str) -> String {
+    let n = n as u64;
+    let last = n % 100;
+    let last_digit = n % 10;
+    let word = if last_digit == 1 && last != 11 {
+        one
+    } else if (2..=4).contains(&last_digit) && !(12..=14).contains(&last) {
+        few
+    } else {
+        many
+    };
+    word.to_string()
+}
+
 /// Отрезает расширение (последний сегмент после `.`) из имени файла, если оно
 /// похоже на настоящее расширение, а не на часть даты/числа. Правила для сегмента
 /// после последней точки: непустой, ≤ 5 символов, только ASCII-буквы/цифры, и
@@ -862,6 +924,7 @@ impl Report for WbCategoriesReport {
         &self,
         auth: &dyn mdwf_core::Authenticator,
         _filter: &DocumentFilter,
+        _progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
         let docs_client = crate::documents::DocumentsClient::new(&self.client);

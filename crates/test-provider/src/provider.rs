@@ -93,6 +93,7 @@ impl Report for TestReport {
         &self,
         _auth: &dyn Authenticator,
         filter: &DocumentFilter,
+        _progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
         // Генерируем N фейковых документов, зависящих от лимита фильтра.
@@ -290,7 +291,7 @@ mod tests {
             ..Default::default()
         };
         let entries = report
-            .list(auth.as_ref(), &filter, CancelToken::new())
+            .list(auth.as_ref(), &filter, std::sync::Arc::new(NoopProgress) as std::sync::Arc<dyn mdwf_core::ProgressCallback>, CancelToken::new())
             .await
             .unwrap();
         assert_eq!(entries.len(), 5);

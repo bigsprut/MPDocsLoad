@@ -140,6 +140,7 @@ pub trait Report: Send + Sync {
         &self,
         _auth: &dyn Authenticator,
         _filter: &DocumentFilter,
+        _progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
         Err(crate::error::CoreError::InvalidParameter(format!(

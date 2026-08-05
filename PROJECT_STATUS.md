@@ -296,6 +296,18 @@ pub struct DownloadResult {
   UI → `serviceName`. `strip_extension` отличает точку-расширение от точки-даты
   (сегмент ≤5 симв, ASCII-alphanumeric, есть буква) — иначе «.2026» в дате
   отрезалось бы ошибочно.
+- **Живой прогресс при загрузке списка документов** (сделано). Раньше при
+  пагинации WB (1 req/10с) пользователь видел статичный «Запрос списка документов…»
+  без понимания, идёт ли процесс и сколько ждать. Теперь:
+  - В трейт `Report::list` добавлен параметр `progress: ProgressCallbackRef`
+    (раньше прогресс был только у `download`). Все impl/callers обновлены
+    (Ozon, TestProvider, тесты используют `NoopProgress`).
+  - `WbDocumentsReport::list` шлёт `ProgressUpdate` на каждой странице:
+    «Получено 150 документов, всего: 500, страница 4» (со согласованием слов через
+    `num_words`), с `current`/`total`/`fraction` (fraction известен при заданном
+    `limit`, иначе None — индикатор «качается»).
+  - GUI: `ListDocuments` arm создаёт `ProgressForwarder` и передаёт в `list_documents`,
+    события `UiEvent::Progress` отображаются в статусбаре (уже было подключено).
 
 ### Не подтверждено первоисточником (может быть неверно)
 1. `returns-api.wildberries.ru` для claims — спека говорит `/api/v1/claims`, но в присланной доке этого раздела нет

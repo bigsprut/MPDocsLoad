@@ -448,6 +448,7 @@ impl Report for OzonReport {
         &self,
         auth: &dyn mdwf_core::Authenticator,
         filter: &DocumentFilter,
+        _progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
         let body = build_query_body(filter);

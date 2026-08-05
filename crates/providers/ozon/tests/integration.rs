@@ -82,6 +82,7 @@ async fn browsable_list_extracts_entries() {
         .list(
             auth.as_ref(),
             &mdwf_core::DocumentFilter::default(),
+            std::sync::Arc::new(mdwf_core::NoopProgress) as std::sync::Arc<dyn mdwf_core::ProgressCallback>,
             mdwf_core::CancelToken::new(),
         )
         .await

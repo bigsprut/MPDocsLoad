@@ -234,7 +234,10 @@ async fn run_command_loop(
                     .into_iter()
                     .find(|p| p.id() == provider_id)
                     .and_then(|_| None::<()>); // отфильтруем ниже
-                let outcome = list_documents(&domain, &provider_id, &profile_name, &report_type, filter, cancel)
+                let progress = std::sync::Arc::new(ProgressForwarder {
+                    fwd: fwd.clone(),
+                }) as std::sync::Arc<dyn mdwf_core::ProgressCallback>;
+                let outcome = list_documents(&domain, &provider_id, &profile_name, &report_type, filter, progress, cancel)
                     .await;
                 fwd.forward(UiEvent::DocumentsListed(outcome));
             }
@@ -358,6 +361,7 @@ async fn load_document_categories(
         .list(
             auth.as_ref(),
             &mdwf_core::DocumentFilter::default(),
+            std::sync::Arc::new(mdwf_core::NoopProgress) as std::sync::Arc<dyn mdwf_core::ProgressCallback>,
             mdwf_core::CancelToken::new(),
         )
         .await
@@ -410,6 +414,7 @@ async fn list_documents(
     profile_name: &str,
     report_type: &str,
     filter: mdwf_core::DocumentFilter,
+    progress: std::sync::Arc<dyn mdwf_core::ProgressCallback>,
     cancel: CancellationToken,
 ) -> Result<Vec<mdwf_core::DocumentEntry>, String> {
     let profile = read_profile(domain, profile_name)?;
@@ -423,7 +428,7 @@ async fn list_documents(
         .map_err(|e| e.to_string())?;
     let report = provider.report(report_type).await.map_err(|e| e.to_string())?;
     report
-        .list(auth.as_ref(), &filter, cancel)
+        .list(auth.as_ref(), &filter, progress, cancel)
         .await
         .map_err(|e| e.to_string())
 }
