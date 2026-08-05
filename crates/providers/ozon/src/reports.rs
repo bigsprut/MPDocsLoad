@@ -1,4 +1,4 @@
-//! Описания отчётов Ozon (спец. §2.2.1 — 19 отчётов через API) + out-of-scope.
+//! Описания отчётов Ozon (спец. §2.2.1 — 16 отчётов через API) + out-of-scope.
 
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use mdwf_core::capabilities::{AuthField, AuthFieldKind, AuthType};
 use crate::client::OzonHttpClient;
 use crate::date_format;
 
-/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 19 отчётов.
+/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 16 отчётов.
 #[must_use]
 pub fn capabilities() -> Capabilities {
     Capabilities {
@@ -48,7 +48,7 @@ pub fn capabilities() -> Capabilities {
     }
 }
 
-/// Описания всех 19 отчётов Ozon (спец. §2.2.1). «Справочник типов начислений»
+/// Описания всех 16 отчётов Ozon (спец. §2.2.1). «Справочник типов начислений»
 /// удалён — это служебный метод, а не выгрузка для пользователя.
 #[must_use]
 pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
@@ -142,12 +142,6 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
         desc_period(
             "ozon.b2b_sales",
             "Продажи юрлицам (PDF)",
-            ReportCategory::Documents,
-            &[param_date_range(true)],
-        ),
-        desc_browsable(
-            "ozon.b2b_sales_json",
-            "Продажи юрлицам (JSON)",
             ReportCategory::Documents,
             &[param_date_range(true)],
         ),
@@ -337,13 +331,6 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             ReportCategory::Documents,
             client,
             "/v1/finance/document-b2b-sales",
-        )),
-        "ozon.b2b_sales_json" => Arc::new(OzonReport::browsable(
-            "ozon.b2b_sales_json",
-            "Продажи юрлицам (JSON)",
-            ReportCategory::Documents,
-            client,
-            "/v1/finance/document-b2b-sales/json",
         )),
         "ozon.mutual_settlement" => Arc::new(OzonAsyncReport::new(
             "ozon.mutual_settlement",
@@ -700,11 +687,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reports_count_is_17() {
+    fn reports_count_is_16() {
         let caps = capabilities();
-        assert_eq!(caps.reports.len(), 17, "got {} reports", caps.reports.len());
+        assert_eq!(caps.reports.len(), 16, "got {} reports", caps.reports.len());
         // accrual_types удалён — это служебный справочник, не выгрузка.
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_types"));
+        // b2b_sales_json удалён — дублёр b2b_sales (PDF).
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.b2b_sales_json"));
     }
 
     #[test]

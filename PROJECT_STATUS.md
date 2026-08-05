@@ -39,7 +39,7 @@ crates/
 ├── scheduler/         — cron + retry + автозапуск Windows (HKCU Run)
 ├── config/            — config.toml + пути (%APPDATA%\mdwf)
 ├── test-provider/     — TestProvider mock
-├── providers/ozon/    — Ozon Seller API (17 отчётов; accrual_types удалён)
+├── providers/ozon/    — Ozon Seller API (16 отчётов; accrual_types и b2b_sales_json удалены)
 ├── providers/wildberries/ — WB OpenAPI (14 отчётов)
 ├── cli/               — mdwf CLI (clap)
 ├── gui/               — mdwf-gui (GTK4 + libadwaita)
@@ -195,7 +195,7 @@ WB (зеркало `github.com/eslazarev/wildberries-sdk`, т.к. `dev.wildberri
 - Заголовки `Client-Id` + `Api-Key`
 - TTL ключа: 6 месяцев (дока), в спеке 180 дней
 
-### Эндпоинты Ozon (17 отчётов; accrual_types удалён как служебный)
+### Эндпоинты Ozon (16 отчётов; accrual_types и b2b_sales_json удалены)
 
 **Health-check:** POST /v1/finance/balance с `{date_from, date_to}` (макс 30 дней)
 
@@ -207,7 +207,7 @@ WB (зеркало `github.com/eslazarev/wildberries-sdk`, т.к. `dev.wildberri
 
 **Реализован класс OzonAsyncReport** (3 шага: запрос→code→/v1/report/info→скачать XLSX)
 
-**b2b_sales_json** — отдаёт JSON напрямую (без code).
+~~**b2b_sales_json** — отдаёт JSON напрямую (без code).~~ (удалён)
 
 ---
 
