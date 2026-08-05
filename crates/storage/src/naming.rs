@@ -208,6 +208,27 @@ mod tests {
         );
     }
 
+    /// Реальное имя из ответа WB /download (fileName) — с №, пробелами и датой
+    /// через точки. Гарантирует, что normalize_name не искажает дату (напр. не
+    /// схлопывает «26.07.2026» → «26.072016») и не вырезает №.
+    /// Регрессия: баг, когда {doc_id} отсутствовал в шаблоне config.toml.
+    #[test]
+    fn wb_real_filename_with_date_dots() {
+        let ctx = FileNameContext {
+            provider_id: "wildberries",
+            profile_name: "wb1",
+            report_type: "wb.documents",
+            period: None,
+            extension: "zip",
+            document_id: Some("УПД №072600203230 от 26.07.2026"),
+            document_date: None,
+        };
+        assert_eq!(
+            ctx.render("{provider}_{profile}_{report}_{doc_id}_{period}.{ext}"),
+            "wildberries_wb1_wb.documents_УПД №072600203230 от 26.07.2026.zip"
+        );
+    }
+
     /// Все опциональные поля None → unknown-сегменты вырезаются, остаётся
     /// безопасное имя без мусора.
     #[test]

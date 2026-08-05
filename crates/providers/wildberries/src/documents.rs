@@ -213,6 +213,13 @@ impl<'a> DocumentsClient<'a> {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .filter(|s| !s.is_empty());
+        debug!(
+            service_name,
+            extension = %ext,
+            file_name = ?file_name.as_deref(),
+            bytes = bytes.len(),
+            "WB documents: downloaded",
+        );
         Ok(WbDownloadedDoc {
             bytes,
             extension: ext,
