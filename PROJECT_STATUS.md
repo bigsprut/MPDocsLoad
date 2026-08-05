@@ -39,7 +39,7 @@ crates/
 ├── scheduler/         — cron + retry + автозапуск Windows (HKCU Run)
 ├── config/            — config.toml + пути (%APPDATA%\mdwf)
 ├── test-provider/     — TestProvider mock
-├── providers/ozon/    — Ozon Seller API (16 отчётов; accrual_types и b2b_sales_json удалены)
+├── providers/ozon/    — Ozon Seller API (13 отчётов; accrual_types, b2b_sales_json, cash_flow, analytics, act_discrepancy удалены)
 ├── providers/wildberries/ — WB OpenAPI (14 отчётов)
 ├── cli/               — mdwf CLI (clap)
 ├── gui/               — mdwf-gui (GTK4 + libadwaita)
@@ -195,7 +195,7 @@ WB (зеркало `github.com/eslazarev/wildberries-sdk`, т.к. `dev.wildberri
 - Заголовки `Client-Id` + `Api-Key`
 - TTL ключа: 6 месяцев (дока), в спеке 180 дней
 
-### Эндпоинты Ozon (16 отчётов; accrual_types и b2b_sales_json удалены)
+### Эндпоинты Ozon (13 отчётов; сверено с docs.ozon.ru — accrual_types/b2b_sales_json/cash_flow/analytics/act_discrepancy удалены)
 
 **Health-check:** POST /v1/finance/balance с `{date_from, date_to}` (макс 30 дней)
 
@@ -310,23 +310,27 @@ pub struct DownloadResult {
     события `UiEvent::Progress` отображаются в статусбаре (уже было подключено).
 - **Удалён `ozon.accrual_types` (Справочник типов начислений)** (сделано). Был в ТЗ
   §2.2.1 как Beta, но это служебный метод (справочник), а не выгрузка для пользователя —
-  удалён из дескрипторов и фабрики Ozon. Теперь 17 отчётов Ozon (было 18). Тест
-  `reports_count_is_17` проверяет число и отсутствие `accrual_types`.
+  удалён из дескрипторов и фабрики Ozon.
 - **Тела запросов Ozon приведены в соответствие с официальным API** (сделано).
-  Сверено с `swagger.json` API v2.1 (зеркало `miilv/ozon-seller-api-skill`).
+  **Сверено с первоисточником `docs.ozon.ru`** (текст документации предоставлен
+  пользователем — сам сайт за антибот-челленджем, прямого доступа из среды нет).
   Раньше `build_download_body` слала всем отчётам одинаковое тело (`month`="YYYY-MM"
   строкой), что вызывало `400 Bad Request: invalid int32 field month` для
   `ozon.realization`. Теперь `build_download_body(type_id, params)` строит тело
-  по правилам API для каждого отчёта:
+  по правилам API для каждого отчёта (сверено постатейно):
   - `realization`, `realization_posting` → `month`+`year` как **integer**
     (парсинг YYYY-MM через `parse_year_month`).
   - `realization_by_day` → `day`+`month`+`year` как integer (парсинг YYYY-MM-DD).
   - `balance`, `buyout` → `date_from`+`date_to` как YYYY-MM-DD.
   - async (compensation/decompensation/b2b_sales/mutual_settlement) → `date` YYYY-MM.
-  - прочие (cash_flow, analytics, act_discrepancy) — `date` как есть; требуют
-    сложных схем и обрабатываются отдельно.
-  6 юнит-тестов `build_body_*` покрывают каждый кейс. Источник: `swagger.json`
-  Ozon API v2.1 (через агентов, т.к. docs.ozon.ru за антиботом).
+  - browsable (transaction_list и т.д.) — без периода, тело из params.values.
+  6 юнит-тестов `build_body_*` покрывают каждый кейс.
+- **Удалены сложные отчёты Ozon** (сделано): `cash_flow` (требует вложенный объект
+  периода + пагинацию page/page_size), `analytics` (обязательные metrics/dimension —
+  нужен UI выбора), `act_discrepancy` (требует carriage_id, а не период). Сверено с
+  `docs.ozon.ru` — эти эндпоинты не соответствуют простому period/date интерфейсу.
+  Теперь **13 отчётов Ozon** (было 18 → accrual_types, b2b_sales_json, cash_flow,
+  analytics, act_discrepancy удалены). Тест `reports_count_is_13` фиксирует число.
 
 ### Не подтверждено первоисточником (может быть неверно)
 1. `returns-api.wildberries.ru` для claims — спека говорит `/api/v1/claims`, но в присланной доке этого раздела нет

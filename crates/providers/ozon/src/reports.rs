@@ -1,4 +1,4 @@
-//! Описания отчётов Ozon (спец. §2.2.1 — 16 отчётов через API) + out-of-scope.
+//! Описания отчётов Ozon (спец. §2.2.1 — 13 отчётов через API) + out-of-scope.
 
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use mdwf_core::capabilities::{AuthField, AuthFieldKind, AuthType};
 use crate::client::OzonHttpClient;
 use crate::date_format;
 
-/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 16 отчётов.
+/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 13 отчётов.
 #[must_use]
 pub fn capabilities() -> Capabilities {
     Capabilities {
@@ -48,8 +48,9 @@ pub fn capabilities() -> Capabilities {
     }
 }
 
-/// Описания всех 16 отчётов Ozon (спец. §2.2.1). «Справочник типов начислений»
-/// удалён — это служебный метод, а не выгрузка для пользователя.
+/// Описания всех 13 отчётов Ozon (спец. §2.2.1). Удалены: «Справочник типов
+/// начислений» (служебный), b2b_sales_json (дублёр PDF), cash_flow/analytics/
+/// act_discrepancy (требуют сложных схем/UI, сверено с docs.ozon.ru).
 #[must_use]
 pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
     vec![
@@ -83,24 +84,6 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "Баланс",
             ReportCategory::Finance,
             &[],
-        ),
-        desc_period(
-            "ozon.cash_flow",
-            "Финансовый отчёт (ДДС)",
-            ReportCategory::Finance,
-            &[param_date_range(true)],
-        ),
-        desc_period(
-            "ozon.act_discrepancy",
-            "Акт о расхождениях FBS (PDF)",
-            ReportCategory::Documents,
-            &[param_date_range(true)],
-        ),
-        desc_period(
-            "ozon.analytics",
-            "Аналитика (Premium Plus)",
-            ReportCategory::Analytics,
-            &[param_date_range(true)],
         ),
         // --- Browsable-режим (список → выбор → скачать) ---
         desc_browsable(
@@ -260,27 +243,6 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             ReportCategory::Finance,
             client,
             "/v1/finance/balance",
-        )),
-        "ozon.cash_flow" => Arc::new(OzonReport::period(
-            "ozon.cash_flow",
-            "Финансовый отчёт (ДДС)",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/cash-flow-statement/list",
-        )),
-        "ozon.act_discrepancy" => Arc::new(OzonReport::period(
-            "ozon.act_discrepancy",
-            "Акт о расхождениях FBS (PDF)",
-            ReportCategory::Documents,
-            client,
-            "/v1/carriage/act-discrepancy/pdf",
-        )),
-        "ozon.analytics" => Arc::new(OzonReport::period(
-            "ozon.analytics",
-            "Аналитика (Premium Plus)",
-            ReportCategory::Analytics,
-            client,
-            "/v1/analytics/data",
         )),
         // Browsable-режим.
         "ozon.transaction_list" => Arc::new(OzonReport::browsable(
@@ -525,12 +487,8 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
             }
         }
         _ => {
-            // Прочие отчёты (cash_flow, analytics, act_discrepancy): собираем
-            // body из params.values как есть — эти отчёты требуют сложных схем
-            // и обрабатываются отдельно. period (любой формат) → date.
-            if let Some(p) = period {
-                body["date"] = json!(p);
-            }
+            // Browsable-отчёты (transaction_list, transaction_totals, accrual_*):
+            // период не используется, тело собирается из params.values ниже.
         }
     }
 
@@ -817,13 +775,17 @@ mod tests {
     }
 
     #[test]
-    fn reports_count_is_16() {
+    fn reports_count_is_13() {
         let caps = capabilities();
-        assert_eq!(caps.reports.len(), 16, "got {} reports", caps.reports.len());
+        assert_eq!(caps.reports.len(), 13, "got {} reports", caps.reports.len());
         // accrual_types удалён — это служебный справочник, не выгрузка.
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_types"));
         // b2b_sales_json удалён — дублёр b2b_sales (PDF).
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.b2b_sales_json"));
+        // cash_flow/analytics/act_discrepancy удалены — требуют сложных схем/UI.
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.cash_flow"));
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.analytics"));
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.act_discrepancy"));
     }
 
     #[test]
