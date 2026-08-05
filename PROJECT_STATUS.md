@@ -286,6 +286,16 @@ pub struct DownloadResult {
   выгружаем все). Страховочный потолок — 200 страниц (10 000 документов).
   Запросы идут через per-domain rate-limiter (1 req/10с burst 5). Интеграционный
   тест `documents_api_paginates_list` проверяет truncate по ceiling и полную выгрузку.
+- **Имя файла на диске = fileName из ответа /download** (сделано). Поле `name`
+  ответа `/documents/list` у WB оказалось пустым/общим (напр. «Акт»), поэтому
+  файлы сохранялись как `wildberries_wb1_wb.documents.zip` — без названия документа.
+  Реальное осмысленное имя WB сообщает в `fileName` ответа `/download`
+  (это то, что лежит внутри zip: «Акт №072600203230 от 26.07.2026.pdf»).
+  Теперь `WbDocumentsReport::download` берёт `source_id` = `fileName`
+  (с отрезанным расширением через `strip_extension`), fallback: `name` из меты
+  UI → `serviceName`. `strip_extension` отличает точку-расширение от точки-даты
+  (сегмент ≤5 симв, ASCII-alphanumeric, есть буква) — иначе «.2026» в дате
+  отрезалось бы ошибочно.
 
 ### Не подтверждено первоисточником (может быть неверно)
 1. `returns-api.wildberries.ru` для claims — спека говорит `/api/v1/claims`, но в присланной доке этого раздела нет

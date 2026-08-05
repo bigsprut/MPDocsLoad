@@ -760,9 +760,19 @@ impl Report for WbDocumentsReport {
                 .filter(|s| !s.is_empty())
                 .unwrap_or("zip");
             let downloaded = docs_client.download_one(auth, id, requested_ext).await?;
-            // source_id = человекочитаемое имя (поле name из /list), если есть —
-            // оно станет базовым именем файла на диске ({doc_id}).
-            let source_id = meta.get(id).and_then(|m| m.name.clone());
+            // Имя файла на диске: приоритет — fileName из ответа /download
+            // (WB сам сообщает осмысленное имя, напр. «Акт №072600203230 от
+            // 26.07.2026.pdf» — это то, что лежит внутри zip). Иначе — name
+            // из меты UI (поле name ответа /list), иначе serviceName.
+            // Расширение из fileName отрезаем: оно дублируется через {ext}
+            // шаблона, иначе получился бы «...pdf.zip».
+            let source_id = downloaded
+                .file_name
+                .as_deref()
+                .map(strip_extension)
+                .filter(|s| !s.is_empty())
+                .or_else(|| meta.get(id).and_then(|m| m.name.clone()))
+                .unwrap_or_else(|| id.to_string());
             let mut f = DownloadedFile::with_content(
                 // file_name здесь не важен — FileStore всё равно пересоберёт имя
                 // из шаблона; оставим serviceName для отладки.
@@ -770,7 +780,7 @@ impl Report for WbDocumentsReport {
                 downloaded.extension,
                 downloaded.bytes,
             );
-            f.source_id = source_id;
+            f.source_id = Some(source_id);
             files.push(f);
         }
         Ok(files)
@@ -785,6 +795,31 @@ struct DocMeta {
     name: Option<String>,
     #[serde(default)]
     extension: Option<String>,
+}
+
+/// Отрезает расширение (последний сегмент после `.`) из имени файла, если оно
+/// похоже на настоящее расширение, а не на часть даты/числа. Правила для сегмента
+/// после последней точки: непустой, ≤ 5 символов, только ASCII-буквы/цифры, и
+/// хотя бы одна буква (чтобы не отрезать «.2026» из даты или «.0» из числа).
+/// «Акт №123 от 26.07.2026.pdf» → «Акт №123 от 26.07.2026»,
+/// «УПД №1001 от 01.07.2026» (без расширения) → без изменений.
+/// Используется, чтобы не дублировать расширение: оно добавляется шаблоном
+/// имени через {ext}, иначе получился бы «…pdf.zip».
+fn strip_extension(name: &str) -> String {
+    let Some(pos) = name.rfind('.') else { return name.to_string(); };
+    if pos == 0 {
+        return name.to_string();
+    }
+    let ext = &name[pos + 1..];
+    let looks_like_ext = !ext.is_empty()
+        && ext.len() <= 5
+        && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        && ext.chars().any(|c| c.is_ascii_alphabetic());
+    if looks_like_ext {
+        name[..pos].to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 // =========================================================================
@@ -939,5 +974,27 @@ mod tests {
         let entries = extract_entries(&json, ResponseShape::DataReports, "wb.deductions");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "123");
+    }
+
+    #[test]
+    fn strip_extension_basic() {
+        assert_eq!(strip_extension("Акт №123 от 26.07.2026.pdf"), "Акт №123 от 26.07.2026");
+        assert_eq!(strip_extension("doc.xml"), "doc");
+    }
+
+    #[test]
+    fn strip_extension_no_extension() {
+        // Нет точки — имя без изменений.
+        assert_eq!(strip_extension("УПД №1001 от 01.07.2026"), "УПД №1001 от 01.07.2026");
+        // Точка в начале (скрытый файл) — не считаем расширением.
+        assert_eq!(strip_extension(".gitignore"), ".gitignore");
+        // Пустая строка.
+        assert_eq!(strip_extension(""), "");
+    }
+
+    #[test]
+    fn strip_extension_multiple_dots() {
+        // Отрезается только последний сегмент после последней точки.
+        assert_eq!(strip_extension("archive.tar.gz"), "archive.tar");
     }
 }

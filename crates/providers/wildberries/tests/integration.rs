@@ -76,12 +76,14 @@ async fn documents_api_three_step_pattern() {
 
     // Шаг 3: /download (GET, поштучно) возвращает base64-контент.
     // Формат ответа: data.{fileName, extension, document(base64)}.
+    // fileName — осмысленное имя от WB (как в реальном ответе, напр.
+    // «Акт №...pdf»). Именно оно становится базой имени файла на диске.
     let content = b"<upd>test</upd>";
     let b64 = base64::engine::general_purpose::STANDARD.encode(content);
     Mock::given(method("GET"))
         .and(path("/api/v1/documents/download"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "data": {"fileName": "upd.xml", "extension": "xml", "document": b64}
+            "data": {"fileName": "УПД №1001 от 01.07.2026.xml", "extension": "xml", "document": b64}
         })))
         .mount(&server)
         .await;
@@ -124,8 +126,9 @@ async fn documents_api_three_step_pattern() {
     assert_eq!(files.len(), 2);
     // Реальное расширение из ответа WB.
     assert_eq!(files[0].extension, "xml");
-    // source_id = человекочитаемое имя (для имени файла на диске).
-    assert_eq!(files[0].source_id.as_deref(), Some("УПД №1001"));
+    // source_id = fileName из ответа /download (приоритет над name из меты UI),
+    // с отрезанным расширением — оно добавляется шаблоном через {ext}.
+    assert_eq!(files[0].source_id.as_deref(), Some("УПД №1001 от 01.07.2026"));
     // Проверяем, что контент декодирован правильно.
     assert_eq!(files[0].content.as_ref().unwrap(), content);
 }
