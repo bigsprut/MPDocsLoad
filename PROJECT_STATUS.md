@@ -39,7 +39,7 @@ crates/
 ├── scheduler/         — cron + retry + автозапуск Windows (HKCU Run)
 ├── config/            — config.toml + пути (%APPDATA%\mdwf)
 ├── test-provider/     — TestProvider mock
-├── providers/ozon/    — Ozon Seller API (18 отчётов)
+├── providers/ozon/    — Ozon Seller API (17 отчётов; accrual_types удалён)
 ├── providers/wildberries/ — WB OpenAPI (14 отчётов)
 ├── cli/               — mdwf CLI (clap)
 ├── gui/               — mdwf-gui (GTK4 + libadwaita)
@@ -195,7 +195,7 @@ WB (зеркало `github.com/eslazarev/wildberries-sdk`, т.к. `dev.wildberri
 - Заголовки `Client-Id` + `Api-Key`
 - TTL ключа: 6 месяцев (дока), в спеке 180 дней
 
-### Эндпоинты Ozon (18 отчётов по спеке §2.2.1)
+### Эндпоинты Ozon (17 отчётов; accrual_types удалён как служебный)
 
 **Health-check:** POST /v1/finance/balance с `{date_from, date_to}` (макс 30 дней)
 
@@ -308,6 +308,10 @@ pub struct DownloadResult {
     `limit`, иначе None — индикатор «качается»).
   - GUI: `ListDocuments` arm создаёт `ProgressForwarder` и передаёт в `list_documents`,
     события `UiEvent::Progress` отображаются в статусбаре (уже было подключено).
+- **Удалён `ozon.accrual_types` (Справочник типов начислений)** (сделано). Был в ТЗ
+  §2.2.1 как Beta, но это служебный метод (справочник), а не выгрузка для пользователя —
+  удалён из дескрипторов и фабрики Ozon. Теперь 17 отчётов Ozon (было 18). Тест
+  `reports_count_is_17` проверяет число и отсутствие `accrual_types`.
 
 ### Не подтверждено первоисточником (может быть неверно)
 1. `returns-api.wildberries.ru` для claims — спека говорит `/api/v1/claims`, но в присланной доке этого раздела нет

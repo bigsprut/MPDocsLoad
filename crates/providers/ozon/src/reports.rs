@@ -1,4 +1,4 @@
-//! Описания отчётов Ozon (спец. §2.2.1 — 20 отчётов через API) + out-of-scope.
+//! Описания отчётов Ozon (спец. §2.2.1 — 19 отчётов через API) + out-of-scope.
 
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use mdwf_core::capabilities::{AuthField, AuthFieldKind, AuthType};
 use crate::client::OzonHttpClient;
 use crate::date_format;
 
-/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 20 отчётов.
+/// Возвращает Capabilities Ozon: тип авторизации + поля формы + 19 отчётов.
 #[must_use]
 pub fn capabilities() -> Capabilities {
     Capabilities {
@@ -48,7 +48,8 @@ pub fn capabilities() -> Capabilities {
     }
 }
 
-/// Описания всех 20 отчётов Ozon (спец. §2.2.1).
+/// Описания всех 19 отчётов Ozon (спец. §2.2.1). «Справочник типов начислений»
+/// удалён — это служебный метод, а не выгрузка для пользователя.
 #[must_use]
 pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
     vec![
@@ -125,12 +126,6 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "Начисления по дням",
             ReportCategory::Finance,
             &[param_date_range(true)],
-        ),
-        desc_browsable(
-            "ozon.accrual_types",
-            "Справочник типов начислений",
-            ReportCategory::Finance,
-            &[],
         ),
         desc_period(
             "ozon.compensation",
@@ -321,13 +316,6 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             ReportCategory::Finance,
             client,
             "/v1/finance/accrual/by-day",
-        )),
-        "ozon.accrual_types" => Arc::new(OzonReport::browsable(
-            "ozon.accrual_types",
-            "Справочник типов начислений",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/accrual/types",
         )),
         "ozon.compensation" => Arc::new(OzonAsyncReport::new(
             "ozon.compensation",
@@ -712,9 +700,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reports_count_is_18_active() {
+    fn reports_count_is_17() {
         let caps = capabilities();
-        assert!(caps.reports.len() >= 18, "got {} reports", caps.reports.len());
+        assert_eq!(caps.reports.len(), 17, "got {} reports", caps.reports.len());
+        // accrual_types удалён — это служебный справочник, не выгрузка.
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_types"));
     }
 
     #[test]
