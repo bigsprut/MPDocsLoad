@@ -329,6 +329,7 @@ pub struct DownloadResult {
 - fix(reports): перерисовка списка + авто-загрузка
 - feat: автосохранение состояния (ui_state SQLite)
 - feat: календарь (MenuButton + Calendar)
+- feat(gui): выбор месяца двумя combo (Январь…Декабрь + год) вместо текстового поля YYYY-MM; при смене месяца автообновление диапазона (1-е число .. сегодня/конец месяца)
 - fix(wb): домен api.wildberries.ru → finance-api (NXDOMAIN)
 - fix(wb): полная синхронизация с докой (POST для финансов, форматы ответов)
 - fix(ozon): health-check date_from/date_to + async code→/v1/report/info→file
