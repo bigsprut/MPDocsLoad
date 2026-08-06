@@ -16,7 +16,10 @@ pub mod error;
 pub mod file_store;
 pub mod naming;
 
-pub use catalog::{Catalog, DownloadRecord, NewDownload, NewSchedule, SavedFilter, ScheduleRecord, SCHEMA_VERSION};
+pub use catalog::{
+    Catalog, DownloadRecord, DownloadedDocInfo, NewDownload, NewSchedule, SavedFilter,
+    ScheduleRecord, SCHEMA_VERSION,
+};
 pub use dedup::sha256_hex;
 pub use error::{StorageError, StorageResult};
 pub use file_store::{FileStore, FileStoreConfig, FolderStructure};

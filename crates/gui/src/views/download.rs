@@ -6,6 +6,7 @@
 //!  * Period: период → «Скачать по периоду».
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use chrono::{Datelike, NaiveDate};
@@ -16,6 +17,7 @@ use gtk4::{
 };
 
 use mdwf_core::{DocumentEntry, DocumentFilter, DownloadedFile, ReportParams};
+use mdwf_storage::DownloadedDocInfo;
 
 use crate::channels::{
     ActiveShop, CommandSender, DocumentCategoryInfo, DocumentSel, DownloadState, ReportInfo,
@@ -25,6 +27,9 @@ thread_local! {
     static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
     static DOCS: Rc<RefCell<Vec<DocumentEntry>>> = Rc::new(RefCell::new(Vec::new()));
     static CHECKS: Rc<RefCell<Vec<(DocumentSel, CheckButton)>>> = Rc::new(RefCell::new(Vec::new()));
+    /// Скачанные документы активного магазина+отчёта (document_id → info).
+    /// Заполняется из UiEvent::DownloadsListed; используется для значка «уже загружен».
+    static DOWNLOADED: Rc<RefCell<HashMap<String, DownloadedDocInfo>>> = Rc::new(RefCell::new(HashMap::new()));
     // Командный канал (для авто-запросов при смене выбора).
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
     /// Активный магазин (из вкладки «Магазин») — единый источник правды выбора.
@@ -866,8 +871,50 @@ pub fn on_documents_listed(res: &Result<Vec<DocumentEntry>, String>) {
             DOCS.with(|d| *d.borrow_mut() = docs.clone());
             render_list(docs);
             notify(&format!("Получено документов: {}", docs.len()));
+            // Запрашиваем статус «уже загружен» для активного магазина+отчёта.
+            // (только для Browsable-отчётов со списком документов.)
+            request_downloads_status();
         }
     }
+}
+
+/// Обработчик: список скачанных документов получен (для значка «уже загружен»).
+/// Сохраняет в DOWNLOADED (если report_type совпадает с активным) и перерисовывает
+/// список, чтобы показать/скрыть значки.
+pub fn on_downloads_listed(report_type: &str, docs: Vec<DownloadedDocInfo>) {
+    // Защита от гонки: применяем только если report_type совпадает с активным.
+    let active_matches = current_report_type().is_some_and(|rt| rt == report_type);
+    if !active_matches {
+        return;
+    }
+    DOWNLOADED.with(|d| {
+        let mut map = d.borrow_mut();
+        map.clear();
+        for info in &docs {
+            map.insert(info.document_id.clone(), info.clone());
+        }
+    });
+    // Перерисовываем список, чтобы отразить значки.
+    let docs = DOCS.with(|d| d.borrow().clone());
+    render_list(&docs);
+}
+
+/// Запрашивает у доменного слоя список уже скачанных документов для активного
+/// магазина и выбранного отчёта. Ответ придёт в on_downloads_listed.
+fn request_downloads_status() {
+    let Some((_, profile_name)) = active_target() else {
+        return;
+    };
+    let Some(report_type) = current_report_type() else {
+        return;
+    };
+    let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
+        return;
+    };
+    cs.send(crate::channels::UiCommand::ListDownloads {
+        profile_name,
+        report_type,
+    });
 }
 
 fn render_list(docs: &[DocumentEntry]) {
@@ -891,11 +938,13 @@ fn render_list(docs: &[DocumentEntry]) {
         header.set_margin_end(8);
         header.set_margin_top(4);
         header.set_margin_bottom(4);
-        header.append(&Label::builder().label("").width_chars(3).build());
-        header.append(&Label::builder().label("Имя").width_chars(40).xalign(0.0).build());
+        header.append(&Label::builder().label("").width_chars(3).build()); // чекбокс
+        header.append(&Label::builder().label("").width_chars(3).build()); // значок статуса
+        header.append(&Label::builder().label("Имя").width_chars(36).xalign(0.0).build());
         header.append(&Label::builder().label("Дата").width_chars(12).xalign(0.0).build());
-        header.append(&Label::builder().label("Форматы").width_chars(18).xalign(0.0).build());
+        header.append(&Label::builder().label("Форматы").width_chars(16).xalign(0.0).build());
         header.append(&Label::builder().label("Размер").width_chars(10).xalign(0.0).build());
+        header.append(&Label::builder().label("Действия").width_chars(16).xalign(0.0).build());
         list_box.append(&header);
 
         for doc in docs {
@@ -908,13 +957,72 @@ fn render_list(docs: &[DocumentEntry]) {
 
             let cb = CheckButton::new();
             row.append(&cb);
-            row.append(&Label::builder().label(&doc.display_name).width_chars(40).xalign(0.0).ellipsize(gtk4::pango::EllipsizeMode::End).build());
+
+            // Значок «уже загружен»: если document_id есть в DOWNLOADED — зелёный ✓.
+            let downloaded_info = DOWNLOADED.with(|d| d.borrow().get(&doc.id).cloned());
+            let status_label = if let Some(info) = &downloaded_info {
+                let date = info.downloaded_at.format("%Y-%m-%d %H:%M").to_string();
+                let lbl = Label::builder()
+                    .label("✓")
+                    .css_classes(["success"])
+                    .tooltip_text(format!("Скачан {date}:\n{}", info.file_path).as_str())
+                    .build();
+                lbl
+            } else {
+                Label::builder().label("").width_chars(3).build()
+            };
+            row.append(&status_label);
+
+            row.append(&Label::builder().label(&doc.display_name).width_chars(36).xalign(0.0).ellipsize(gtk4::pango::EllipsizeMode::End).build());
             let date_str = doc.date.map(|d| d.to_string()).unwrap_or_default();
             row.append(&Label::builder().label(&date_str).width_chars(12).xalign(0.0).build());
             let exts = doc.extensions.join(", ");
-            row.append(&Label::builder().label(&exts).width_chars(18).xalign(0.0).build());
+            row.append(&Label::builder().label(&exts).width_chars(16).xalign(0.0).build());
             let size = doc.size_hint.map(human_size).unwrap_or_default();
             row.append(&Label::builder().label(&size).width_chars(10).xalign(0.0).build());
+
+            // Действия: «📂 Открыть» (если уже скачан) + «↻ Перекачать».
+            let actions_box = GtkBox::new(Orientation::Horizontal, 4);
+            if let Some(info) = &downloaded_info {
+                let path = info.file_path.clone();
+                let open_btn = Button::builder()
+                    .label("📂")
+                    .tooltip_text("Открыть файл")
+                    .build();
+                open_btn.connect_clicked(move |_| {
+                    let _ = open_file(&path);
+                });
+                actions_box.append(&open_btn);
+            }
+            // Перекачать — переотправить Download с одним документом.
+            let sel = DocumentSel {
+                id: doc.id.clone(),
+                name: Some(doc.display_name.clone()),
+                extension: doc.extensions.first().cloned(),
+            };
+            let redownload_btn = Button::builder()
+                .label("↻")
+                .tooltip_text("Перекачать (с заменой)")
+                .build();
+            redownload_btn.connect_clicked(move |_| {
+                let Some((pid, pname, rtype)) = current_target() else {
+                    notify("Магазин или отчёт не выбраны.");
+                    return;
+                };
+                let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
+                    return;
+                };
+                cs.send(crate::channels::UiCommand::Download {
+                    provider_id: pid,
+                    profile_name: pname,
+                    report_type: rtype,
+                    documents: vec![sel.clone()],
+                    params: ReportParams::new(),
+                });
+                notify("Перекачивание документа…");
+            });
+            actions_box.append(&redownload_btn);
+            row.append(&actions_box);
 
             CHECKS.with(|c| {
                 c.borrow_mut().push((
@@ -1007,6 +1115,29 @@ fn open_folder(path: &str) -> std::io::Result<()> {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = path;
+    }
+    Ok(())
+}
+
+/// Открывает файл ассоциированным приложением (напр. Excel — для .xlsx).
+/// Если файл не существует — возвращает ошибку (UI предложит «Перекачать»).
+fn open_file(path: &str) -> std::io::Result<()> {
+    if !std::path::Path::new(path).exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "файл не найден (возможно, удалён/перемещён) — перекачайте",
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // cmd /c start "" "<path>" — открывает ассоциированным приложением.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", path])
+            .spawn()?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("xdg-open").arg(path).spawn()?;
     }
     Ok(())
 }

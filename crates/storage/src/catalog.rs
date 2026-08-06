@@ -12,11 +12,87 @@ use serde::{Deserialize, Serialize};
 
 use mdwf_core::{CoreError, CoreResult, Profile};
 
-/// Версия схемы для совместимости (спец. `schema_version = 2` в config.toml).
-pub const SCHEMA_VERSION: u32 = 2;
+/// Версия схемы для совместимости (спец. `schema_version` в config.toml).
+/// v3: добавлена колонка `downloads.document_id` (значок «уже загружен»).
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Встроенная схема (создаётся при первом подключении).
 const SCHEMA_SQL: &str = include_str!("../schema.sql");
+
+/// Idempotent миграция v3: добавляет `downloads.document_id`, если колонки нет
+/// (существующие БД до v3), и backfill-ит её из `params.values["ids"]`
+/// (первый serviceName в CSV) для уже скачанных документов. Также создаёт
+/// индекс по document_id (после гарантированного наличия колонки).
+fn migrate_add_document_id(conn: &Connection) -> CoreResult<()> {
+    // Проверяем наличие колонки через PRAGMA table_info.
+    let has_col: bool = conn
+        .prepare("PRAGMA table_info(downloads)")
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |row| {
+                let name: String = row.get(1)?;
+                Ok(name)
+            })?;
+            Ok(rows.filter_map(Result::ok).any(|name| name == "document_id"))
+        })
+        .map_err(map_sqlite_err)?;
+    if !has_col {
+        conn.execute("ALTER TABLE downloads ADD COLUMN document_id TEXT", [])
+            .map_err(map_sqlite_err)?;
+    }
+    // Backfill: для строк с NULL document_id извлекаем serviceName из params JSON.
+    let rows: Vec<(i64, Option<String>)> = conn
+        .prepare("SELECT id, params FROM downloads WHERE document_id IS NULL")
+        .and_then(|mut stmt| {
+            let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            Ok(mapped.filter_map(Result::ok).collect())
+        })
+        .map_err(map_sqlite_err)?;
+    for (id, params_json) in rows {
+        if let Some(doc_id) = params_json
+            .as_deref()
+            .and_then(extract_first_id_from_params)
+        {
+            let _ = conn.execute(
+                "UPDATE downloads SET document_id=?1 WHERE id=?2",
+                params![doc_id, id],
+            );
+        }
+    }
+    // Индекс по document_id — после гарантированного наличия колонки.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_downloads_doc \
+         ON downloads(profile_id, report_type, document_id)",
+        [],
+    )
+    .map_err(map_sqlite_err)?;
+    Ok(())
+}
+
+/// Извлекает первый идентификатор документа из JSON `ReportParams` (поле
+/// `values["ids"]` — CSV serviceName, или `values["doc_meta"]` — массив).
+/// Используется при backfill-миграции для старых строк без `document_id`.
+fn extract_first_id_from_params(params_json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(params_json).ok()?;
+    let values = v.get("values")?;
+    // values["ids"] = "id1,id2,..." → первый элемент.
+    if let Some(ids) = values.get("ids").and_then(|i| i.as_str()) {
+        if let Some(first) = ids.split(',').next() {
+            let trimmed = first.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    // values["doc_meta"] = [{id,...}] → id первого элемента.
+    if let Some(arr) = values.get("doc_meta").and_then(|d| d.as_array()) {
+        if let Some(first) = arr.first() {
+            if let Some(id) = first.get("id").and_then(|i| i.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
 
 /// Запись о скачанном файле в каталоге.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +154,11 @@ impl Catalog {
 
     fn apply_schema(&self) -> CoreResult<()> {
         let conn = self.conn.lock();
-        conn.execute_batch(SCHEMA_SQL).map_err(map_sqlite_err)
+        conn.execute_batch(SCHEMA_SQL).map_err(map_sqlite_err)?;
+        // Миграция v3: колонка downloads.document_id для значка «уже загружен».
+        // Для существующих БД (где таблица создана без колонки) — idempotent ALTER.
+        migrate_add_document_id(&conn)?;
+        Ok(())
     }
 
     // ----- Профили -----
@@ -167,10 +247,11 @@ impl Catalog {
         conn.execute(
             "INSERT INTO downloads
              (profile_id, report_type, period, params, file_path, file_size, file_hash,
-              file_format, rows_count, downloader_kind, source_url)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+              file_format, rows_count, downloader_kind, source_url, document_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(profile_id, report_type, period, file_hash) DO UPDATE SET
-                 file_path=excluded.file_path, downloaded_at=CURRENT_TIMESTAMP",
+                 file_path=excluded.file_path, document_id=excluded.document_id,
+                 downloaded_at=CURRENT_TIMESTAMP",
             params![
                 r.profile_id,
                 r.report_type,
@@ -183,10 +264,45 @@ impl Catalog {
                 r.rows_count,
                 r.downloader_kind,
                 r.source_url,
+                r.document_id,
             ],
         )
         .map_err(map_sqlite_err)?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// Список скачанных документов для профиля+отчёта (для значка «уже загружен»).
+    /// Возвращает только строки с заполненным `document_id`. UI строит
+    /// `HashMap<document_id, DownloadedDocInfo>` для O(1) lookup в списке.
+    pub fn list_downloaded_docs(
+        &self,
+        profile_id: i64,
+        report_type: &str,
+    ) -> CoreResult<Vec<DownloadedDocInfo>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT document_id, file_path, file_format, downloaded_at
+                 FROM downloads
+                 WHERE profile_id=?1 AND report_type=?2 AND document_id IS NOT NULL",
+            )
+            .map_err(map_sqlite_err)?;
+        let rows = stmt
+            .query_map(params![profile_id, report_type], |row| {
+                let downloaded_at: String = row.get(3)?;
+                let downloaded_at = match chrono::DateTime::parse_from_rfc3339(&downloaded_at) {
+                    Ok(dt) => dt.with_timezone(&Utc),
+                    Err(_) => Utc::now(),
+                };
+                Ok(DownloadedDocInfo {
+                    document_id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    file_format: row.get(2)?,
+                    downloaded_at,
+                })
+            })
+            .map_err(map_sqlite_err)?;
+        Ok(rows.filter_map(Result::ok).collect())
     }
 
     /// Проверяет, есть ли уже файл с таким хэшем для профиля+отчёта+периода.
@@ -434,6 +550,18 @@ pub struct NewDownload {
     pub rows_count: Option<i64>,
     pub downloader_kind: String,
     pub source_url: Option<String>,
+    /// Идентификатор документа (WB serviceName). None для Period-отчётов.
+    /// Используется для значка «уже загружен» в списке документов.
+    pub document_id: Option<String>,
+}
+
+/// Краткая информация о скачанном документе (для значка «уже загружен»).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadedDocInfo {
+    pub document_id: String,
+    pub file_path: String,
+    pub file_format: String,
+    pub downloaded_at: DateTime<Utc>,
 }
 
 fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
@@ -507,6 +635,7 @@ mod tests {
             rows_count: None,
             downloader_kind: "Api".into(),
             source_url: None,
+            document_id: None,
         };
         cat.record_download(&rec).unwrap();
         assert!(cat
@@ -515,6 +644,107 @@ mod tests {
         assert!(!cat
             .has_download(id, "ozon.realization", Some("2026-06"), "other")
             .unwrap());
+    }
+
+    #[test]
+    fn list_downloaded_docs_by_document_id() {
+        // Значок «уже загружен»: list_downloaded_docs возвращает документы с
+        // заполненным document_id (serviceName). Без document_id — не возвращаются.
+        let cat = make_cat();
+        let id = cat.upsert_profile(&Profile::new("wb1", "wildberries")).unwrap();
+        // Документ с document_id.
+        let with_doc = NewDownload {
+            profile_id: id,
+            report_type: "wb.documents".into(),
+            period: None,
+            params: None,
+            file_path: "/tmp/УПД №123.xml".into(),
+            file_size: 500,
+            file_hash: Some("h1".into()),
+            file_format: "xml".into(),
+            rows_count: None,
+            downloader_kind: "Api".into(),
+            source_url: None,
+            document_id: Some("УПД-123-service".into()),
+        };
+        cat.record_download(&with_doc).unwrap();
+        // Документ без document_id (Period-отчёт) — не должен попасть в список.
+        let no_doc = NewDownload {
+            profile_id: id,
+            report_type: "ozon.balance".into(),
+            period: Some("2026-07".into()),
+            params: None,
+            file_path: "/tmp/balance.xlsx".into(),
+            file_size: 200,
+            file_hash: Some("h2".into()),
+            file_format: "xlsx".into(),
+            rows_count: None,
+            downloader_kind: "Api".into(),
+            source_url: None,
+            document_id: None,
+        };
+        cat.record_download(&no_doc).unwrap();
+
+        let docs = cat.list_downloaded_docs(id, "wb.documents").unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].document_id, "УПД-123-service");
+        assert_eq!(docs[0].file_path, "/tmp/УПД №123.xml");
+        assert_eq!(docs[0].file_format, "xml");
+
+        // По другому report_type — пусто.
+        assert!(cat.list_downloaded_docs(id, "wb.orders").unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_backfills_document_id_from_params() {
+        // Симулируем старую БД: создаём downloads БЕЗ document_id (как до v3),
+        // затем открываем каталог заново — миграция должна backfill-нуть
+        // document_id из params.values["ids"].
+        let cat = make_cat();
+        let id = cat.upsert_profile(&Profile::new("wb2", "wildberries")).unwrap();
+        // Вставляем строку напрямую без document_id, params содержит ids CSV.
+        {
+            let conn = cat.conn.lock();
+            conn.execute(
+                "INSERT INTO downloads (profile_id, report_type, period, params, file_path,
+                 file_size, file_hash, file_format, rows_count, downloader_kind, source_url)
+                 VALUES (?1, ?2, NULL, ?3, ?4, 100, 'h3', 'xml', NULL, 'Api', NULL)",
+                params![
+                    id,
+                    "wb.documents",
+                    r#"{"values":{"ids":"sid-1,sid-2"}}"#,
+                    "/tmp/doc1.xml"
+                ],
+            )
+            .unwrap();
+        }
+        // Переоткрываем — apply_schema запускает миграцию (но колонка уже есть из
+        // schema.sql в in-memory). Эмулируем backfill напрямую: вызываем миграцию.
+        let conn = cat.conn.lock();
+        migrate_add_document_id(&conn).unwrap();
+        drop(conn);
+        // Проверяем, что document_id заполнен первым id из CSV.
+        let docs = cat.list_downloaded_docs(id, "wb.documents").unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].document_id, "sid-1");
+    }
+
+    #[test]
+    fn extract_first_id_from_params_variants() {
+        // CSV ids.
+        assert_eq!(
+            extract_first_id_from_params(r#"{"values":{"ids":"a,b,c"}}"#),
+            Some("a".into())
+        );
+        // doc_meta массив.
+        assert_eq!(
+            extract_first_id_from_params(r#"{"values":{"doc_meta":[{"id":"x","name":"n"}]}}"#),
+            Some("x".into())
+        );
+        // Нет ни ids, ни doc_meta.
+        assert_eq!(extract_first_id_from_params(r#"{"values":{}}"#), None);
+        // Не JSON.
+        assert_eq!(extract_first_id_from_params("not json"), None);
     }
 
     #[test]

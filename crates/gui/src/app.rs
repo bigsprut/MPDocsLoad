@@ -332,6 +332,19 @@ async fn run_command_loop(
                     do_download(&domain, &provider_id, &profile_name, &report_type, documents, params, cancel, &fwd)
                         .await;
                 fwd.forward(UiEvent::DownloadFinished(outcome));
+                // Обновляем значки «уже загружен» после скачивания (cross-session).
+                let docs = (|| {
+                    let cat = domain.catalog.read();
+                    let cat = cat.as_ref()?;
+                    let profile = cat.get_profile_by_name(&profile_name).ok()??;
+                    let pid = profile.id?;
+                    cat.list_downloaded_docs(pid, &report_type).ok()
+                })()
+                .unwrap_or_default();
+                fwd.forward(UiEvent::DownloadsListed {
+                    report_type,
+                    docs,
+                });
             }
             UiCommand::Cancel => {
                 fwd.forward(UiEvent::Notify("отмена не реализована в этом каркасе".into()));
@@ -351,6 +364,24 @@ async fn run_command_loop(
                     )
                 });
                 fwd.forward(UiEvent::DownloadStateLoaded(state));
+            }
+            UiCommand::ListDownloads {
+                profile_name,
+                report_type,
+            } => {
+                // Резолвим profile_name → profile_id, затем список скачанных документов.
+                let docs = (|| {
+                    let cat = domain.catalog.read();
+                    let cat = cat.as_ref()?;
+                    let profile = cat.get_profile_by_name(&profile_name).ok()??;
+                    let pid = profile.id?;
+                    cat.list_downloaded_docs(pid, &report_type).ok()
+                })()
+                .unwrap_or_default();
+                fwd.forward(UiEvent::DownloadsListed {
+                    report_type,
+                    docs,
+                });
             }
         }
     }
@@ -650,7 +681,23 @@ async fn do_download(
     });
 
     let files = files?;
-    let saved = persist_files(domain, &files, provider_id, profile_name, report_type, &params).await;
+    // Мапа display_name → serviceName (document_id) для записи document_id в каталог.
+    // Нужна для значка «уже загружен»: сопоставляем DownloadedFile.source_id
+    // (= display name) с DocumentSel.id (= serviceName).
+    let doc_ids_by_name: std::collections::HashMap<String, String> = documents
+        .iter()
+        .filter_map(|d| d.name.as_ref().map(|n| (n.clone(), d.id.clone())))
+        .collect();
+    let saved = persist_files(
+        domain,
+        &files,
+        provider_id,
+        profile_name,
+        report_type,
+        &params,
+        &doc_ids_by_name,
+    )
+    .await;
 
     fwd.forward(UiEvent::Progress {
         fraction: Some(1.0),
@@ -668,6 +715,9 @@ async fn do_download(
 
 /// Записывает скачанные файлы на диск через FileStore и регистрирует в каталоге.
 /// Возвращает вектор полных путей к сохранённым файлам.
+///
+/// `doc_ids_by_name` — мапа display_name → serviceName (document_id), для записи
+/// `document_id` в каталог (значок «уже загружен»). Пуста для Period-отчётов.
 async fn persist_files(
     domain: &Domain,
     files: &[mdwf_core::DownloadedFile],
@@ -675,6 +725,7 @@ async fn persist_files(
     profile_name: &str,
     report_type: &str,
     params: &mdwf_core::ReportParams,
+    doc_ids_by_name: &std::collections::HashMap<String, String>,
 ) -> Result<Vec<String>, String> {
     let profile = read_profile(domain, profile_name)?;
     let profile_id = profile.id.ok_or("профиль без id")?;
@@ -704,6 +755,11 @@ async fn persist_files(
 
         // Регистрация в каталоге (с дедупликацией по хэшу).
         if let Some(cat) = domain.catalog.read().as_ref() {
+            // document_id (serviceName) — через мапу source_id(=name) → serviceName.
+            let document_id = f
+                .source_id
+                .as_deref()
+                .and_then(|sid| doc_ids_by_name.get(sid).cloned());
             let new_dl = mdwf_storage::NewDownload {
                 profile_id,
                 report_type: report_type.to_string(),
@@ -721,6 +777,7 @@ async fn persist_files(
                 rows_count: None,
                 downloader_kind: "Api".to_string(),
                 source_url: stored.source_url.clone(),
+                document_id,
             };
             let _ = cat.record_download(&new_dl);
         }

@@ -125,6 +125,7 @@ fn persist(
             rows_count: None,
             downloader_kind: "Api".to_string(),
             source_url: stored.source_url.clone(),
+            document_id: None, // CLI не использует значок «уже загружен» (только GUI).
         };
         ctx.catalog.record_download(&new_dl)?;
         count += 1;

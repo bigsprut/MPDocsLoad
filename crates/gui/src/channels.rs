@@ -94,6 +94,12 @@ pub enum UiCommand {
     SaveDownloadState(DownloadState),
     /// Загрузить сохранённое состояние экрана «Загрузка».
     LoadDownloadState,
+    /// Получить список уже скачанных документов (для значка «уже загружен»).
+    /// Ответ — UiEvent::DownloadsListed.
+    ListDownloads {
+        profile_name: String,
+        report_type: String,
+    },
 }
 
 /// Соостояние экрана «Загрузка» для автосохранения между запусками.
@@ -167,6 +173,12 @@ pub enum UiEvent {
     Notify(String),
     /// Сохранённое состояние экрана «Загрузка» загружено (при старте).
     DownloadStateLoaded(Option<DownloadState>),
+    /// Список уже скачанных документов (для значка «уже загружен»).
+    /// `report_type` — для сопоставления с активным отчётом (устойчивость к гонке).
+    DownloadsListed {
+        report_type: String,
+        docs: Vec<mdwf_storage::DownloadedDocInfo>,
+    },
 }
 
 /// Результат скачивания: файлы + пути на диске.

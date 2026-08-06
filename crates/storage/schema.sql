@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     rows_count      INTEGER,
     downloader_kind TEXT NOT NULL,
     source_url      TEXT,
+    document_id     TEXT,                       -- идентификатор документа (WB serviceName) для значка «уже загружен»
     downloaded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
     UNIQUE(profile_id, report_type, period, file_hash)

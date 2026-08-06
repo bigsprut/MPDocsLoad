@@ -210,6 +210,9 @@ fn dispatch_event(
         UiEvent::DownloadStateLoaded(state) => {
             crate::views::download::on_download_state_loaded(state.as_ref());
         }
+        UiEvent::DownloadsListed { report_type, docs } => {
+            crate::views::download::on_downloads_listed(report_type, docs.clone());
+        }
         UiEvent::Progress { message, .. } => {
             status.set_text(message);
         }
