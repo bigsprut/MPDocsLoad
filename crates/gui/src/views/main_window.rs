@@ -13,9 +13,6 @@ use libadwaita::prelude::*;
 
 use crate::channels::{CommandSender, UiEvent, ViewId};
 
-/// Префикс путей иконок в gresource-бандле (см. resources.gresource.xml).
-const ICON_PREFIX: &str = "resource:///dev/mdwf/icons";
-
 /// Строит главное окно и показывает его.
 pub fn build_and_present(
     app: &adw::Application,
@@ -90,8 +87,9 @@ pub fn build_and_present(
 
     // Кастомный title-widget: иконка маркетплейса + имя продавца.
     // Обновляется по событию ActiveShopChanged. До выбора — плейсхолдер.
+    // Иконки — theme-имена (mdwf-*), зарегистрированные в IconTheme из gresource.
     let title_icon = Image::builder()
-        .icon_name("text-x-generic-symbolic")
+        .icon_name("mdwf-shop-placeholder")
         .icon_size(gtk4::IconSize::Normal)
         .margin_end(6)
         .build();
@@ -322,14 +320,15 @@ fn update_title(
     seller_name: Option<&str>,
     profile_name: &str,
 ) {
-    // Иконка по provider_id (из gresource), fallback — плейсхолдер магазина.
-    let icon = match provider_id {
-        "ozon" => format!("{ICON_PREFIX}/ozon.svg"),
-        "wildberries" => format!("{ICON_PREFIX}/wildberries.svg"),
-        "test" => format!("{ICON_PREFIX}/test.svg"),
-        _ => format!("{ICON_PREFIX}/shop-placeholder.svg"),
+    // Иконка-маркер по provider_id. Имена mdwf-* зарегистрированы в IconTheme
+    // из gresource (см. app.rs: add_resource_path). Fallback — плейсхолдер.
+    let icon_name = match provider_id {
+        "ozon" => "mdwf-ozon",
+        "wildberries" => "mdwf-wildberries",
+        "test" => "mdwf-test",
+        _ => "mdwf-shop-placeholder",
     };
-    title_icon.set_resource(Some(&icon));
+    title_icon.set_icon_name(Some(icon_name));
 
     // Текст: «Маркетплейс — ИмяПродавца» или «Маркетплейс — Профиль» (fallback).
     let display = seller_name.unwrap_or(profile_name);
