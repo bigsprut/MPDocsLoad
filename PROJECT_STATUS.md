@@ -40,7 +40,7 @@ crates/
 ├── scheduler/         — cron + retry + автозапуск Windows (HKCU Run)
 ├── config/            — config.toml + пути (%APPDATA%\mdwf)
 ├── test-provider/     — TestProvider mock
-├── providers/ozon/    — Ozon Seller API (10 отчётов)
+├── providers/ozon/    — Ozon Seller API (8 отчётов)
 ├── providers/wildberries/ — WB OpenAPI (14 отчётов)
 ├── cli/               — mdwf CLI (clap)
 ├── gui/               — mdwf-gui (GTK4 + libadwaita)
@@ -82,7 +82,10 @@ crates/
 
 1. ✅ **Удалить deprecated/Premium отчёты Ozon** — СДЕЛАНО (коммит `de2b2d5`).
    Убраны `transaction_list`, `transaction_totals` (deprecated → отключены
-   8 сентября 2026), `realization_by_day` (Premium Plus/Pro). Теперь **10 отчётов Ozon**.
+   8 сентября 2026), `realization_by_day` (Premium Plus/Pro). Теперь **8 отчётов Ozon**
+   (было 10 — в этом чате удалены ещё `accrual_postings`/`accrual_by_day`: по docs.ozon.ru
+   они не списочные — `postings` требует `posting_numbers`, `by-day` один `date`+`last_id`;
+   не встают в модель Report → ранее баг 400).
 
 2. ✅ **Перенос выбора маркетплейс+профиля в раздел «Магазин» + иконка/имя продавца в заголовке** — СДЕЛАНО.
    Новый раздел «Магазин» (первая вкладка): выбор маркетплейса+профиля + CRUD профилей
@@ -90,8 +93,9 @@ crates/
    и «Отчёты» больше не имеют собственных combos магазина (read-only индикатор + активный
    провайдер из `ACTIVE_SHOP`). Persist выбора — в `ui_state`/`"active_shop"` (SQLite).
    Заголовок окна: иконка маркетплейса (gresource SVG: Ozon #005bff / WB #cb11ab / test /
-   placeholder) + имя продавца. Имя продавца: Ozon `POST /v1/seller/info` → `company.name`
-   (новый trait-метод `account_display_name` с default `Ok(None)`; WB — default, нет эндпоинта).
+   placeholder) + имя продавца. Имя продавца: Ozon `POST /v1/seller/info` → `company.legal_name`
+   (полное юр. наименование, точнее краткого `name`; новый trait-метод `account_display_name`
+   с default `Ok(None)`; WB — default, нет эндпоинта).
    gresource pipeline введён: `build.rs` + `glib-build-tools` + `resources.gresource.xml`.
    Вкладка «Профили» удалена (код перенесён в `shop.rs`).
 
@@ -152,7 +156,7 @@ c82d6c2 feat(wb): пагинация /documents/list
 - **Удалены отчёты**: accrual_types (служебный), b2b_sales_json (дублёр),
   cash_flow/analytics/act_discrepancy (требуют сложных схем/UI),
   transaction_list/totals (deprecated), realization_by_day (Premium).
-  Теперь **10 отчётов Ozon** (было 18).
+  Теперь **8 отчётов Ozon** (было 18 → 10 → 8).
 
 ### GUI
 - **Выбор месяца двумя combo** (Январь…Декабрь + год) вместо текстового поля YYYY-MM.
@@ -293,8 +297,8 @@ thread_local! {
     В glib 0.20 `icon_name()` принимает `impl Into<GString>` (без `Option`).
 15. **Имя продавца для заголовка**: trait-метод `account_display_name(auth) -> Option<String>`
     с **default** `Ok(None)` (WB/test наследуют, не ломая trait). Ozon: `POST /v1/seller/info`
-    → `company.name` (без обёртки `result`, тело пустое). Ошибка fetch НЕ блокирует смену магазина
-    (seller_name=None, заголовок fallback на имя профиля).
+    → `company.legal_name` (полное юр. наименование, точнее краткого `name`; без обёртки `result`,
+    тело пустое). Ошибка fetch НЕ блокирует смену магазина (seller_name=None, заголовок fallback на имя профиля).
 16. **Единый источник правды выбора магазина**: persist в `ui_state`/`"active_shop"` (SQLite),
     не в config.toml. Все вкладки читают оттуда, а не из собственных combos.
 

@@ -146,11 +146,14 @@ impl MarketplaceProvider for OzonProvider {
         }
     }
 
-    /// Имя продавца из Ozon `/v1/seller/info` → `company.name`.
+    /// Имя продавца из Ozon `/v1/seller/info` → `company.legal_name`.
     ///
     /// Сверено с `docs/ozon-seller-api-reference.md`: POST с пустым телом,
     /// заголовки `Client-Id` + `Api-Key` ставит аутентификатор. Ответ —
     /// `company` на верхнем уровне (без обёртки `result`, как у report-API).
+    /// Берём `legal_name` (полное юридическое наименование, напр.
+    /// «Общество с ограниченной ответственностью 'Ромашка'») — оно точнее
+    /// идентифицирует продавца, чем краткое `name`.
     /// При ошибке сети/парсинга возвращаем `None` (заголовок покажет имя профиля).
     async fn account_display_name(
         &self,
@@ -158,7 +161,7 @@ impl MarketplaceProvider for OzonProvider {
     ) -> CoreResult<Option<String>> {
         debug!("Ozon account name via /v1/seller/info");
         let resp = self.client.post("/v1/seller/info", &json!({}), auth).await?;
-        Ok(resp["company"]["name"].as_str().map(str::to_string))
+        Ok(resp["company"]["legal_name"].as_str().map(str::to_string))
     }
 }
 

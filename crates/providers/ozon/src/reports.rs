@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use mdwf_core::{
-    AcquisitionMode, Capabilities, CoreError, CoreResult, CancelToken, DocumentEntry,
-    DocumentFilter, DownloadedFile, DownloaderKind, ProgressCallbackRef, Report,
-    ReportCategory, ReportDescriptor, ReportParameter, ReportParameterKind, ReportParams, ReportRef,
+    AcquisitionMode, Capabilities, CoreError, CoreResult, CancelToken, DownloadedFile,
+    DownloaderKind, ProgressCallbackRef, Report, ReportCategory, ReportDescriptor,
+    ReportParameter, ReportParameterKind, ReportParams, ReportRef,
 };
 use mdwf_core::capabilities::{AuthField, AuthFieldKind, AuthType};
 
@@ -47,9 +47,15 @@ pub fn capabilities() -> Capabilities {
     }
 }
 
-/// Описания всех 10 отчётов Ozon (спец. §2.2.1). Удалены: служебные, дублёры,
-/// начислений» (служебный), b2b_sales_json (дублёр PDF), cash_flow/analytics/
-/// act_discrepancy (требуют сложных схем/UI, сверено с docs.ozon.ru).
+/// Описания всех отчётов Ozon (спец. §2.2.1). Удалены: служебные, дублёры,
+/// сложные/устаревшие. Теперь 8 отчётов.
+///
+/// Удалено в этом чате: `accrual_postings` и `accrual_by_day` — сверкено с
+/// docs.ozon.ru: `/v1/finance/accrual/postings` требует конкретные `posting_numbers`
+/// (1–200 номеров отправлений), а `/v1/finance/accrual/by-day` — один конкретный
+/// `date` + постраничный `last_id`. Ни один не встаёт в модель Report
+/// (Browsable: диапазон→список→выбор; Period: месяц→генерация), а выдумывать
+/// обёртку нельзя. Раньше код шлёт `{limit,offset,date_from,date_to}` → 400.
 #[must_use]
 pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
     vec![
@@ -77,19 +83,6 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "Баланс",
             ReportCategory::Finance,
             &[],
-        ),
-        // --- Browsable-режим (список → выбор → скачать) ---
-        desc_browsable(
-            "ozon.accrual_postings",
-            "Начисления по отправлениям",
-            ReportCategory::Finance,
-            &[param_date_range(true)],
-        ),
-        desc_browsable(
-            "ozon.accrual_by_day",
-            "Начисления по дням",
-            ReportCategory::Finance,
-            &[param_date_range(true)],
         ),
         desc_period(
             "ozon.compensation",
@@ -132,23 +125,6 @@ fn desc_period(
         display_name: display_name.into(),
         category,
         acquisition_mode: AcquisitionMode::Period,
-        downloader_kind: DownloaderKind::Api,
-        parameters: parameters.to_vec(),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn desc_browsable(
-    type_id: &str,
-    display_name: &str,
-    category: ReportCategory,
-    parameters: &[ReportParameter],
-) -> ReportDescriptor {
-    ReportDescriptor {
-        type_id: type_id.into(),
-        display_name: display_name.into(),
-        category,
-        acquisition_mode: AcquisitionMode::Browsable,
         downloader_kind: DownloaderKind::Api,
         parameters: parameters.to_vec(),
     }
@@ -208,21 +184,6 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             client,
             "/v1/finance/balance",
         )),
-        // Browsable-режим.
-        "ozon.accrual_postings" => Arc::new(OzonReport::browsable(
-            "ozon.accrual_postings",
-            "Начисления по отправлениям",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/accrual/postings",
-        )),
-        "ozon.accrual_by_day" => Arc::new(OzonReport::browsable(
-            "ozon.accrual_by_day",
-            "Начисления по дням",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/accrual/by-day",
-        )),
         "ozon.compensation" => Arc::new(OzonAsyncReport::new(
             "ozon.compensation",
             "Компенсации",
@@ -258,16 +219,15 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
     Ok(report)
 }
 
-/// Универсальная реализация отчёта Ozon: Period или Browsable.
+/// Реализация отчёта Ozon в Period-режиме.
 ///
-/// Для Period: POST с телом из params → возвращает JSON как один файл.
-/// Для Browsable: `list` POST-ит эндпоинт и строит DocumentEntry из массива `result`;
-///   `download` POST-ит с фильтром по `ids` и возвращает выбранные.
+/// POST с телом из params → возвращает JSON как один файл. Browsable-режим у Ozon
+/// отсутствует: эндпоинты начислений (accrual_postings/by_day) требуют конкретные
+// `posting_numbers` / один `date` и не встают в модель «диапазон → список → выбор».
 pub struct OzonReport {
     type_id: String,
     display_name: String,
     category: ReportCategory,
-    mode: AcquisitionMode,
     client: OzonHttpClient,
     endpoint: &'static str,
 }
@@ -285,25 +245,6 @@ impl OzonReport {
             type_id: type_id.into(),
             display_name: display_name.into(),
             category,
-            mode: AcquisitionMode::Period,
-            client,
-            endpoint,
-        }
-    }
-
-    #[must_use]
-    pub fn browsable(
-        type_id: &str,
-        display_name: &str,
-        category: ReportCategory,
-        client: OzonHttpClient,
-        endpoint: &'static str,
-    ) -> Self {
-        Self {
-            type_id: type_id.into(),
-            display_name: display_name.into(),
-            category,
-            mode: AcquisitionMode::Browsable,
             client,
             endpoint,
         }
@@ -322,26 +263,13 @@ impl Report for OzonReport {
         self.category.clone()
     }
     fn acquisition_mode(&self) -> AcquisitionMode {
-        self.mode
+        AcquisitionMode::Period
     }
     fn downloader_kind(&self) -> DownloaderKind {
         DownloaderKind::Api
     }
     fn parameters(&self) -> &[ReportParameter] {
         &[]
-    }
-
-    async fn list(
-        &self,
-        auth: &dyn mdwf_core::Authenticator,
-        filter: &DocumentFilter,
-        _progress: ProgressCallbackRef,
-        _cancel: CancelToken,
-    ) -> CoreResult<Vec<DocumentEntry>> {
-        let body = build_query_body(filter);
-        let json = self.client.post(self.endpoint, &body, auth).await?;
-        let entries = extract_entries(&json, &self.type_id);
-        Ok(entries)
     }
 
     async fn download(
@@ -362,24 +290,6 @@ impl Report for OzonReport {
             content,
         )])
     }
-}
-
-/// Строит тело запроса для Browsable-list из фильтра.
-fn build_query_body(filter: &DocumentFilter) -> serde_json::Value {
-    let mut body = json!({
-        "limit": filter.limit.unwrap_or(1000),
-        "offset": 0,
-    });
-    if let Some(from) = filter.date_from {
-        body["date_from"] = json!(date_format::format_date_only(from));
-    }
-    if let Some(to) = filter.date_to {
-        body["date_to"] = json!(date_format::format_date_only(to));
-    }
-    for (k, v) in &filter.extra {
-        body[k.as_str()] = json!(v);
-    }
-    body
 }
 
 /// Строит тело запроса для download из параметров.
@@ -443,49 +353,6 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
     body
 }
 
-/// Извлекает DocumentEntry из типового ответа Ozon `{"result": {...}}`.
-fn extract_entries(json: &serde_json::Value, type_id: &str) -> Vec<DocumentEntry> {
-    // Ozon оборачивает данные в `result` (или `result.operations`, `result.rows`, ...).
-    let result = json.get("result").unwrap_or(json);
-    let array = find_array(result);
-    let mut out = Vec::new();
-    if let Some(arr) = array {
-        for (i, item) in arr.as_array().unwrap_or(&vec![]).iter().enumerate() {
-            let id = item
-                .get("posting_number")
-                .or_else(|| item.get("id"))
-                .or_else(|| item.get("operation_id"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("item-{i}"));
-            let display = item
-                .get("posting_number")
-                .or_else(|| item.get("name"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("{type_id} #{i}"));
-            let mut e = DocumentEntry::new(id, display);
-            e.category = type_id.to_string();
-            e.extensions = vec!["json".into()];
-            out.push(e);
-        }
-    }
-    out
-}
-
-fn find_array(v: &serde_json::Value) -> Option<&serde_json::Value> {
-    if v.is_array() {
-        return Some(v);
-    }
-    if let Some(obj) = v.as_object() {
-        for (_, val) in obj {
-            if val.is_array() {
-                return Some(val);
-            }
-        }
-    }
-    None
-}
 #[must_use]
 pub fn out_of_scope() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -701,9 +568,9 @@ mod tests {
     }
 
     #[test]
-    fn reports_count_is_10() {
+    fn reports_count_is_8() {
         let caps = capabilities();
-        assert_eq!(caps.reports.len(), 10, "got {} reports", caps.reports.len());
+        assert_eq!(caps.reports.len(), 8, "got {} reports", caps.reports.len());
         // accrual_types удалён — это служебный справочник, не выгрузка.
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_types"));
         // b2b_sales_json удалён — дублёр b2b_sales (PDF).
@@ -717,6 +584,10 @@ mod tests {
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.transaction_totals"));
         // realization_by_day удалён (требует подписку Premium Plus/Pro).
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.realization_by_day"));
+        // accrual_postings/by_day удалены (не списочные по API: требуют
+        // posting_numbers / один date + last_id — не встают в модель Report).
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_postings"));
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_by_day"));
     }
 
     #[test]
@@ -735,10 +606,16 @@ mod tests {
     }
 
     #[test]
-    fn both_modes_present() {
+    fn all_reports_are_period() {
+        // У Ozon нет Browsable-отчётов: эндпоинты начислений (accrual_postings/
+        // by_day) требуют конкретные posting_numbers / один date + last_id и не
+        // встают в модель «диапазон → список → выбор». Все отчёты — Period.
         let caps = capabilities();
-        assert!(caps.reports.iter().any(|r| r.acquisition_mode == AcquisitionMode::Period));
-        assert!(caps.reports.iter().any(|r| r.acquisition_mode == AcquisitionMode::Browsable));
+        assert!(caps.reports.iter().all(|r| r.acquisition_mode == AcquisitionMode::Period));
+        assert!(!caps
+            .reports
+            .iter()
+            .any(|r| r.acquisition_mode == AcquisitionMode::Browsable));
     }
 
     #[test]
