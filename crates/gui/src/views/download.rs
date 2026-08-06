@@ -973,7 +973,13 @@ fn render_list(docs: &[DocumentEntry]) {
             };
             row.append(&status_label);
 
-            row.append(&Label::builder().label(&doc.display_name).width_chars(36).xalign(0.0).ellipsize(gtk4::pango::EllipsizeMode::End).build());
+            // П.5: иконка типа файла (эмодзи) как префикс названия — по первому
+            // доступному расширению из doc.extensions (pdf/xlsx/xml/zip/…).
+            let name_with_icon = match doc.extensions.first() {
+                Some(e) => format!("{} {}", ext_emoji(e), doc.display_name),
+                None => doc.display_name.clone(),
+            };
+            row.append(&Label::builder().label(&name_with_icon).width_chars(36).xalign(0.0).ellipsize(gtk4::pango::EllipsizeMode::End).build());
             let date_str = doc.date.map(|d| d.to_string()).unwrap_or_default();
             row.append(&Label::builder().label(&date_str).width_chars(12).xalign(0.0).build());
             let exts = doc.extensions.join(", ");
@@ -1051,6 +1057,19 @@ fn human_size(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+/// Эмодзи по типу файла (П.5). Регистронезависимо: WB отдаёт расширения как есть
+/// из ответа API, регистр явно не гарантирован — нормализуем.
+fn ext_emoji(ext: &str) -> &'static str {
+    match ext.to_ascii_lowercase().as_str() {
+        // Электронные таблицы.
+        "xlsx" | "xls" | "csv" => "📊",
+        // Архивы.
+        "zip" | "rar" | "7z" | "gz" | "tar" => "📦",
+        // Прочее (pdf, xml, txt, json, …) — как документ.
+        _ => "📄",
     }
 }
 
