@@ -2,22 +2,18 @@
 <!--
   GResource-бандл MDWF: иконки маркетплейсов для заголовка окна.
 
-  Регистрируются в теме иконок GTK (IconTheme::add_resource_path), чтобы
-  грузиться по имени через Image::set_icon_name("mdwf-ozon") — как обычные
-  theme-иконки (open-menu-symbolic и т.п.). preенфикс /org/mdwf/icons.
+  Храним PNG (не SVG) — растровые иконки грузятся gdk-pixbuf напрямую, без
+  SVG-лоадера и без регистрации в IconTheme. Это надёжно на Windows/MinGW,
+  где to-pixdata-препроцессинг SVG и theme-рендеринг SVG ненадёжны.
 
-  SVG компилируются в pixdata на этапе сборки (glib-compile-resources) —
-  поэтому SVG-иконки работают в рантайме без SVG-лоадера gdk-pixbuf.
-
-  Имена: mdwf-ozon, mdwf-wildberries, mdwf-test, mdwf-shop-placeholder.
+  Грузятся через Image::set_from_resource("resource:///org/mdwf/icons/ozon.png").
   Стилизованы (цвет + буква), НЕ точные копии защищённых логотипов.
 -->
 <gresources>
   <gresource prefix="/org/mdwf/icons">
-    <!-- Структура theme: <size>/<name>.svg, size=scalable для векторных. -->
-    <file alias="scalable/mdwf-ozon.svg" compressed="true" preprocess="to-pixdata">icons/ozon.svg</file>
-    <file alias="scalable/mdwf-wildberries.svg" compressed="true" preprocess="to-pixdata">icons/wildberries.svg</file>
-    <file alias="scalable/mdwf-test.svg" compressed="true" preprocess="to-pixdata">icons/test.svg</file>
-    <file alias="scalable/mdwf-shop-placeholder.svg" compressed="true" preprocess="to-pixdata">icons/shop-placeholder.svg</file>
+    <file alias="ozon.png" compressed="true">icons/ozon.png</file>
+    <file alias="wildberries.png" compressed="true">icons/wildberries.png</file>
+    <file alias="test.png" compressed="true">icons/test.png</file>
+    <file alias="shop-placeholder.png" compressed="true">icons/shop-placeholder.png</file>
   </gresource>
 </gresources>

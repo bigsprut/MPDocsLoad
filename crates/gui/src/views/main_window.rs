@@ -87,9 +87,9 @@ pub fn build_and_present(
 
     // Кастомный title-widget: иконка маркетплейса + имя продавца.
     // Обновляется по событию ActiveShopChanged. До выбора — плейсхолдер.
-    // Иконки — theme-имена (mdwf-*), зарегистрированные в IconTheme из gresource.
+    // Иконки — PNG из gresource, грузятся напрямую через from_resource.
     let title_icon = Image::builder()
-        .icon_name("mdwf-shop-placeholder")
+        .resource("/org/mdwf/icons/shop-placeholder.png")
         .icon_size(gtk4::IconSize::Normal)
         .margin_end(6)
         .build();
@@ -320,15 +320,15 @@ fn update_title(
     seller_name: Option<&str>,
     profile_name: &str,
 ) {
-    // Иконка-маркер по provider_id. Имена mdwf-* зарегистрированы в IconTheme
-    // из gresource (см. app.rs: add_resource_path). Fallback — плейсхолдер.
-    let icon_name = match provider_id {
-        "ozon" => "mdwf-ozon",
-        "wildberries" => "mdwf-wildberries",
-        "test" => "mdwf-test",
-        _ => "mdwf-shop-placeholder",
+    // Иконка-маркер по provider_id. PNG из gresource, грузится напрямую через
+    // from_resource (без IconTheme — надёжнее на Windows). Fallback — плейсхолдер.
+    let icon_path = match provider_id {
+        "ozon" => "/org/mdwf/icons/ozon.png",
+        "wildberries" => "/org/mdwf/icons/wildberries.png",
+        "test" => "/org/mdwf/icons/test.png",
+        _ => "/org/mdwf/icons/shop-placeholder.png",
     };
-    title_icon.set_icon_name(Some(icon_name));
+    title_icon.set_resource(Some(icon_path));
 
     // Текст: «Маркетплейс — ИмяПродавца» или «Маркетплейс — Профиль» (fallback).
     let display = seller_name.unwrap_or(profile_name);

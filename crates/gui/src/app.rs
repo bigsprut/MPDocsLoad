@@ -54,13 +54,10 @@ impl App {
         gtk4::init().context("gtk4::init")?;
         adw::init().context("libadwaita::init")?;
 
-        // Регистрируем gresource-бандл в теме иконок — чтобы иконки маркетплейсов
-        // (mdwf-ozon, mdwf-wildberries, ...) грузились по имени через
-        // Image::set_icon_name, как обычные theme-иконки. gresource-префикс
-        // /org/mdwf/icons соответствует структуре theme (scalable/<name>.svg).
-        if let Some(display) = gtk4::gdk::Display::default() {
-            gtk4::IconTheme::for_display(&display).add_resource_path("/org/mdwf/icons");
-        }
+        // gresource-бандл (иконки маркетплейсов, PNG) уже зарегистрирован в main.rs
+        // через gio::resources_register_include. Иконки грузятся напрямую через
+        // Image::set_from_resource("resource:///org/mdwf/icons/<name>.png") —
+        // без регистрации в IconTheme (надёжнее на Windows/MinGW).
 
         let gtk_app = adw::Application::new(Some(APP_ID), gtk4::gio::ApplicationFlags::FLAGS_NONE);
 
