@@ -1005,6 +1005,7 @@ fn render_list(docs: &[DocumentEntry]) {
                 id: doc.id.clone(),
                 name: Some(doc.display_name.clone()),
                 extension: doc.extensions.first().cloned(),
+                date: doc.date.map(|d| d.to_string()),
             };
             let redownload_btn = Button::builder()
                 .label("↻")
@@ -1039,6 +1040,8 @@ fn render_list(docs: &[DocumentEntry]) {
                         name: Some(doc.display_name.clone()),
                         // Первый доступный формат — предпочтительный для скачивания.
                         extension: doc.extensions.first().cloned(),
+                        // Дата документа (creationTime) — для каталога/Архива/имени.
+                        date: doc.date.map(|d| d.to_string()),
                     },
                     cb,
                 ));

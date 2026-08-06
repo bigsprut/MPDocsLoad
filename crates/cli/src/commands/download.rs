@@ -103,7 +103,7 @@ fn persist(
             period: params.period.as_deref(),
             extension: &f.extension,
             document_id: f.source_id.as_deref(),
-            document_date: None,
+            document_date: f.document_date.as_deref(),
         };
         let stored = ctx.file_store.save(content, &ctx_file)?;
         println!("    → {} ({} байт)", stored.file_name, stored.size);
@@ -126,6 +126,7 @@ fn persist(
             downloader_kind: "Api".to_string(),
             source_url: stored.source_url.clone(),
             document_id: None, // CLI не использует значок «уже загружен» (только GUI).
+            document_date: f.document_date.clone(),
         };
         ctx.catalog.record_download(&new_dl)?;
         count += 1;

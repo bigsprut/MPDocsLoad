@@ -826,6 +826,9 @@ impl Report for WbDocumentsReport {
                 downloaded.bytes,
             );
             f.source_id = Some(source_id);
+            // Дата документа (creationTime → YYYY-MM-DD) из меты UI — для записи
+            // document_date в каталог (фильтр периода Архива) и плейсхолдера {doc_date}.
+            f.document_date = meta.get(id).and_then(|m| m.date.clone());
             files.push(f);
         }
         Ok(files)
@@ -840,6 +843,8 @@ struct DocMeta {
     name: Option<String>,
     #[serde(default)]
     extension: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
 }
 
 /// Согласует слово с числом: одна/две/пять форм. Используется для человекочитаемых

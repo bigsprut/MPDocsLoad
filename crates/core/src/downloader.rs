@@ -34,6 +34,10 @@ pub struct DownloadedFile {
     pub source_id: Option<String>,
     /// Исходный URL (если применимо).
     pub source_url: Option<String>,
+    /// Дата документа (для Browsable-режима WB: creationTime → YYYY-MM-DD).
+    /// Используется для записи в каталог (document_date) и плейсхолдера {doc_date}
+    /// в имени файла. None для Period-отчётов.
+    pub document_date: Option<String>,
     /// In-memory содержимое файла (провайдер заполняет; app-слой пишет на диск).
     /// `None` если файл уже записан провайдером или контент не возвращается.
     #[serde(skip)]
@@ -52,6 +56,7 @@ impl DownloadedFile {
             downloaded_at: Utc::now(),
             source_id: None,
             source_url: None,
+            document_date: None,
             content: None,
         }
     }

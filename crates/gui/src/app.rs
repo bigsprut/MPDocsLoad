@@ -396,6 +396,8 @@ async fn run_command_loop(
                 period,
             } => {
                 // Архив (П.6): опциональный фильтр по профилю резолвим в profile_id.
+                // period (YYYY-MM) → диапазон дат для пересечения (inclusion-фильтр).
+                let date_range = period.as_deref().and_then(period_to_range);
                 let outcome = (|| {
                     let cat = domain.catalog.read();
                     let cat = cat.as_ref()?;
@@ -404,12 +406,8 @@ async fn run_command_loop(
                         Some(name) => Some(cat.get_profile_by_name(name).ok()??.id?),
                         None => None,
                     };
-                    cat.list_downloads_filtered(
-                        profile_id,
-                        report_type.as_deref(),
-                        period.as_deref(),
-                    )
-                    .ok()
+                    cat.list_downloads_filtered(profile_id, report_type.as_deref(), date_range)
+                        .ok()
                 })();
                 match outcome {
                     Some(entries) => fwd.forward(UiEvent::ArchiveListed(Ok(entries))),
@@ -659,6 +657,8 @@ struct DocMetaItem {
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     extension: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -696,6 +696,7 @@ async fn do_download(
                 id: d.id.clone(),
                 name: d.name.clone(),
                 extension: d.extension.clone(),
+                date: d.date.clone(),
             })
             .collect();
         if let Ok(json) = serde_json::to_string(&meta) {
@@ -757,6 +758,29 @@ async fn do_download(
     }
 }
 
+/// Преобразует период фильтра Архива (YYYY-MM) в диапазон дат `(from, to)` для
+/// inclusion-фильтра (пересечение): первое число месяца .. последний день месяца.
+/// None для невалидного формата. Используется в обработчике ListArchive.
+fn period_to_range(period: &str) -> Option<(String, String)> {
+    use chrono::Datelike;
+    // Ожидаем «YYYY-MM».
+    let (year_s, month_s) = period.split_once('-')?;
+    let year: i32 = year_s.parse().ok()?;
+    let month: u32 = month_s.parse().ok()?;
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let first = chrono::NaiveDate::from_ymd_opt(year, month, 1)?;
+    // Последний день месяца: первое число следующего месяца минус 1 день.
+    let last = first
+        .checked_add_months(chrono::Months::new(1))?
+        .pred_opt()?;
+    Some((
+        first.format("%Y-%m-%d").to_string(),
+        last.format("%Y-%m-%d").to_string(),
+    ))
+}
+
 /// Записывает скачанные файлы на диск через FileStore и регистрирует в каталоге.
 /// Возвращает вектор полных путей к сохранённым файлам.
 ///
@@ -785,7 +809,9 @@ async fn persist_files(
             period,
             extension: &f.extension,
             document_id: f.source_id.as_deref(),
-            document_date: None,
+            // П.6 фикс: дата документа (WB creationTime) — для плейсхолдера {doc_date}
+            // в имени файла. Раньше жёстко None → {doc_date} всегда давал «nodate».
+            document_date: f.document_date.as_deref(),
         };
 
         // Запись на диск (клонируем FileStore-конфиг, т.к. RwLock).
@@ -822,6 +848,9 @@ async fn persist_files(
                 downloader_kind: "Api".to_string(),
                 source_url: stored.source_url.clone(),
                 document_id,
+                // П.6 фикс: дата документа (WB creationTime → YYYY-MM-DD) — для
+                // фильтра периода Архива. None для Period-отчётов.
+                document_date: f.document_date.clone(),
             };
             let _ = cat.record_download(&new_dl);
         }

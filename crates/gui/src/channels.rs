@@ -267,6 +267,9 @@ pub struct DocumentSel {
     pub id: String,
     pub name: Option<String>,
     pub extension: Option<String>,
+    /// Дата документа (WB creationTime → YYYY-MM-DD). Пробрасывается до каталога
+    /// (document_date) для фильтра периода Архива и плейсхолдера {doc_date}.
+    pub date: Option<String>,
 }
 
 /// Отправитель команд в tokio-сторону (клонируется для виджетов).
