@@ -14,7 +14,9 @@ use mdwf_core::{CoreError, CoreResult, Profile};
 
 /// Версия схемы для совместимости (спец. `schema_version` в config.toml).
 /// v3: добавлена колонка `downloads.document_id` (значок «уже загружен»).
-pub const SCHEMA_VERSION: u32 = 3;
+/// v4: добавлена колонка `downloads.document_date` (дата документа WB для
+/// фильтра периода Архива).
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Встроенная схема (создаётся при первом подключении).
 const SCHEMA_SQL: &str = include_str!("../schema.sql");
@@ -68,6 +70,28 @@ fn migrate_add_document_id(conn: &Connection) -> CoreResult<()> {
     Ok(())
 }
 
+/// Idempotent миграция v4: добавляет `downloads.document_date`, если колонки нет
+/// (существующие БД до v4). Backfill НЕ выполняется — у старых WB-записей даты
+/// документа нет в `params` (не из чего восстановить); они остаются с NULL и
+/// выпадают из фильтра периода Архива (видны при фильтре «все»).
+fn migrate_add_document_date(conn: &Connection) -> CoreResult<()> {
+    let has_col: bool = conn
+        .prepare("PRAGMA table_info(downloads)")
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |row| {
+                let name: String = row.get(1)?;
+                Ok(name)
+            })?;
+            Ok(rows.filter_map(Result::ok).any(|name| name == "document_date"))
+        })
+        .map_err(map_sqlite_err)?;
+    if !has_col {
+        conn.execute("ALTER TABLE downloads ADD COLUMN document_date TEXT", [])
+            .map_err(map_sqlite_err)?;
+    }
+    Ok(())
+}
+
 /// Извлекает первый идентификатор документа из JSON `ReportParams` (поле
 /// `values["ids"]` — CSV serviceName, или `values["doc_meta"]` — массив).
 /// Используется при backfill-миграции для старых строк без `document_id`.
@@ -109,6 +133,8 @@ pub struct DownloadRecord {
     pub rows_count: Option<i64>,
     pub downloader_kind: String,
     pub source_url: Option<String>,
+    /// Дата документа (WB creationTime → YYYY-MM-DD). None для Period-отчётов.
+    pub document_date: Option<String>,
     pub downloaded_at: DateTime<Utc>,
 }
 
@@ -124,13 +150,18 @@ pub struct ArchiveEntry {
     pub profile_name: String,
     pub provider_id: String,
     pub report_type: String,
-    /// Период отчёта (YYYY-MM для месячных; None для WB-документов без периода).
+    /// Период отчёта (параметр запроса: YYYY-MM/YYYY-MM-DD) — для Ozon.
+    /// Для WB-документов NULL (нет периода запроса); вместо него смотрим `document_date`.
     pub period: Option<String>,
     pub file_path: String,
     pub file_size: i64,
     pub file_format: String,
     /// Идентификатор документа (WB serviceName); None для Period-отчётов Ozon.
     pub document_id: Option<String>,
+    /// Дата документа (WB creationTime → YYYY-MM-DD). Используется для фильтра
+    /// периода Архива (как fallback периода) и отображается в колонке «Период»,
+    /// если `period` пуст.
+    pub document_date: Option<String>,
     pub downloaded_at: DateTime<Utc>,
 }
 
@@ -180,6 +211,9 @@ impl Catalog {
         // Миграция v3: колонка downloads.document_id для значка «уже загружен».
         // Для существующих БД (где таблица создана без колонки) — idempotent ALTER.
         migrate_add_document_id(&conn)?;
+        // Миграция v4: колонка downloads.document_date (дата документа WB для
+        // фильтра периода Архива). Без backfill (см. migrate_add_document_date).
+        migrate_add_document_date(&conn)?;
         Ok(())
     }
 
@@ -269,10 +303,11 @@ impl Catalog {
         conn.execute(
             "INSERT INTO downloads
              (profile_id, report_type, period, params, file_path, file_size, file_hash,
-              file_format, rows_count, downloader_kind, source_url, document_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+              file_format, rows_count, downloader_kind, source_url, document_id, document_date)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(profile_id, report_type, period, file_hash) DO UPDATE SET
                  file_path=excluded.file_path, document_id=excluded.document_id,
+                 document_date=excluded.document_date,
                  downloaded_at=CURRENT_TIMESTAMP",
             params![
                 r.profile_id,
@@ -287,6 +322,7 @@ impl Catalog {
                 r.downloader_kind,
                 r.source_url,
                 r.document_id,
+                r.document_date,
             ],
         )
         .map_err(map_sqlite_err)?;
@@ -332,30 +368,70 @@ impl Catalog {
     /// В отличие от `list_downloaded_docs`, возвращает **все** строки (включая
     /// Period-отчёты Ozon без `document_id`), JOIN с `profiles` добавляет
     /// `profile_name`/`provider_id`. Фильтры опциональны: `None` = не фильтровать.
-    /// `period` сравнивается на точное равенство (формат `YYYY-MM`). Результат
-    /// отсортирован по `downloaded_at DESC` (свежие сверху).
+    ///
+    /// `date_range` — фильтр периода как **пересечение диапазонов** (inclusion),
+    /// НЕ точное совпадение. Кортеж `(from "YYYY-MM-DD", to "YYYY-MM-DD")`.
+    /// Файл попадает, если его «интервал даты» пересекается с диапазоном фильтра.
+    /// Интервал файла вычисляется из `period` (YYYY-MM → месяц целиком; YYYY-MM-DD
+    /// → точка) или, при отсутствии `period`, из `document_date` (точка). Файлы
+    /// без обеих дат (старые WB-записи) из фильтра по периоду выпадают (видны при
+    /// `date_range=None`). Результат отсортирован по `downloaded_at DESC`.
     pub fn list_downloads_filtered(
         &self,
         profile_id: Option<i64>,
         report_type: Option<&str>,
-        period: Option<&str>,
+        date_range: Option<(String, String)>,
     ) -> CoreResult<Vec<ArchiveEntry>> {
         let conn = self.conn.lock();
         // Динамическая сборка WHERE: только выбранные фильтры. Имена колонок
         // зашиты в строку (не от пользователя), параметры — через placeholders.
-        let mut where_clauses: Vec<&'static str> = Vec::new();
+        let mut where_clauses: Vec<String> = Vec::new();
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        if profile_id.is_some() {
-            where_clauses.push("d.profile_id = ?");
-            params_vec.push(Box::new(profile_id));
+        if let Some(pid) = profile_id {
+            where_clauses.push("d.profile_id = ?".to_string());
+            params_vec.push(Box::new(pid));
         }
-        if report_type.is_some() {
-            where_clauses.push("d.report_type = ?");
-            params_vec.push(Box::new(report_type.map(std::string::ToString::to_string)));
+        if let Some(rt) = report_type {
+            where_clauses.push("d.report_type = ?".to_string());
+            params_vec.push(Box::new(rt.to_string()));
         }
-        if period.is_some() {
-            where_clauses.push("d.period = ?");
-            params_vec.push(Box::new(period.map(std::string::ToString::to_string)));
+        if let Some((from, to)) = date_range {
+            // Вычисляем границы интервала файла в SQL (CASE WHEN), затем проверяем
+            // пересечение: file_start <= filter_to AND file_end >= filter_from.
+            // period длины 7 ("YYYY-MM") → месяц целиком; длины 10 ("YYYY-MM-DD")
+            // → точка; иначе fallback на document_date; иначе NULL (не попадает).
+            where_clauses.push(
+                "(CASE \
+                    WHEN d.period IS NOT NULL AND length(d.period) = 7 \
+                        THEN substr(d.period,1,7)||'-01' \
+                    WHEN d.period IS NOT NULL AND length(d.period) = 10 \
+                        THEN d.period \
+                    WHEN d.document_date IS NOT NULL \
+                        THEN d.document_date \
+                    ELSE NULL \
+                  END) IS NOT NULL \
+                 AND (CASE \
+                    WHEN d.period IS NOT NULL AND length(d.period) = 7 \
+                        THEN substr(d.period,1,7)||'-01' \
+                    WHEN d.period IS NOT NULL AND length(d.period) = 10 \
+                        THEN d.period \
+                    WHEN d.document_date IS NOT NULL \
+                        THEN d.document_date \
+                    ELSE NULL \
+                  END) <= ? \
+                 AND (CASE \
+                    WHEN d.period IS NOT NULL AND length(d.period) = 7 \
+                        THEN date(substr(d.period,1,7)||'-01','+1 month','-1 day') \
+                    WHEN d.period IS NOT NULL AND length(d.period) = 10 \
+                        THEN d.period \
+                    WHEN d.document_date IS NOT NULL \
+                        THEN d.document_date \
+                    ELSE NULL \
+                  END) >= ?"
+                    .to_string(),
+            );
+            params_vec.push(Box::new(to));
+            params_vec.push(Box::new(from));
         }
         let where_sql = if where_clauses.is_empty() {
             String::new()
@@ -365,7 +441,7 @@ impl Catalog {
         let sql = format!(
             "SELECT d.id, d.profile_id, p.name, p.provider_id, d.report_type,
                     d.period, d.file_path, d.file_size, d.file_format,
-                    d.document_id, d.downloaded_at
+                    d.document_id, d.document_date, d.downloaded_at
              FROM downloads d
              JOIN profiles p ON p.id = d.profile_id
              {where_sql}
@@ -376,22 +452,26 @@ impl Catalog {
             params_vec.iter().map(std::convert::AsRef::as_ref).collect();
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
-                let downloaded_at: String = row.get(10)?;
+                let downloaded_at: String = row.get(11)?;
                 let downloaded_at = match chrono::DateTime::parse_from_rfc3339(&downloaded_at) {
                     Ok(dt) => dt.with_timezone(&Utc),
                     Err(_) => Utc::now(),
                 };
+                let period: Option<String> = row.get(5)?;
+                let document_date: Option<String> = row.get(10)?;
                 Ok(ArchiveEntry {
                     id: row.get(0)?,
                     profile_id: row.get(1)?,
                     profile_name: row.get(2)?,
                     provider_id: row.get(3)?,
                     report_type: row.get(4)?,
-                    period: row.get(5)?,
+                    // Колонка отображения: период запроса (Ozon) ИЛИ дата документа (WB).
+                    period: period.or(document_date.clone()),
                     file_path: row.get(6)?,
                     file_size: row.get(7)?,
                     file_format: row.get(8)?,
                     document_id: row.get(9)?,
+                    document_date,
                     downloaded_at,
                 })
             })
@@ -663,6 +743,9 @@ pub struct NewDownload {
     /// Идентификатор документа (WB serviceName). None для Period-отчётов.
     /// Используется для значка «уже загружен» в списке документов.
     pub document_id: Option<String>,
+    /// Дата документа (WB creationTime → YYYY-MM-DD). None для Period-отчётов.
+    /// Используется для фильтра периода в Архиве.
+    pub document_date: Option<String>,
 }
 
 /// Краткая информация о скачанном документе (для значка «уже загружен»).
@@ -746,6 +829,7 @@ mod tests {
             downloader_kind: "Api".into(),
             source_url: None,
             document_id: None,
+            document_date: None,
         };
         cat.record_download(&rec).unwrap();
         assert!(cat
@@ -776,6 +860,7 @@ mod tests {
             downloader_kind: "Api".into(),
             source_url: None,
             document_id: Some("УПД-123-service".into()),
+            document_date: None,
         };
         cat.record_download(&with_doc).unwrap();
         // Документ без document_id (Period-отчёт) — не должен попасть в список.
@@ -792,6 +877,7 @@ mod tests {
             downloader_kind: "Api".into(),
             source_url: None,
             document_id: None,
+            document_date: None,
         };
         cat.record_download(&no_doc).unwrap();
 
@@ -873,18 +959,19 @@ mod tests {
     fn list_downloads_filtered_all_and_combinations() {
         // Архив: list_downloads_filtered возвращает ВСЕ строки (включая Period-отчёты
         // без document_id), JOIN с profiles даёт profile_name/provider_id.
-        // Проверяем фильтры: все / по профилю / по отчёту / по периоду / комбинация.
+        // Проверяем фильтры: все / по профилю / по отчёту / по диапазону (пересечение).
         let cat = make_cat();
         let oz = cat.upsert_profile(&Profile::new("OzonProd", "ozon")).unwrap();
         let wb = cat.upsert_profile(&Profile::new("WbProd", "wildberries")).unwrap();
 
-        // Helper для вставки записи скачивания.
+        // Helper для вставки записи скачивания. document_date — для WB-документов.
         let mk = |profile_id: i64,
                   report_type: &str,
                   period: Option<&str>,
                   format: &str,
                   hash: &str,
-                  document_id: Option<&str>| NewDownload {
+                  document_id: Option<&str>,
+                  document_date: Option<&str>| NewDownload {
             profile_id,
             report_type: report_type.into(),
             period: period.map(str::to_string),
@@ -897,23 +984,28 @@ mod tests {
             downloader_kind: "Api".into(),
             source_url: None,
             document_id: document_id.map(str::to_string),
+            document_date: document_date.map(str::to_string),
         };
-        // 4 строки: ozon.realization (period), ozon.balance (period), wb.documents
-        // (без period, с document_id), wb.documents второй период ozon.
-        cat.record_download(&mk(oz, "ozon.realization", Some("2026-07"), "xlsx", "h1", None))
+        // Строки:
+        //  h1: ozon.realization period=2026-07            (июль, месяц целиком)
+        //  h2: ozon.balance      period=2026-06            (июнь, месяц целиком)
+        //  h3: wb.documents      document_date=2026-07-15  (точка, 15 июля)
+        //  h4: ozon.realization  period=2026-06            (июнь)
+        //  h5: wb.documents      без даты (старая запись)  — выпадает из фильтра по периоду
+        cat.record_download(&mk(oz, "ozon.realization", Some("2026-07"), "xlsx", "h1", None, None))
             .unwrap();
-        cat.record_download(&mk(oz, "ozon.balance", Some("2026-06"), "xlsx", "h2", None))
+        cat.record_download(&mk(oz, "ozon.balance", Some("2026-06"), "xlsx", "h2", None, None))
             .unwrap();
-        cat.record_download(&mk(wb, "wb.documents", None, "xml", "h3", Some("svc-1")))
+        cat.record_download(&mk(wb, "wb.documents", None, "xml", "h3", Some("svc-1"), Some("2026-07-15")))
             .unwrap();
-        cat.record_download(&mk(oz, "ozon.realization", Some("2026-06"), "xlsx", "h4", None))
+        cat.record_download(&mk(oz, "ozon.realization", Some("2026-06"), "xlsx", "h4", None, None))
+            .unwrap();
+        cat.record_download(&mk(wb, "wb.documents", None, "xml", "h5", Some("svc-2"), None))
             .unwrap();
 
-        // Все — 4 строки.
+        // Все — 5 строк.
         let all = cat.list_downloads_filtered(None, None, None).unwrap();
-        assert_eq!(all.len(), 4);
-        // Сортировка DESC по downloaded_at (все вставлены почти одновременно —
-        // порядок может совпадать, но структура полей проверяется стабильно).
+        assert_eq!(all.len(), 5);
         let e0 = all.iter().find(|e| e.id > 0).unwrap();
         // Поля JOIN: profile_name и provider_id заполнены.
         let oz_e = all
@@ -922,48 +1014,69 @@ mod tests {
             .unwrap();
         assert_eq!(oz_e.profile_name, "OzonProd");
         assert_eq!(oz_e.provider_id, "ozon");
-        let wb_e = all.iter().find(|e| e.report_type == "wb.documents").unwrap();
+        let wb_e = all
+            .iter()
+            .find(|e| e.document_id.as_deref() == Some("svc-1"))
+            .unwrap();
         assert_eq!(wb_e.profile_name, "WbProd");
         assert_eq!(wb_e.provider_id, "wildberries");
-        assert_eq!(wb_e.document_id.as_deref(), Some("svc-1"));
-        // Период None у WB-документа сохранён.
-        assert!(wb_e.period.is_none());
+        // WB-документ: period None в БД, но document_date есть → колонка отображения
+        // (entry.period) показывает document_date как fallback.
+        assert_eq!(wb_e.document_date.as_deref(), Some("2026-07-15"));
+        assert_eq!(wb_e.period.as_deref(), Some("2026-07-15")); // COALESCE в DTO
         // Элемент без document_id (Period-отчёт) тоже попадает в архив.
         assert!(oz_e.document_id.is_none());
 
-        // Фильтр по профилю OzonProd → 3 строки.
+        // Фильтр по профилю OzonProd → 3 строки (h1, h2, h4).
         let by_prof = cat.list_downloads_filtered(Some(oz), None, None).unwrap();
         assert_eq!(by_prof.len(), 3);
         assert!(by_prof.iter().all(|e| e.provider_id == "ozon"));
 
-        // Фильтр по отчёту wb.documents → 1 строка.
+        // Фильтр по отчёту wb.documents → 2 строки (h3, h5).
         let by_rt = cat
             .list_downloads_filtered(None, Some("wb.documents"), None)
             .unwrap();
-        assert_eq!(by_rt.len(), 1);
-        assert_eq!(by_rt[0].report_type, "wb.documents");
+        assert_eq!(by_rt.len(), 2);
+        assert!(by_rt.iter().all(|e| e.report_type == "wb.documents"));
 
-        // Фильтр по периоду 2026-06 → 2 строки (balance + realization h4).
-        let by_per = cat
-            .list_downloads_filtered(None, None, Some("2026-06"))
+        // Фильтр по диапазону: Июль 2026 → [2026-07-01, 2026-07-31].
+        // Должны попасть: h1 (period 2026-07, месяц целиком) и h3 (doc_date 15 июля).
+        // НЕ попадают: h2/h4 (июнь), h5 (без даты).
+        let july = cat
+            .list_downloads_filtered(None, None, Some(("2026-07-01".into(), "2026-07-31".into())))
             .unwrap();
-        assert_eq!(by_per.len(), 2);
-        assert!(by_per.iter().all(|e| e.period.as_deref() == Some("2026-06")));
+        assert_eq!(july.len(), 2, "июль должен дать h1 + h3");
+        // h1 — Period-отчёт ozon.realization (без document_id).
+        assert!(july.iter().any(|e| e.report_type == "ozon.realization" && e.document_id.is_none()));
+        // h3 — WB-документ svc-1 (document_date 15 июля).
+        assert!(july.iter().any(|e| e.document_id.as_deref() == Some("svc-1")));
 
-        // Комбинация: OzonProd + ozon.realization + 2026-07 → 1 строка.
+        // Фильтр по диапазону: Июнь 2026 → h2, h4.
+        let june = cat
+            .list_downloads_filtered(None, None, Some(("2026-06-01".into(), "2026-06-30".into())))
+            .unwrap();
+        assert_eq!(june.len(), 2);
+        assert!(june.iter().all(|e| e.report_type != "wb.documents"));
+
+        // Граничный случай: 2026-07-31 (последний день июля) — h1 (месяц целиком до 31) попадает.
+        let last_day = cat
+            .list_downloads_filtered(None, None, Some(("2026-07-31".into(), "2026-07-31".into())))
+            .unwrap();
+        assert_eq!(last_day.len(), 1);
+        assert_eq!(last_day[0].report_type, "ozon.realization");
+
+        // Комбинация: OzonProd + ozon.realization + июль → 1 строка (h1).
         let combo = cat
-            .list_downloads_filtered(Some(oz), Some("ozon.realization"), Some("2026-07"))
+            .list_downloads_filtered(Some(oz), Some("ozon.realization"), Some(("2026-07-01".into(), "2026-07-31".into())))
             .unwrap();
         assert_eq!(combo.len(), 1);
-        assert_eq!(combo[0].report_type, "ozon.realization");
-        assert_eq!(combo[0].period.as_deref(), Some("2026-07"));
         assert_eq!(combo[0].profile_name, "OzonProd");
 
-        // WB-документ (period=None) НЕ попадает в фильтр по периоду.
-        assert!(cat
-            .list_downloads_filtered(Some(wb), Some("wb.documents"), Some("2026-07"))
-            .unwrap()
-            .is_empty());
+        // WB-документ БЕЗ даты (h5) НЕ попадает ни в какой фильтр по диапазону.
+        let h5_in_july = cat
+            .list_downloads_filtered(None, Some("wb.documents"), Some(("2026-07-01".into(), "2026-07-31".into())))
+            .unwrap();
+        assert!(h5_in_july.iter().all(|e| e.document_id.as_deref() != Some("svc-2")));
 
         // Отсутствующий профиль → пусто.
         assert!(cat.list_downloads_filtered(Some(9999), None, None).unwrap().is_empty());
@@ -989,6 +1102,7 @@ mod tests {
             downloader_kind: "Api".into(),
             source_url: None,
             document_id: None,
+            document_date: None,
         };
         cat.record_download(&mk("wb.orders", "h1")).unwrap();
         cat.record_download(&mk("ozon.balance", "h2")).unwrap();

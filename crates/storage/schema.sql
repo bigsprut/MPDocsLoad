@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     downloader_kind TEXT NOT NULL,
     source_url      TEXT,
     document_id     TEXT,                       -- идентификатор документа (WB serviceName) для значка «уже загружен»
+    document_date   TEXT,                       -- дата документа (WB creationTime → YYYY-MM-DD) для фильтра периода Архива
     downloaded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
     UNIQUE(profile_id, report_type, period, file_hash)
