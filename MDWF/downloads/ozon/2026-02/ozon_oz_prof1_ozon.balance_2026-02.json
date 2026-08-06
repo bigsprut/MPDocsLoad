@@ -1,0 +1,243 @@
+{
+  "cashflows": {
+    "returns": {
+      "amount": {
+        "currency_code": "RUB",
+        "value": -813381
+      },
+      "amount_details": {
+        "partner_programs": {
+          "currency_code": "RUB",
+          "value": -3841.72
+        },
+        "points_for_discounts": "-397733.35",
+        "revenue": {
+          "currency_code": "RUB",
+          "value": -411805.93
+        }
+      },
+      "fee": {
+        "currency_code": "RUB",
+        "value": 297319.42
+      }
+    },
+    "sales": {
+      "amount": {
+        "currency_code": "RUB",
+        "value": 6577039
+      },
+      "amount_details": {
+        "partner_programs": {
+          "currency_code": "RUB",
+          "value": 29399.3
+        },
+        "points_for_discounts": "3224680.88",
+        "revenue": {
+          "currency_code": "RUB",
+          "value": 3322958.82
+        }
+      },
+      "fee": {
+        "currency_code": "RUB",
+        "value": -2404344.81
+      }
+    },
+    "services": [
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -4995
+        },
+        "name": "seller_bonuses_mailing"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -51114.54
+        },
+        "name": "acquiring"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -165101.54
+        },
+        "name": "premium_membership"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -243
+        },
+        "name": "temporary_placement_agent"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -565
+        },
+        "name": "ozon_warehouse_pickup_assortment"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -210
+        },
+        "name": "packing_by_agents"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -208271.98
+        },
+        "name": "product_placement_in_ozon_warehouses"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -105
+        },
+        "name": "packing_package"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -3806.4
+        },
+        "name": "points_for_reviews"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -51337.77
+        },
+        "name": "brand_promotion"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -20051
+        },
+        "name": "goods_processing_in_shipment"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -809975.05
+        },
+        "name": "logistics"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -10905
+        },
+        "name": "partner_returns_cancellations_processing"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -282904.89
+        },
+        "name": "reverse_logistics"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -418.4
+        },
+        "name": "ozon_warehouse_pickup"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -18428.49
+        },
+        "name": "courier_client_reinvoice"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -165
+        },
+        "name": "booking_space_and_staff_for_partial_shipment"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -44461.07
+        },
+        "name": "promotion_with_cost_per_order"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": -24990
+        },
+        "name": "premium_pro_subscription"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": 7870.74
+        },
+        "name": "defect_due_to_ozon_in_warehouse"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": 24251.27
+        },
+        "name": "loss_due_to_ozon_in_warehouse"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": 38718.21
+        },
+        "name": "loss_due_to_ozon_in_logistics"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": 12399.85
+        },
+        "name": "dispute_charge"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": 0
+        },
+        "name": "loans_and_factoring"
+      },
+      {
+        "amount": {
+          "currency_code": "RUB",
+          "value": 0
+        },
+        "name": "incoming_payments"
+      }
+    ]
+  },
+  "total": {
+    "accrued": {
+      "currency_code": "RUB",
+      "value": 2041823.55
+    },
+    "closing_balance": {
+      "currency_code": "RUB",
+      "value": 1948724.98
+    },
+    "opening_balance": {
+      "currency_code": "RUB",
+      "value": 1466588.51
+    },
+    "payments": [
+      {
+        "currency_code": "RUB",
+        "value": -1559687.08
+      }
+    ]
+  }
+}

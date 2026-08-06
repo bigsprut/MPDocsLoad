@@ -112,6 +112,28 @@ pub struct DownloadRecord {
     pub downloaded_at: DateTime<Utc>,
 }
 
+/// Элемент архива скачанных документов (плоский DTO для офлайн-навигации в UI).
+///
+/// В отличие от `DownloadRecord`, здесь JOIN с `profiles` добавляет человекочитаемые
+/// `profile_name` и `provider_id` (их нет в таблице `downloads`), а число полей
+/// сокращено до необходимых для списка Архива.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchiveEntry {
+    pub id: i64,
+    pub profile_id: i64,
+    pub profile_name: String,
+    pub provider_id: String,
+    pub report_type: String,
+    /// Период отчёта (YYYY-MM для месячных; None для WB-документов без периода).
+    pub period: Option<String>,
+    pub file_path: String,
+    pub file_size: i64,
+    pub file_format: String,
+    /// Идентификатор документа (WB serviceName); None для Period-отчётов Ozon.
+    pub document_id: Option<String>,
+    pub downloaded_at: DateTime<Utc>,
+}
+
 /// Сохранённый фильтр журнала документов.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedFilter {
@@ -301,6 +323,94 @@ impl Catalog {
                     downloaded_at,
                 })
             })
+            .map_err(map_sqlite_err)?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Список скачанных файлов с опциональными фильтрами (для вкладки «Архив»).
+    ///
+    /// В отличие от `list_downloaded_docs`, возвращает **все** строки (включая
+    /// Period-отчёты Ozon без `document_id`), JOIN с `profiles` добавляет
+    /// `profile_name`/`provider_id`. Фильтры опциональны: `None` = не фильтровать.
+    /// `period` сравнивается на точное равенство (формат `YYYY-MM`). Результат
+    /// отсортирован по `downloaded_at DESC` (свежие сверху).
+    pub fn list_downloads_filtered(
+        &self,
+        profile_id: Option<i64>,
+        report_type: Option<&str>,
+        period: Option<&str>,
+    ) -> CoreResult<Vec<ArchiveEntry>> {
+        let conn = self.conn.lock();
+        // Динамическая сборка WHERE: только выбранные фильтры. Имена колонок
+        // зашиты в строку (не от пользователя), параметры — через placeholders.
+        let mut where_clauses: Vec<&'static str> = Vec::new();
+        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if profile_id.is_some() {
+            where_clauses.push("d.profile_id = ?");
+            params_vec.push(Box::new(profile_id));
+        }
+        if report_type.is_some() {
+            where_clauses.push("d.report_type = ?");
+            params_vec.push(Box::new(report_type.map(std::string::ToString::to_string)));
+        }
+        if period.is_some() {
+            where_clauses.push("d.period = ?");
+            params_vec.push(Box::new(period.map(std::string::ToString::to_string)));
+        }
+        let where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_clauses.join(" AND "))
+        };
+        let sql = format!(
+            "SELECT d.id, d.profile_id, p.name, p.provider_id, d.report_type,
+                    d.period, d.file_path, d.file_size, d.file_format,
+                    d.document_id, d.downloaded_at
+             FROM downloads d
+             JOIN profiles p ON p.id = d.profile_id
+             {where_sql}
+             ORDER BY d.downloaded_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(map_sqlite_err)?;
+        let param_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(std::convert::AsRef::as_ref).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let downloaded_at: String = row.get(10)?;
+                let downloaded_at = match chrono::DateTime::parse_from_rfc3339(&downloaded_at) {
+                    Ok(dt) => dt.with_timezone(&Utc),
+                    Err(_) => Utc::now(),
+                };
+                Ok(ArchiveEntry {
+                    id: row.get(0)?,
+                    profile_id: row.get(1)?,
+                    profile_name: row.get(2)?,
+                    provider_id: row.get(3)?,
+                    report_type: row.get(4)?,
+                    period: row.get(5)?,
+                    file_path: row.get(6)?,
+                    file_size: row.get(7)?,
+                    file_format: row.get(8)?,
+                    document_id: row.get(9)?,
+                    downloaded_at,
+                })
+            })
+            .map_err(map_sqlite_err)?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Список уникальных `report_type` среди скачанных файлов (для combo «Отчёт»
+    /// в Архиве — показывает только то, что реально есть). Отсортирован по алфавиту.
+    pub fn distinct_report_types(&self) -> CoreResult<Vec<String>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT report_type FROM downloads
+                 ORDER BY report_type ASC",
+            )
+            .map_err(map_sqlite_err)?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(map_sqlite_err)?;
         Ok(rows.filter_map(Result::ok).collect())
     }
@@ -757,5 +867,138 @@ mod tests {
         assert_eq!(filters[0].name, "monthly-upd");
         cat.delete_filter("monthly-upd").unwrap();
         assert!(cat.list_filters().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_downloads_filtered_all_and_combinations() {
+        // Архив: list_downloads_filtered возвращает ВСЕ строки (включая Period-отчёты
+        // без document_id), JOIN с profiles даёт profile_name/provider_id.
+        // Проверяем фильтры: все / по профилю / по отчёту / по периоду / комбинация.
+        let cat = make_cat();
+        let oz = cat.upsert_profile(&Profile::new("OzonProd", "ozon")).unwrap();
+        let wb = cat.upsert_profile(&Profile::new("WbProd", "wildberries")).unwrap();
+
+        // Helper для вставки записи скачивания.
+        let mk = |profile_id: i64,
+                  report_type: &str,
+                  period: Option<&str>,
+                  format: &str,
+                  hash: &str,
+                  document_id: Option<&str>| NewDownload {
+            profile_id,
+            report_type: report_type.into(),
+            period: period.map(str::to_string),
+            params: None,
+            file_path: format!("/tmp/{hash}.file"),
+            file_size: 100,
+            file_hash: Some(hash.into()),
+            file_format: format.into(),
+            rows_count: None,
+            downloader_kind: "Api".into(),
+            source_url: None,
+            document_id: document_id.map(str::to_string),
+        };
+        // 4 строки: ozon.realization (period), ozon.balance (period), wb.documents
+        // (без period, с document_id), wb.documents второй период ozon.
+        cat.record_download(&mk(oz, "ozon.realization", Some("2026-07"), "xlsx", "h1", None))
+            .unwrap();
+        cat.record_download(&mk(oz, "ozon.balance", Some("2026-06"), "xlsx", "h2", None))
+            .unwrap();
+        cat.record_download(&mk(wb, "wb.documents", None, "xml", "h3", Some("svc-1")))
+            .unwrap();
+        cat.record_download(&mk(oz, "ozon.realization", Some("2026-06"), "xlsx", "h4", None))
+            .unwrap();
+
+        // Все — 4 строки.
+        let all = cat.list_downloads_filtered(None, None, None).unwrap();
+        assert_eq!(all.len(), 4);
+        // Сортировка DESC по downloaded_at (все вставлены почти одновременно —
+        // порядок может совпадать, но структура полей проверяется стабильно).
+        let e0 = all.iter().find(|e| e.id > 0).unwrap();
+        // Поля JOIN: profile_name и provider_id заполнены.
+        let oz_e = all
+            .iter()
+            .find(|e| e.report_type == "ozon.realization" && e.period.as_deref() == Some("2026-07"))
+            .unwrap();
+        assert_eq!(oz_e.profile_name, "OzonProd");
+        assert_eq!(oz_e.provider_id, "ozon");
+        let wb_e = all.iter().find(|e| e.report_type == "wb.documents").unwrap();
+        assert_eq!(wb_e.profile_name, "WbProd");
+        assert_eq!(wb_e.provider_id, "wildberries");
+        assert_eq!(wb_e.document_id.as_deref(), Some("svc-1"));
+        // Период None у WB-документа сохранён.
+        assert!(wb_e.period.is_none());
+        // Элемент без document_id (Period-отчёт) тоже попадает в архив.
+        assert!(oz_e.document_id.is_none());
+
+        // Фильтр по профилю OzonProd → 3 строки.
+        let by_prof = cat.list_downloads_filtered(Some(oz), None, None).unwrap();
+        assert_eq!(by_prof.len(), 3);
+        assert!(by_prof.iter().all(|e| e.provider_id == "ozon"));
+
+        // Фильтр по отчёту wb.documents → 1 строка.
+        let by_rt = cat
+            .list_downloads_filtered(None, Some("wb.documents"), None)
+            .unwrap();
+        assert_eq!(by_rt.len(), 1);
+        assert_eq!(by_rt[0].report_type, "wb.documents");
+
+        // Фильтр по периоду 2026-06 → 2 строки (balance + realization h4).
+        let by_per = cat
+            .list_downloads_filtered(None, None, Some("2026-06"))
+            .unwrap();
+        assert_eq!(by_per.len(), 2);
+        assert!(by_per.iter().all(|e| e.period.as_deref() == Some("2026-06")));
+
+        // Комбинация: OzonProd + ozon.realization + 2026-07 → 1 строка.
+        let combo = cat
+            .list_downloads_filtered(Some(oz), Some("ozon.realization"), Some("2026-07"))
+            .unwrap();
+        assert_eq!(combo.len(), 1);
+        assert_eq!(combo[0].report_type, "ozon.realization");
+        assert_eq!(combo[0].period.as_deref(), Some("2026-07"));
+        assert_eq!(combo[0].profile_name, "OzonProd");
+
+        // WB-документ (period=None) НЕ попадает в фильтр по периоду.
+        assert!(cat
+            .list_downloads_filtered(Some(wb), Some("wb.documents"), Some("2026-07"))
+            .unwrap()
+            .is_empty());
+
+        // Отсутствующий профиль → пусто.
+        assert!(cat.list_downloads_filtered(Some(9999), None, None).unwrap().is_empty());
+
+        // Утилизация e0 (избегаем dead_code в тесте): валидная запись с id.
+        assert!(e0.id > 0);
+    }
+
+    #[test]
+    fn distinct_report_types_sorted() {
+        let cat = make_cat();
+        let id = cat.upsert_profile(&Profile::new("p", "ozon")).unwrap();
+        let mk = |rt: &str, hash: &str| NewDownload {
+            profile_id: id,
+            report_type: rt.into(),
+            period: None,
+            params: None,
+            file_path: format!("/tmp/{hash}"),
+            file_size: 1,
+            file_hash: Some(hash.into()),
+            file_format: "csv".into(),
+            rows_count: None,
+            downloader_kind: "Api".into(),
+            source_url: None,
+            document_id: None,
+        };
+        cat.record_download(&mk("wb.orders", "h1")).unwrap();
+        cat.record_download(&mk("ozon.balance", "h2")).unwrap();
+        cat.record_download(&mk("ozon.balance", "h3")).unwrap(); // дубликат отчёта
+        let rts = cat.distinct_report_types().unwrap();
+        // Уникальные + отсортированы по алфавиту.
+        assert_eq!(rts, vec!["ozon.balance", "wb.orders"]);
+
+        // Пустая БД — пустой список.
+        let empty = make_cat();
+        assert!(empty.distinct_report_types().unwrap().is_empty());
     }
 }
