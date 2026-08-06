@@ -126,14 +126,17 @@ impl MarketplaceProvider for WildberriesProvider {
                 Ok(HealthStatus::down(format!("network timeout: {e}")))
             }
             Err(CoreError::Network(_)) => Ok(HealthStatus::down("network error")),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("401") || msg.contains("403") {
-                    Ok(HealthStatus::down(format!("auth failed: {msg}")))
-                } else {
-                    Ok(HealthStatus::down(msg))
-                }
+            Err(e) if e.is_auth_failure() => {
+                Ok(HealthStatus::down(format!("auth failed: {e}")))
             }
+            Err(e) if e.is_rate_limited() => {
+                Ok(HealthStatus::down(format!("rate limited: {e}")))
+            }
+            Err(e) if e.is_transient() => {
+                // 5xx — серверная ошибка, может восстановиться → Degraded.
+                Ok(HealthStatus::degraded(format!("server error: {e}")))
+            }
+            Err(e) => Ok(HealthStatus::down(e.to_string())),
         }
     }
 }

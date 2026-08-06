@@ -45,9 +45,63 @@ pub fn from_core_error(e: &mdwf_core::CoreError) -> ExitCode {
         }
         mdwf_core::CoreError::ReportTypeNotSupported(_) => ExitCode::UsageError,
         mdwf_core::CoreError::InvalidParameter(_) => ExitCode::UsageError,
+        // Отсутствие секрета в keychain — auth-проблема.
         mdwf_core::CoreError::SecretNotFound(_) => ExitCode::AuthError,
         mdwf_core::CoreError::Network(_) => ExitCode::NetworkError,
         mdwf_core::CoreError::Cancelled => ExitCode::Cancelled,
+        // API-ошибки: классифицируем по HTTP-статусу.
+        mdwf_core::CoreError::Api { status, .. } => match *status {
+            401 | 403 => ExitCode::AuthError,
+            404 => ExitCode::NotFound,
+            429 => ExitCode::RateLimit,
+            400 | 409 | 422 => ExitCode::UsageError,
+            _ => ExitCode::ApiError, // 5xx и прочее
+        },
         mdwf_core::CoreError::Internal(_) => ExitCode::ApiError,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mdwf_core::CoreError;
+
+    fn api(status: u16) -> CoreError {
+        CoreError::Api {
+            status,
+            message: "x".into(),
+            retryable: false,
+        }
+    }
+
+    #[test]
+    fn auth_errors_map_to_auth_exit() {
+        // 401/403 → AuthError (раньше WB-401 уходил в ApiError).
+        assert_eq!(from_core_error(&api(401)), ExitCode::AuthError);
+        assert_eq!(from_core_error(&api(403)), ExitCode::AuthError);
+        // SecretNotFound → AuthError.
+        assert_eq!(
+            from_core_error(&CoreError::SecretNotFound("k".into())),
+            ExitCode::AuthError
+        );
+    }
+
+    #[test]
+    fn rate_limit_maps_to_rate_limit_exit() {
+        assert_eq!(from_core_error(&api(429)), ExitCode::RateLimit);
+    }
+
+    #[test]
+    fn client_errors_map_correctly() {
+        assert_eq!(from_core_error(&api(400)), ExitCode::UsageError);
+        assert_eq!(from_core_error(&api(404)), ExitCode::NotFound);
+        assert_eq!(from_core_error(&api(409)), ExitCode::UsageError);
+        assert_eq!(from_core_error(&api(422)), ExitCode::UsageError);
+    }
+
+    #[test]
+    fn server_errors_map_to_api_error() {
+        assert_eq!(from_core_error(&api(500)), ExitCode::ApiError);
+        assert_eq!(from_core_error(&api(503)), ExitCode::ApiError);
     }
 }

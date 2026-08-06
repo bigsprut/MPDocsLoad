@@ -56,6 +56,7 @@ impl RetryPolicy {
                 | StatusCode::UNAUTHORIZED
                 | StatusCode::FORBIDDEN
                 | StatusCode::NOT_FOUND
+                | StatusCode::CONFLICT
                 | StatusCode::UNPROCESSABLE_ENTITY
         )
     }
@@ -247,7 +248,10 @@ impl WbHttpClient {
                         return Err(map_status_error(status, resp).await);
                     }
                     if status.is_success() {
-                        return Ok(resp.json::<Value>().await.map_err(CoreError::Network)?);
+                        // 2xx, но не JSON — ошибка протокола, не сеть.
+                        return resp.json::<Value>().await.map_err(|e| {
+                            CoreError::Internal(format!("WB: некорректный JSON-ответ ({e})"))
+                        });
                     }
                     // 429 Too Many Requests: WB отдаёт X-Ratelimit-Retry (секунды).
                     // Это КРИТИЧНО: на 429 обычная экспоненциальная задержка недостаточна,
@@ -260,11 +264,18 @@ impl WbHttpClient {
                         // и обновляем лимитер на больший интервал.
                         self.limiter_for(domain).backoff(retry_after).await;
                         if attempt >= 3 {
-                            return Err(CoreError::Internal(format!(
-                                "WB API 429 Too Many Requests после {attempt} попыток. \
-                                 Подождите {} сек перед повтором.",
-                                retry_after.as_secs()
-                            )));
+                            // Читаем причину из body (WB: {message/detail} и др.).
+                            let body = resp.text().await.unwrap_or_default();
+                            let (_, message) = parse_wb_error(429, &body);
+                            return Err(CoreError::Api {
+                                status: 429,
+                                message: format!(
+                                    "{message} Превышен лимит запросов после {attempt} \
+                                     попыток. Подождите {} сек перед повтором.",
+                                    retry_after.as_secs()
+                                ),
+                                retryable: true,
+                            });
                         }
                         sleep(retry_after).await;
                         continue;
@@ -311,7 +322,10 @@ impl WbHttpClient {
                         return Err(map_status_error(status, resp).await);
                     }
                     if status.is_success() {
-                        return Ok(resp.json::<Value>().await.map_err(CoreError::Network)?);
+                        // 2xx, но не JSON — ошибка протокола, не сеть.
+                        return resp.json::<Value>().await.map_err(|e| {
+                            CoreError::Internal(format!("WB: некорректный JSON-ответ ({e})"))
+                        });
                     }
                     // 429 Too Many Requests (см. комментарий в GET).
                     if status == StatusCode::TOO_MANY_REQUESTS {
@@ -320,11 +334,17 @@ impl WbHttpClient {
                         warn!(%status, attempt, ?retry_after, "rate limited (429) — waiting");
                         self.limiter_for(domain).backoff(retry_after).await;
                         if attempt >= 3 {
-                            return Err(CoreError::Internal(format!(
-                                "WB API 429 Too Many Requests после {attempt} попыток. \
-                                 Подождите {} сек перед повтором.",
-                                retry_after.as_secs()
-                            )));
+                            let body = resp.text().await.unwrap_or_default();
+                            let (_, message) = parse_wb_error(429, &body);
+                            return Err(CoreError::Api {
+                                status: 429,
+                                message: format!(
+                                    "{message} Превышен лимит запросов после {attempt} \
+                                     попыток. Подождите {} сек перед повтором.",
+                                    retry_after.as_secs()
+                                ),
+                                retryable: true,
+                            });
                         }
                         sleep(retry_after).await;
                         continue;
@@ -368,9 +388,81 @@ fn extract_ratelimit_retry(resp: &Response) -> Option<Duration> {
     None
 }
 
+/// Парсит тело ошибки WB в человекочитаемое сообщение.
+///
+/// WB нестандартен: несколько форматов ошибок в разных API-семействах (пробуем
+/// по порядку полей):
+/// 1. `{error, errorText}` — большинство эндпоинтов (OpenAPI).
+/// 2. `{message, detail}` — некоторые эндпоинты.
+/// 3. `{data: {errors: [...]}}` — аналитика/возвраты.
+/// 4. `{"message": "..."}` — простой формат.
+/// Fallback для не-JSON: первые 500 симваков body.
+///
+/// Возвращает (retryable, message). retryable = 429 || 5xx.
+fn parse_wb_error(status: u16, body: &str) -> (bool, String) {
+    let retryable = status == 429 || (500..=599).contains(&status);
+    let v = serde_json::from_str::<Value>(body).ok();
+    let message = v
+        .as_ref()
+        .and_then(|v| {
+            // {error, errorText} — самый частый WB-формат.
+            if let (Some(code), Some(text)) = (
+                v.get("error").and_then(|x| x.as_str()),
+                v.get("errorText").and_then(|x| x.as_str()),
+            ) {
+                if !text.is_empty() {
+                    return Some(format!("{code}: {text}"));
+                }
+                return Some(code.to_string());
+            }
+            // {message, detail}.
+            if let Some(msg) = v.get("message").and_then(|x| x.as_str()) {
+                let detail = v.get("detail").and_then(|x| x.as_str()).unwrap_or("");
+                if !detail.is_empty() {
+                    return Some(format!("{msg}: {detail}"));
+                }
+                return Some(msg.to_string());
+            }
+            // {data: {errors: [...]}}.
+            if let Some(errs) = v
+                .get("data")
+                .and_then(|d| d.get("errors"))
+                .and_then(|e| e.as_array())
+            {
+                let joined = errs
+                    .iter()
+                    .filter_map(|e| {
+                        e.as_str()
+                            .map(str::to_string)
+                            .or_else(|| e.get("message").and_then(|m| m.as_str()).map(str::to_string))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if !joined.is_empty() {
+                    return Some(joined);
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| {
+            let truncated: String = body.chars().take(500).collect();
+            if truncated.is_empty() {
+                format!("HTTP {status} (пустое тело ответа)")
+            } else {
+                truncated
+            }
+        });
+    (retryable, message)
+}
+
 async fn map_status_error(status: StatusCode, resp: Response) -> CoreError {
     let body = resp.text().await.unwrap_or_default();
-    CoreError::Internal(format!("WB API {status}: {body}"))
+    let (retryable, message) = parse_wb_error(status.as_u16(), &body);
+    CoreError::Api {
+        status: status.as_u16(),
+        message,
+        retryable,
+    }
 }
 
 #[cfg(test)]
@@ -397,5 +489,49 @@ mod tests {
         std::env::remove_var("MDWF_WB_BASE_DOCUMENTS");
         assert_eq!(WbDomain::Finance.base_url(), "https://finance-api.wildberries.ru");
         assert_eq!(WbDomain::Documents.base_url(), "https://documents-api.wildberries.ru");
+    }
+
+    #[test]
+    fn conflict_is_non_retryable() {
+        // 409 — логический конфликт, не transient: не ретраим.
+        assert!(RetryPolicy::is_non_retryable(StatusCode::CONFLICT));
+        assert!(!RetryPolicy::is_non_retryable(StatusCode::INTERNAL_SERVER_ERROR));
+    }
+
+    #[test]
+    fn parse_wb_error_error_errortext() {
+        // Самый частый WB-формат: {error, errorText}.
+        let body = r#"{"error":"invalid token","errorText":"token expired"}"#;
+        let (retryable, msg) = parse_wb_error(401, body);
+        assert!(!retryable);
+        assert_eq!(msg, "invalid token: token expired");
+    }
+
+    #[test]
+    fn parse_wb_error_message_detail() {
+        let body = r#"{"message":"bad request","detail":"field sku required"}"#;
+        let (_, msg) = parse_wb_error(400, body);
+        assert_eq!(msg, "bad request: field sku required");
+    }
+
+    #[test]
+    fn parse_wb_error_data_errors_array() {
+        let body = r#"{"data":{"errors":["sku not found","price invalid"]}}"#;
+        let (_, msg) = parse_wb_error(422, body);
+        assert!(msg.contains("sku not found"));
+        assert!(msg.contains("price invalid"));
+    }
+
+    #[test]
+    fn parse_wb_error_non_json_fallback() {
+        let (retryable, msg) = parse_wb_error(500, "Internal Server Error");
+        assert!(retryable);
+        assert_eq!(msg, "Internal Server Error");
+    }
+
+    #[test]
+    fn parse_wb_error_empty_body() {
+        let (_, msg) = parse_wb_error(404, "");
+        assert!(msg.contains("404"));
     }
 }

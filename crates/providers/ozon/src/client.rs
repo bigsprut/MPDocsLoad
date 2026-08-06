@@ -251,7 +251,12 @@ impl OzonHttpClient {
                     let status = resp.status();
                     if status.is_success() {
                         self.breaker.on_success();
-                        return resp.json::<Value>().await.map_err(CoreError::Network);
+                        // 2xx, но не JSON — это ошибка протокола, не сеть.
+                        return resp.json::<Value>().await.map_err(|e| {
+                            CoreError::Internal(format!(
+                                "Ozon {url}: некорректный JSON-ответ ({e})"
+                            ))
+                        });
                     }
                     if status == StatusCode::TOO_MANY_REQUESTS {
                         let retry_after = extract_retry_after(&resp)
@@ -259,9 +264,16 @@ impl OzonHttpClient {
                         self.limiter.backoff(retry_after).await;
                         self.breaker.on_failure();
                         if attempt >= 3 {
-                            return Err(CoreError::Internal(format!(
-                                "Ozon API 429 после {attempt} попыток"
-                            )));
+                            // Читаем причину из body (Ozon: {message}).
+                            let body = resp.text().await.unwrap_or_default();
+                            let (_, message) = parse_ozon_error(429, &body);
+                            return Err(CoreError::Api {
+                                status: 429,
+                                message: format!(
+                                    "{message} Превышен лимит запросов после {attempt} попыток."
+                                ),
+                                retryable: true,
+                            });
                         }
                         sleep(retry_after).await;
                         continue;
@@ -288,12 +300,23 @@ impl OzonHttpClient {
     /// Скачивает файл по прямому URL (для ссылок из /v1/report/info).
     pub async fn download_file(&self, url: &str) -> CoreResult<Vec<u8>> {
         debug!(%url, "download_file");
-        self.http
+        let resp = self
+            .http
             .get(url)
             .send()
             .await
-            .map_err(CoreError::Network)?
-            .bytes()
+            .map_err(CoreError::Network)?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let (retryable, message) = parse_ozon_error(status.as_u16(), &body);
+            return Err(CoreError::Api {
+                status: status.as_u16(),
+                message,
+                retryable,
+            });
+        }
+        resp.bytes()
             .await
             .map(|b| b.to_vec())
             .map_err(CoreError::Network)
@@ -312,26 +335,82 @@ impl OzonHttpClient {
     }
 }
 
-/// Извлекает задержку из ответа Ozon 429. Ozon использует стандартный
-/// `Retry-After` (секунды). Возвращает None, если заголовка нет.
+/// Извлекает задержку из ответа Ozon 429. Ozon использует несколько заголовков:
+/// - `Retry-After` (стандарт, секунды) — основные эндпоинты.
+/// - `X-Ratelimit-Retry` (секунды) — резерв.
+/// - `Item-Retry-After` (минуты!) — product-import эндпоинты. Переводим в секунды.
+///
+/// Возвращает None, если ни одного заголовка нет. Все значения ограничены 1 часом.
 fn extract_retry_after(resp: &Response) -> Option<Duration> {
     if let Some(val) = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()) {
         if let Ok(secs) = val.trim().parse::<u64>() {
             return Some(Duration::from_secs(secs.min(3600)));
         }
     }
-    // На всякий случай проверяем и X-Ratelimit-Retry (как у WB).
     if let Some(val) = resp.headers().get("x-ratelimit-retry").and_then(|v| v.to_str().ok()) {
         if let Ok(secs) = val.trim().parse::<u64>() {
             return Some(Duration::from_secs(secs.min(3600)));
         }
     }
+    // Item-Retry-After у Ozon — в МИНУТАХ (product import). Переводим в секунды.
+    if let Some(val) = resp.headers().get("item-retry-after").and_then(|v| v.to_str().ok()) {
+        if let Ok(mins) = val.trim().parse::<u64>() {
+            return Some(Duration::from_secs(mins.saturating_mul(60).min(3600)));
+        }
+    }
     None
+}
+
+/// Парсит тело ошибки Ozon в человекочитаемое сообщение.
+///
+/// Ozon возвращает gRPC-gateway формат: `{"code": <num>, "message": "<text>",
+/// "details": [{"typeUrl","value"}]}`. Берём `message`; при наличии `details`
+/// кратко дополняем. Fallback для не-JSON: первые 500 симваков body.
+///
+/// Возвращает (retryable, message). retryable = 429 || 5xx.
+fn parse_ozon_error(status: u16, body: &str) -> (bool, String) {
+    let retryable = status == 429 || (500..=599).contains(&status);
+    let message = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| {
+            // message — основное описание.
+            let msg = v.get("message").and_then(|m| m.as_str()).map(str::to_string);
+            // details[] — доп. контекст (тип + значение).
+            let details = v
+                .get("details")
+                .and_then(|d| d.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|d| d.get("value").and_then(|x| x.as_str()).map(str::to_string))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                });
+            match (msg, details) {
+                (Some(m), Some(d)) if !d.is_empty() => Some(format!("{m} ({d})")),
+                (Some(m), _) => Some(m),
+                _ => None,
+            }
+        })
+        .unwrap_or_else(|| {
+            // Не JSON или нет message — первые 500 симваков, обрезанные.
+            let truncated: String = body.chars().take(500).collect();
+            if truncated.is_empty() {
+                format!("HTTP {status} (пустое тело ответа)")
+            } else {
+                truncated
+            }
+        });
+    (retryable, message)
 }
 
 async fn map_status_error(status: StatusCode, resp: Response) -> CoreError {
     let body = resp.text().await.unwrap_or_default();
-    CoreError::Internal(format!("Ozon API {status}: {body}"))
+    let (retryable, message) = parse_ozon_error(status.as_u16(), &body);
+    CoreError::Api {
+        status: status.as_u16(),
+        message,
+        retryable,
+    }
 }
 
 #[cfg(test)]
@@ -379,5 +458,48 @@ mod tests {
         assert!(cb.check().is_ok());
         cb.on_failure();
         assert!(cb.check().is_ok()); // счётчик сброшен успехом
+    }
+
+    #[test]
+    fn parse_ozon_error_grpc_gateway_shape() {
+        // gRPC-gateway: {code, message, details[]}.
+        let body = r#"{"code":18,"message":"Api-key is invalid or expired","details":[]}"#;
+        let (retryable, msg) = parse_ozon_error(401, body);
+        assert!(!retryable);
+        assert_eq!(msg, "Api-key is invalid or expired");
+    }
+
+    #[test]
+    fn parse_ozon_error_with_details() {
+        let body = r#"{"code":3,"message":"bad param","details":[{"typeUrl":"t","value":"price<=0"}]}"#;
+        let (_, msg) = parse_ozon_error(400, body);
+        assert!(msg.contains("bad param"));
+        assert!(msg.contains("price<=0"));
+    }
+
+    #[test]
+    fn parse_ozon_error_non_json_fallback() {
+        let (retryable, msg) = parse_ozon_error(500, "Internal Server Error");
+        assert!(retryable);
+        assert_eq!(msg, "Internal Server Error");
+    }
+
+    #[test]
+    fn parse_ozon_error_empty_body() {
+        let (_, msg) = parse_ozon_error(404, "");
+        assert!(msg.contains("404"), "empty body fallback: {msg}");
+    }
+
+    #[test]
+    fn parse_ozon_error_truncates_long_body() {
+        let long = "x".repeat(1000);
+        let (_, msg) = parse_ozon_error(500, &long);
+        assert_eq!(msg.chars().count(), 500, "should truncate to 500 chars");
+    }
+
+    #[test]
+    fn parse_ozon_error_429_is_retryable() {
+        let (retryable, _) = parse_ozon_error(429, r#"{"message":"too many requests"}"#);
+        assert!(retryable);
     }
 }

@@ -233,14 +233,36 @@ c82d6c2 feat(wb): пагинация /documents/list
 ### WB
 - Per-domain rate limiter (10с для documents, 60с для finance/analytics/returns, 6с для statistics)
 - 429: чтение `X-Ratelimit-Retry` + `Retry-After` → backoff лимитера
-- 429: max 3 попытки + человекочитаемая ошибка
-- 5xx: экспонента 500мс→8с, 5 попыток
+- 429: max 3 попытки + человекочитаемая ошибка (причина из body через `parse_wb_error`)
+- 5xx: экспонента 500мс→cap 30с, 5 попыток
+- 409 теперь non-retryable (логический конфликт, не transient)
 
 ### Ozon
 - Rate limiter 50 RPS (20мс интервал)
-- 429: чтение `Retry-After` → backoff
-- 429: max 3 попытки
+- 429: чтение `Retry-After` + `X-Ratelimit-Retry` (секунды) + `Item-Retry-After`
+  (минуты — product import, переводим в секунды) → backoff
+- 429: max 3 попытки + причина из body через `parse_ozon_error`
 - Circuit breaker: 5 ошибок → 5 минут
+
+### Обработка кодов возврата API (прод, Ozon+WB)
+Раньше все HTTP-ошибки (400/401/403/404/409/422/429/5xx) сваливались в
+`CoreError::Internal(String)` с сырым текстом body. Теперь — типизированный
+`CoreError::Api { status: u16, message: String, retryable: bool }`:
+- `parse_ozon_error(status, body)` — парсит gRPC-gateway формат `{code, message, details[]}`,
+  берёт `message`, дополняет `details`. Fallback — первые 500 симваков body.
+- `parse_wb_error(status, body)` — парсит WB-форматы по порядку: `{error, errorText}`,
+  `{message, detail}`, `{data:{errors:[...]}}`, `{"message":"..."}`. Fallback — 500 симваков.
+- `map_status_error` (оба провайдера) → `CoreError::Api` с человекочитаемым message
+  (НЕ сырой JSON).
+- Helper-методы на CoreError: `is_auth_failure()` (401/403/SecretNotFound),
+  `is_rate_limited()` (429), `is_transient()` (429/5xx/Network).
+- health_check (оба провайдера): типизированные matches вместо хрупкого
+  `msg.contains("401")`. 5xx → Degraded (transient), 401/403 → auth (явно),
+  429 → rate limit (явно), 400/404 → Down.
+- CLI exit codes: WB-401 теперь `AuthError` (раньше `ApiError`), 429 → `RateLimit`,
+  400/409/422 → `UsageError`, 404 → `NotFound`, 5xx → `ApiError`.
+- 2xx с некорректным JSON → `Internal` (раньше неверно `Network`).
+- Ozon `download_file`: проверка статуса, на 4xx/5xx → `CoreError::Api`.
 
 ---
 
@@ -315,6 +337,15 @@ thread_local! {
     тело пустое). Ошибка fetch НЕ блокирует смену магазина (seller_name=None, заголовок fallback на имя профиля).
 16. **Единый источник правды выбора магазина**: persist в `ui_state`/`"active_shop"` (SQLite),
     не в config.toml. Все вкладки читают оттуда, а не из собственных combos.
+17. **Обработка кодов возврата API (прод)**: HTTP-ошибки — типизированный `CoreError::Api
+    {status, message, retryable}` с распарсенным message (не сырой JSON-блоб). Парсеры
+    `parse_ozon_error`/`parse_wb_error` извлекают человекочитаемое описание из тела ответа
+    (Ozon gRPC-gateway `{code,message,details}`, WB — несколько форматов). health_check
+    использует helper-методы `is_auth_failure()`/`is_rate_limited()`/`is_transient()`, НЕ
+    хрупкий `msg.contains("401")`. CLI exit codes теперь корректно маппят auth/rate-limit.
+18. **2xx — не всегда успех**: JSON-parse failure на 2xx — это `Internal` (ошибка протокола),
+    НЕ `Network`. А `download_file` по ссылке из report/info тоже должен проверять статус
+    (404/403 на ссылке → `Api`, не молчаливый `Network`).
 
 ---
 
