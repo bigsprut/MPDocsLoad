@@ -21,6 +21,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
+rust_xlsxwriter.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

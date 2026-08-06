@@ -25,6 +25,7 @@ mod date_format;
 mod pagination;
 mod provider;
 mod reports;
+mod xlsx;
 
 pub use auth::{OzonAuthenticator, API_KEY_TTL_DAYS, DEFAULT_BASE_URL};
 pub use client::{

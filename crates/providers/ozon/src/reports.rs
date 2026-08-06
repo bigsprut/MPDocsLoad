@@ -270,12 +270,15 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             client,
             "/v2/finance/realization",
         )),
-        "ozon.realization_posting" => Arc::new(OzonReport::period(
+        "ozon.realization_posting" => Arc::new(OzonAsyncReport::new(
             "ozon.realization_posting",
             "Отчёт о реализации (позаказный)",
             ReportCategory::Finance,
             client,
-            "/v1/finance/realization/posting",
+            // Серверный Excel от Ozon (create→code→/v1/report/info→.xlsx).
+            // Тело {month, year} — см. build_download_body. Даёт готовый
+            // xlsx с шапкой «Отчет о реализации №...» (как в личном кабинете).
+            "/v1/report/realization/posting/create",
         )),
         "ozon.buyout" => Arc::new(OzonReport::period(
             "ozon.buyout",
@@ -489,12 +492,14 @@ impl Report for OzonReport {
     ) -> CoreResult<Vec<DownloadedFile>> {
         let body = build_download_body(&self.type_id, params);
         let json = self.client.post(self.endpoint, &body, auth).await?;
-        let content = serde_json::to_vec_pretty(&json)
-            .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
+        // Конвертация ответа в Excel (.xlsx) с русскими заголовками колонок
+        // (для buyout, balance, realization). realization_posting использует
+        // серверный Excel через OzonAsyncReport.
+        let content = crate::xlsx::workbook_bytes(&self.type_id, &json)?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
         Ok(vec![DownloadedFile::with_content(
-            format!("{}_{}.json", self.type_id, period),
-            "json",
+            format!("{}_{}.xlsx", self.type_id, period),
+            "xlsx",
             content,
         )])
     }
@@ -1008,15 +1013,22 @@ impl Report for OzonPaginatedReport {
         }
 
         let period = params.period.clone().unwrap_or_else(|| "current".into());
-        let content = serde_json::to_vec_pretty(&serde_json::json!({
+        // Конвертация собранных данных в Excel (.xlsx) с русскими заголовками.
+        // Ключ массива зависит от type_id: xlsx-конвертер ищет его в объекте.
+        let array_key = match self.type_id.as_str() {
+            "ozon.accrual_postings" => "posting_accruals",
+            "ozon.accrual_by_day" => "accruals",
+            _ => "items",
+        };
+        let wrapped = serde_json::json!({
             "type_id": self.type_id,
             "period": period,
-            "items": collected,
-        }))
-        .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
+            array_key: collected,
+        });
+        let content = crate::xlsx::workbook_bytes(&self.type_id, &wrapped)?;
         Ok(vec![DownloadedFile::with_content(
-            format!("{}_{}.json", self.type_id, period),
-            "json",
+            format!("{}_{}.xlsx", self.type_id, period),
+            "xlsx",
             content,
         )])
     }

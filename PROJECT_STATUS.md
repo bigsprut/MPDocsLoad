@@ -164,6 +164,13 @@ c82d6c2 feat(wb): пагинация /documents/list
   seller-отчёты (products, returns, postings, discounted, warehouse_stock,
   placement_by_products/supplies, marked_products_sales), аналитика (analytics_stocks,
   analytics_turnover).
+- **Все отчёты Ozon сохраняются как Excel (.xlsx)** (раньше часть была JSON):
+  - `realization_posting` → серверный Excel от Ozon через async
+    `/v1/report/realization/posting/create` (готовый xlsx, как в личном кабинете).
+  - buyout, balance, realization, cash_flow, analytics_stocks/turnover, accrual_postings/by_day
+    → конвертация JSON в .xlsx через `rust_xlsxwriter` (модуль `xlsx.rs`) с **русскими
+    заголовками колонок** из docs.ozon.ru. balance — 3 листа (Доходы/расходы, Услуги, Итоги);
+    accrual_by_day — 2 листа (Начисления, Сборы); accrual_postings — денормализация.
 
 ### GUI
 - **Выбор месяца двумя combo** (Январь…Декабрь + год) вместо текстового поля YYYY-MM.
