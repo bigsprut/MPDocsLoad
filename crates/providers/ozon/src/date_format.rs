@@ -30,6 +30,22 @@ pub fn parse_date_only(s: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
+/// Преобразует дату `YYYY-MM-DD` в ISO 8601 UTC с миллисекундами и Z.
+///
+/// Некоторые эндпоинты Ozon (returns, postings, cash-flow, marked-products)
+/// требуют datetime, а не дату — UI передаёт YYYY-MM-DD. `end_of_day=false`
+/// → `T00:00:00.000Z` (для `from`), `true` → `T23:59:59.999Z` (для `to`).
+/// При невозможности разобрать дату возвращает `None`.
+pub fn date_only_to_iso(date: &str, end_of_day: bool) -> Option<String> {
+    let d = parse_date_only(date)?;
+    let dt = if end_of_day {
+        d.and_hms_milli_opt(23, 59, 59, 999)?
+    } else {
+        d.and_hms_milli_opt(0, 0, 0, 0)?
+    };
+    Some(format_iso8601_ms_z(dt.and_utc()))
+}
+
 /// Разбор года/месяца `YYYY-MM` -> (year, month).
 pub fn parse_year_month(s: &str) -> Option<(i32, u32)> {
     let (y, m) = s.split_once('-')?;
@@ -64,5 +80,18 @@ mod tests {
         assert_eq!(parse_date_only("2026-07-03"), Some(d));
         assert_eq!(parse_year_month("2026-06"), Some((2026, 6)));
         assert_eq!(parse_year_month("bad"), None);
+    }
+
+    #[test]
+    fn date_only_to_iso_bounds() {
+        assert_eq!(
+            date_only_to_iso("2026-07-01", false),
+            Some("2026-07-01T00:00:00.000Z".into())
+        );
+        assert_eq!(
+            date_only_to_iso("2026-07-31", true),
+            Some("2026-07-31T23:59:59.999Z".into())
+        );
+        assert_eq!(date_only_to_iso("bad", false), None);
     }
 }

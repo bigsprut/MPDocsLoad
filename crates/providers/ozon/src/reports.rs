@@ -47,19 +47,23 @@ pub fn capabilities() -> Capabilities {
     }
 }
 
-/// Описания всех отчётов Ozon (спец. §2.2.1). Удалены: служебные, дублёры,
-/// сложные/устаревшие. Теперь 8 отчётов.
+/// Описания всех отчётов Ozon (спец. §2.2.1). Все 21 отчёта, Period-режим.
 ///
-/// Удалено в этом чате: `accrual_postings` и `accrual_by_day` — сверкено с
-/// docs.ozon.ru: `/v1/finance/accrual/postings` требует конкретные `posting_numbers`
-/// (1–200 номеров отправлений), а `/v1/finance/accrual/by-day` — один конкретный
-/// `date` + постраничный `last_id`. Ни один не встаёт в модель Report
-/// (Browsable: диапазон→список→выбор; Period: месяц→генерация), а выдумывать
-/// обёртку нельзя. Раньше код шлёт `{limit,offset,date_from,date_to}` → 400.
+/// Группы (сверено с docs.ozon.ru):
+/// - Финансовые: realization, realization_posting, balance, buyout, compensation,
+///   decompensation, mutual_settlement, cash_flow, accrual_postings, accrual_by_day.
+/// - Реестры/документы: b2b_sales.
+/// - Отчёты (create→code→/v1/report/info→файл): products, returns, postings,
+///   discounted, warehouse_stock, placement_by_products, placement_by_supplies,
+///   marked_products_sales.
+/// - Аналитика: analytics_stocks, analytics_turnover.
+///
+/// НЕ включены (deprecated, отключаются 8 сент 2026 / заменены):
+/// transaction_list, transaction_totals, stock_on_warehouses.
 #[must_use]
 pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
     vec![
-        // --- Финансовые отчёты (Period-режим) ---
+        // --- Финансовые отчёты (Period, прямой JSON) ---
         desc_period(
             "ozon.realization",
             "Отчёт о реализации (месячный)",
@@ -85,6 +89,30 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             &[],
         ),
         desc_period(
+            "ozon.cash_flow",
+            "Финансовый отчёт (движение средств)",
+            ReportCategory::Finance,
+            &[param_date_range(true)],
+        ),
+        // accrual — новые бета-методы начислений (замена deprecated transaction-list).
+        desc_period(
+            "ozon.accrual_by_day",
+            "Начисления за день",
+            ReportCategory::Finance,
+            &[param_period_month("period", "День (YYYY-MM)", true)],
+        ),
+        desc_period(
+            "ozon.accrual_postings",
+            "Начисления по отправлениям",
+            ReportCategory::Finance,
+            &[param_text(
+                "posting_numbers",
+                "Номера отправлений (через запятую, 1–200)",
+                true,
+            )],
+        ),
+        // --- Штрафы/компенсации (async) ---
+        desc_period(
             "ozon.compensation",
             "Компенсации",
             ReportCategory::Finance,
@@ -96,6 +124,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             ReportCategory::Penalties,
             &[param_date_range(true)],
         ),
+        // --- Реестры/документы (async) ---
         desc_period(
             "ozon.b2b_sales",
             "Продажи юрлицам (PDF)",
@@ -107,6 +136,72 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "Отчёт о взаиморасчётах",
             ReportCategory::Finance,
             &[param_date_range(true)],
+        ),
+        // --- Отчёты seller (async: create→code→/v1/report/info→файл) ---
+        desc_period(
+            "ozon.products",
+            "Отчёт по товарам",
+            ReportCategory::Documents,
+            &[],
+        ),
+        desc_period(
+            "ozon.returns",
+            "Отчёт о возвратах",
+            ReportCategory::Documents,
+            &[param_date_range(true)],
+        ),
+        desc_period(
+            "ozon.postings",
+            "Отчёт об отправлениях",
+            ReportCategory::Documents,
+            &[param_date_range(true)],
+        ),
+        desc_period(
+            "ozon.discounted",
+            "Отчёт об уценённых товарах",
+            ReportCategory::Documents,
+            &[],
+        ),
+        desc_period(
+            "ozon.warehouse_stock",
+            "Остатки на FBS-складе",
+            ReportCategory::Documents,
+            &[param_text(
+                "warehouse_ids",
+                "ID складов (через запятую)",
+                true,
+            )],
+        ),
+        desc_period(
+            "ozon.placement_by_products",
+            "Стоимость размещения по товарам",
+            ReportCategory::Documents,
+            &[param_date_range(true)],
+        ),
+        desc_period(
+            "ozon.placement_by_supplies",
+            "Стоимость размещения по поставкам",
+            ReportCategory::Documents,
+            &[param_date_range(true)],
+        ),
+        desc_period(
+            "ozon.marked_products_sales",
+            "Продажи товаров с маркировкой",
+            ReportCategory::Documents,
+            &[param_date_range(true)],
+        ),
+        // --- Аналитика остатков ---
+        desc_period(
+            "ozon.analytics_stocks",
+            "Аналитика по остаткам",
+            ReportCategory::Finance,
+            &[param_text("skus", "SKU (через запятую, ≤100)", true)],
+        ),
+        desc_period(
+            "ozon.analytics_turnover",
+            "Оборачиваемость товара",
+            ReportCategory::Finance,
+            &[],
         ),
     ]
 }
@@ -145,6 +240,18 @@ fn param_date_range(required: bool) -> ReportParameter {
         id: "date_range".into(),
         label: "Период (с..по)".into(),
         kind: ReportParameterKind::DateRange,
+        required,
+        default: None,
+    }
+}
+
+/// Текстовый параметр (CSV значений через запятую) — для warehouse_ids,
+/// posting_numbers, skus. `id` — ключ в params.values.
+fn param_text(id: &str, label: &str, required: bool) -> ReportParameter {
+    ReportParameter {
+        id: id.into(),
+        label: label.into(),
+        kind: ReportParameterKind::Text,
         required,
         default: None,
     }
@@ -211,6 +318,107 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             ReportCategory::Finance,
             client,
             "/v1/finance/mutual-settlement",
+        )),
+        // --- Seller-отчёты (async: create→code→/v1/report/info→файл) ---
+        "ozon.products" => Arc::new(OzonAsyncReport::new(
+            "ozon.products",
+            "Отчёт по товарам",
+            ReportCategory::Documents,
+            client,
+            "/v1/report/products/create",
+        )),
+        "ozon.returns" => Arc::new(OzonAsyncReport::new(
+            "ozon.returns",
+            "Отчёт о возвратах",
+            ReportCategory::Documents,
+            client,
+            "/v2/report/returns/create",
+        )),
+        "ozon.postings" => Arc::new(OzonAsyncReport::new(
+            "ozon.postings",
+            "Отчёт об отправлениях",
+            ReportCategory::Documents,
+            client,
+            "/v1/report/postings/create",
+        )),
+        "ozon.discounted" => Arc::new(OzonAsyncReport::new(
+            "ozon.discounted",
+            "Отчёт об уценённых товарах",
+            ReportCategory::Documents,
+            client,
+            "/v1/report/discounted/create",
+        )),
+        "ozon.warehouse_stock" => Arc::new(OzonAsyncReport::new(
+            "ozon.warehouse_stock",
+            "Остатки на FBS-складе",
+            ReportCategory::Documents,
+            client,
+            "/v1/report/warehouse/stock",
+        )),
+        "ozon.placement_by_products" => Arc::new(OzonAsyncReport::new(
+            "ozon.placement_by_products",
+            "Стоимость размещения по товарам",
+            ReportCategory::Documents,
+            client,
+            "/v1/report/placement/by-products/create",
+        )),
+        "ozon.placement_by_supplies" => Arc::new(OzonAsyncReport::new(
+            "ozon.placement_by_supplies",
+            "Стоимость размещения по поставкам",
+            ReportCategory::Documents,
+            client,
+            "/v1/report/placement/by-supplies/create",
+        )),
+        "ozon.marked_products_sales" => Arc::new(OzonAsyncReport::new(
+            "ozon.marked_products_sales",
+            "Продажи товаров с маркировкой",
+            ReportCategory::Documents,
+            client,
+            "/v1/report/marked-products-sales/create",
+        )),
+        // --- Inline-отчёты со списками и пагинацией (sweep → один JSON) ---
+        "ozon.cash_flow" => Arc::new(OzonPaginatedReport::new(
+            "ozon.cash_flow",
+            "Финансовый отчёт (движение средств)",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/cash-flow-statement/list",
+            PaginationKind::CashFlow,
+        )),
+        "ozon.analytics_stocks" => Arc::new(OzonPaginatedReport::new(
+            "ozon.analytics_stocks",
+            "Аналитика по остаткам",
+            ReportCategory::Finance,
+            client,
+            "/v1/analytics/stocks",
+            // Нет серверной пагинации — один батч ≤100 SKU. Ответ: {items:[...]}.
+            PaginationKind::Single { array_field: "items" },
+        )),
+        "ozon.analytics_turnover" => Arc::new(OzonPaginatedReport::new(
+            "ozon.analytics_turnover",
+            "Оборачиваемость товара",
+            ReportCategory::Finance,
+            client,
+            "/v1/analytics/turnover/stocks",
+            PaginationKind::Offset,
+        )),
+        // --- Начисления (замена deprecated transaction-list) ---
+        "ozon.accrual_postings" => Arc::new(OzonPaginatedReport::new(
+            "ozon.accrual_postings",
+            "Начисления по отправлениям",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/accrual/postings",
+            // Один запрос по posting_numbers (1–200). Ответ: {posting_accruals:[...]}.
+            PaginationKind::Single { array_field: "posting_accruals" },
+        )),
+        "ozon.accrual_by_day" => Arc::new(OzonPaginatedReport::new(
+            "ozon.accrual_by_day",
+            "Начисления за день",
+            ReportCategory::Finance,
+            client,
+            "/v1/finance/accrual/by-day",
+            PaginationKind::LastId,
         )),
         _ => {
             return Err(CoreError::ReportTypeNotSupported(type_id.to_string()));
@@ -295,12 +503,17 @@ impl Report for OzonReport {
 /// Строит тело запроса для download из параметров.
 ///
 /// Формат тела зависит от type_id — разные эндпоинты Ozon ждут разные схемы
-/// периода (сверено с официальным swagger.json API v2.1):
+/// (сверено с docs.ozon.ru):
 /// - `month`+`year` как integer: realization, realization_posting.
 /// - `date` как строка YYYY-MM: compensation, decompensation, b2b_sales,
 ///   mutual_settlement (async-отчёты).
-/// - `date_from`+`date_to` как YYYY-MM-DD: balance, buyout.
-/// - browsable-отчёты (accrual_*): без периода, тело из params.values.
+/// - `date_from`+`date_to` как YYYY-MM-DD: balance, buyout, placement_*.
+/// - `filter{date_from,to}` ISO datetime: returns, postings (filter.processed_at_*).
+/// - `date{from,to}` ISO datetime: marked_products_sales, cash_flow.
+/// - `warehouseId[]` camelCase: warehouse_stock.
+/// - `posting_numbers[]` (обязательны): accrual_postings.
+/// - `date` YYYY-MM-DD + `last_id` (sweep): accrual_by_day.
+/// - `limit`/`offset`/`skus[]`: analytics_turnover, analytics_stocks.
 fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Value {
     let mut body = json!({});
     let period = params.period.as_deref();
@@ -318,8 +531,9 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
                 }
             }
         }
-        // date_from + date_to как YYYY-MM-DD.
-        "ozon.balance" | "ozon.buyout" => {
+        // date_from + date_to как YYYY-MM-DD: balance, buyout, placement_*.
+        "ozon.balance" | "ozon.buyout" | "ozon.placement_by_products"
+        | "ozon.placement_by_supplies" => {
             if let Some(df) = &date_from {
                 body["date_from"] = json!(df);
             }
@@ -327,26 +541,128 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
                 body["date_to"] = json!(dt);
             }
         }
-        // date как строка YYYY-MM (async-отчёты).
+        // date как строка YYYY-MM (async-отчёты, тело date=YYYY-MM).
         "ozon.compensation" | "ozon.decompensation" | "ozon.b2b_sales"
         | "ozon.mutual_settlement" => {
             if let Some(p) = period {
                 body["date"] = json!(p);
             }
         }
-        _ => {
-            // Browsable-отчёты (transaction_list, transaction_totals, accrual_*):
-            // период не используется, тело собирается из params.values ниже.
+        // --- Async-отчёты «create → code → /v1/report/info → файл» ---
+        // products/create и discounted/create: тело пустое (фильтры опциональны,
+        // добавятся из values ниже) — попадают в общую ветку `_`.
+        // returns/create: filter{date_from,to} — ISO datetime, language.
+        "ozon.returns" => {
+            let mut filter = serde_json::Map::new();
+            if let Some(df) = &date_from {
+                if let Some(iso) = date_format::date_only_to_iso(df, false) {
+                    filter.insert("date_from".into(), json!(iso));
+                }
+            }
+            if let Some(dt) = &date_to {
+                if let Some(iso) = date_format::date_only_to_iso(dt, true) {
+                    filter.insert("date_to".into(), json!(iso));
+                }
+            }
+            body["filter"] = json!(filter);
+            body["language"] = json!("DEFAULT");
         }
+        // postings/create: filter{processed_at_from,to} — ISO datetime, language.
+        "ozon.postings" => {
+            let mut filter = serde_json::Map::new();
+            if let Some(df) = &date_from {
+                if let Some(iso) = date_format::date_only_to_iso(df, false) {
+                    filter.insert("processed_at_from".into(), json!(iso));
+                }
+            }
+            if let Some(dt) = &date_to {
+                if let Some(iso) = date_format::date_only_to_iso(dt, true) {
+                    filter.insert("processed_at_to".into(), json!(iso));
+                }
+            }
+            body["filter"] = json!(filter);
+            body["language"] = json!("DEFAULT");
+        }
+        // warehouse/stock: warehouseId[] (camelCase, значения-строки), language.
+        // Идентификаторы складов передаются в values["warehouse_ids"] (CSV).
+        "ozon.warehouse_stock" => {
+            body["language"] = json!("DEFAULT");
+            if let Some(csv) = params.get("warehouse_ids") {
+                let ids: Vec<&str> = csv.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+                body["warehouseId"] = json!(ids);
+            }
+        }
+        // marked-products-sales/create: date{from,to} — ISO datetime.
+        "ozon.marked_products_sales" => {
+            let mut date = serde_json::Map::new();
+            if let Some(df) = &date_from {
+                if let Some(iso) = date_format::date_only_to_iso(df, false) {
+                    date.insert("from".into(), json!(iso));
+                }
+            }
+            if let Some(dt) = &date_to {
+                if let Some(iso) = date_format::date_only_to_iso(dt, true) {
+                    date.insert("to".into(), json!(iso));
+                }
+            }
+            body["date"] = json!(date);
+        }
+        // --- Inline-отчёты (списки с пагинацией, sweep внутри download) ---
+        // cash-flow-statement/list: date{from,to} ISO, page/page_size (page в sweep).
+        "ozon.cash_flow" => {
+            let mut date = serde_json::Map::new();
+            if let Some(df) = &date_from {
+                if let Some(iso) = date_format::date_only_to_iso(df, false) {
+                    date.insert("from".into(), json!(iso));
+                }
+            }
+            if let Some(dt) = &date_to {
+                if let Some(iso) = date_format::date_only_to_iso(dt, true) {
+                    date.insert("to".into(), json!(iso));
+                }
+            }
+            body["date"] = json!(date);
+            body["page_size"] = json!(1000);
+        }
+        // analytics/turnover/stocks: limit/offset (offset в sweep).
+        "ozon.analytics_turnover" => {
+            body["limit"] = json!(1000);
+        }
+        // analytics/stocks: skus[] (≤100 за запрос; батчинг в download).
+        "ozon.analytics_stocks" => {
+            if let Some(csv) = params.get("skus") {
+                let skus: Vec<&str> = csv.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+                body["skus"] = json!(skus);
+            }
+        }
+        // --- Возвращаемые accrual (ранее удалены, реализованы по доке) ---
+        // accrual/postings: posting_numbers[] (1–200, обязательны).
+        "ozon.accrual_postings" => {
+            if let Some(csv) = params.get("posting_numbers") {
+                let nums: Vec<&str> = csv.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+                body["posting_numbers"] = json!(nums);
+            }
+        }
+        // accrual/by-day: date YYYY-MM-DD, last_id (sweep в download).
+        "ozon.accrual_by_day" => {
+            // date — из period или date_from (один конкретный день).
+            let day = period.or(date_from.as_deref()).unwrap_or("current");
+            body["date"] = json!(day);
+        }
+        _ => {}
     }
 
-    // ids — для Browsable-режима (если есть).
+    // ids — для Browsable-режима (если есть; Ozon сейчас не использует, но оставлено
+    // для совместимости с UI, который шлёт ids для wb-стиля).
     if let Some(ids) = params.get("ids") {
         body["ids"] = json!(ids.split(',').collect::<Vec<_>>());
     }
-    // Произвольные параметры из values (кроме служебных ключей).
+    // Произвольные параметры из values (кроме служебных ключей, уже учтённых выше).
     for (k, v) in &params.values {
-        if !matches!(k.as_str(), "ids" | "date_from" | "date_to") {
+        if !matches!(
+            k.as_str(),
+            "ids" | "date_from" | "date_to" | "warehouse_ids" | "skus" | "posting_numbers"
+        ) {
             body[k.as_str()] = json!(v);
         }
     }
@@ -434,14 +750,17 @@ impl Report for OzonAsyncReport {
         let body = build_download_body(&self.type_id, params);
         let resp = self.client.post(self.endpoint, &body, auth).await?;
 
-        // Извлекаем code: {result:{code:"..."}}.
+        // Извлекаем code. Большинство create-эндпоинтов возвращают {result:{code}},
+        // но часть — {code} без result-обёртки (discounted, warehouse_stock,
+        // placement/by-products, placement/by-supplies). Сверено с docs.ozon.ru.
         let code = resp
             .get("result")
             .and_then(|r| r.get("code"))
             .and_then(|c| c.as_str())
+            .or_else(|| resp.get("code").and_then(|c| c.as_str()))
             .ok_or_else(|| {
                 CoreError::Internal(format!(
-                    "Ozon {}: ответ не содержит result.code",
+                    "Ozon {}: ответ не содержит result.code/code",
                     self.type_id
                 ))
             })?;
@@ -496,6 +815,209 @@ impl Report for OzonAsyncReport {
             format!("{}_{}.xlsx", self.type_id, period),
             "xlsx",
             bytes,
+        )])
+    }
+}
+
+// =========================================================================
+// OzonPaginatedReport — inline-отчёты со списками и пагинацией.
+//
+// Некоторые эндпоинты Ozon возвращают данные сразу (не через code/file), но
+// постранично. Этот тип делает sweep всех страниц и собирает результат в один
+// JSON-файл. Сверено с docs.ozon.ru:
+// - cash-flow-statement/list: {result:{cash_flows, page_count}} — page-based.
+// - analytics/turnover/stocks: {items} — offset/limit.
+// - accrual/by-day: {accruals, last_id} — last_id (курсор).
+//
+// Защита от бесконечного цикла: MAX_PAGES (200 по образцу WB-документов).
+// =========================================================================
+
+/// Стратегия пагинации эндпоинта (сверено с докой каждого метода).
+enum PaginationKind {
+    /// /v1/finance/cash-flow-statement/list: `{result:{cash_flows:[...], page_count:N}}`.
+    /// Запрос: `{date, page, page_size}`. Цикл по page=1..=page_count.
+    CashFlow,
+    /// /v1/analytics/turnover/stocks: `{items:[...]}`. Запрос: `{limit, offset}`.
+    /// Цикл по offset += limit, пока items непустой.
+    Offset,
+    /// /v1/finance/accrual/by-day: `{accruals:[...], last_id:"..."}`. Запрос:
+    /// `{date, last_id}`. Цикл: last_id из ответа подставляется в следующий запрос,
+    /// пока accruals непустой И last_id меняется.
+    LastId,
+    /// Один запрос без пагинации. `array_field` — путь к массиву в ответе
+    /// (напр. `posting_accruals` для accrual/postings, `items` для analytics/stocks).
+    /// Результат — массив из одного ответа. Используется для эндпоинтов, где
+    /// серверная пагинация отсутствует (батч ≤N SKU на стороне клиента).
+    Single { array_field: &'static str },
+}
+
+/// Максимальное число страниц/итераций sweep (защита от бесконечного цикла).
+const MAX_PAGES: u32 = 200;
+
+pub struct OzonPaginatedReport {
+    type_id: String,
+    display_name: String,
+    category: ReportCategory,
+    client: OzonHttpClient,
+    endpoint: &'static str,
+    kind: PaginationKind,
+}
+
+impl OzonPaginatedReport {
+    /// Конструктор приватный (тип internal, как OzonReport/OzonAsyncReport) —
+    /// используется только из `make_report` в этом же крейте.
+    #[must_use]
+    fn new(
+        type_id: &str,
+        display_name: &str,
+        category: ReportCategory,
+        client: OzonHttpClient,
+        endpoint: &'static str,
+        kind: PaginationKind,
+    ) -> Self {
+        Self {
+            type_id: type_id.into(),
+            display_name: display_name.into(),
+            category,
+            client,
+            endpoint,
+            kind,
+        }
+    }
+}
+
+#[async_trait]
+impl Report for OzonPaginatedReport {
+    fn type_id(&self) -> &str {
+        &self.type_id
+    }
+    fn display_name(&self) -> &str {
+        &self.display_name
+    }
+    fn category(&self) -> ReportCategory {
+        self.category.clone()
+    }
+    fn acquisition_mode(&self) -> AcquisitionMode {
+        AcquisitionMode::Period
+    }
+    fn downloader_kind(&self) -> DownloaderKind {
+        DownloaderKind::Api
+    }
+    fn parameters(&self) -> &[ReportParameter] {
+        &[]
+    }
+
+    async fn download(
+        &self,
+        auth: &dyn mdwf_core::Authenticator,
+        params: &ReportParams,
+        _progress: ProgressCallbackRef,
+        _cancel: CancelToken,
+    ) -> CoreResult<Vec<DownloadedFile>> {
+        let mut collected = serde_json::json!([]);
+        match self.kind {
+            PaginationKind::CashFlow => {
+                // Цикл по page=1..=page_count, собираем result.cash_flows.
+                let mut page = 1u32;
+                loop {
+                    let mut body = build_download_body(&self.type_id, params);
+                    body["page"] = json!(page);
+                    let resp = self.client.post(self.endpoint, &body, auth).await?;
+                    let result = resp.get("result").cloned().unwrap_or(json!({}));
+                    if let Some(rows) = result.get("cash_flows").and_then(|v| v.as_array()) {
+                        if let Some(arr) = collected.as_array_mut() {
+                            arr.extend(rows.iter().cloned());
+                        }
+                    }
+                    let page_count = result
+                        .get("page_count")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as u32;
+                    if page_count == 0 || page >= page_count || page >= MAX_PAGES {
+                        break;
+                    }
+                    page += 1;
+                }
+            }
+            PaginationKind::Offset => {
+                // Цикл по offset += limit, пока items непустой.
+                let limit = 1000u64;
+                let mut offset = 0u64;
+                loop {
+                    let mut body = build_download_body(&self.type_id, params);
+                    body["limit"] = json!(limit);
+                    body["offset"] = json!(offset);
+                    let resp = self.client.post(self.endpoint, &body, auth).await?;
+                    let items = resp.get("items").and_then(|v| v.as_array());
+                    let n = items.map_or(0, Vec::len) as u64;
+                    if let Some(rows) = items {
+                        if let Some(arr) = collected.as_array_mut() {
+                            arr.extend(rows.iter().cloned());
+                        }
+                    }
+                    if n == 0 || n < limit {
+                        break;
+                    }
+                    offset += limit;
+                    if offset / limit >= u64::from(MAX_PAGES) {
+                        break;
+                    }
+                }
+            }
+            PaginationKind::LastId => {
+                // accrual/by-day: цикл по last_id, пока accruals непустой и last_id меняется.
+                let mut last_id = String::new();
+                let mut iter = 0u32;
+                loop {
+                    let mut body = build_download_body(&self.type_id, params);
+                    body["last_id"] = json!(last_id);
+                    let resp = self.client.post(self.endpoint, &body, auth).await?;
+                    let accruals = resp.get("accruals").and_then(|v| v.as_array());
+                    let n = accruals.map_or(0, Vec::len);
+                    if let Some(rows) = accruals {
+                        if let Some(arr) = collected.as_array_mut() {
+                            arr.extend(rows.iter().cloned());
+                        }
+                    }
+                    let next_last_id = resp
+                        .get("last_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    // Условия выхода: пустой ответ, last_id не изменился, лимит итераций.
+                    if n == 0 || next_last_id.is_empty() || next_last_id == last_id {
+                        break;
+                    }
+                    last_id = next_last_id;
+                    iter += 1;
+                    if iter >= MAX_PAGES {
+                        break;
+                    }
+                }
+            }
+            PaginationKind::Single { array_field } => {
+                // Один запрос, без пагинации. Читаем массив по заданному пути.
+                let body = build_download_body(&self.type_id, params);
+                let resp = self.client.post(self.endpoint, &body, auth).await?;
+                if let Some(rows) = resp.get(array_field).and_then(|v| v.as_array()) {
+                    if let Some(arr) = collected.as_array_mut() {
+                        arr.extend(rows.iter().cloned());
+                    }
+                }
+            }
+        }
+
+        let period = params.period.clone().unwrap_or_else(|| "current".into());
+        let content = serde_json::to_vec_pretty(&serde_json::json!({
+            "type_id": self.type_id,
+            "period": period,
+            "items": collected,
+        }))
+        .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
+        Ok(vec![DownloadedFile::with_content(
+            format!("{}_{}.json", self.type_id, period),
+            "json",
+            content,
         )])
     }
 }
@@ -568,26 +1090,129 @@ mod tests {
     }
 
     #[test]
-    fn reports_count_is_8() {
+    fn build_body_returns_filter_iso() {
+        // /v2/report/returns/create: filter{date_from,to} — ISO datetime.
+        let params = ReportParams::default()
+            .with("date_from", "2026-07-01")
+            .with("date_to", "2026-07-31");
+        let body = build_download_body("ozon.returns", &params);
+        assert_eq!(body["filter"]["date_from"], "2026-07-01T00:00:00.000Z");
+        assert_eq!(body["filter"]["date_to"], "2026-07-31T23:59:59.999Z");
+        assert_eq!(body["language"], "DEFAULT");
+    }
+
+    #[test]
+    fn build_body_postings_filter_processed_at_iso() {
+        // /v1/report/postings/create: filter{processed_at_from,to} — ISO datetime.
+        let params = ReportParams::default()
+            .with("date_from", "2026-07-01")
+            .with("date_to", "2026-07-31");
+        let body = build_download_body("ozon.postings", &params);
+        assert_eq!(body["filter"]["processed_at_from"], "2026-07-01T00:00:00.000Z");
+        assert_eq!(body["filter"]["processed_at_to"], "2026-07-31T23:59:59.999Z");
+    }
+
+    #[test]
+    fn build_body_warehouse_stock_camelcase() {
+        // /v1/report/warehouse/stock: warehouseId[] (camelCase, значения-строки).
+        let params = ReportParams::default().with("warehouse_ids", "102, 103");
+        let body = build_download_body("ozon.warehouse_stock", &params);
+        assert_eq!(body["warehouseId"], json!(["102", "103"]));
+        assert_eq!(body["language"], "DEFAULT");
+    }
+
+    #[test]
+    fn build_body_placement_date_only() {
+        // placement/by-products|by-supplies: date_from/to YYYY-MM-DD (без ISO).
+        for tid in ["ozon.placement_by_products", "ozon.placement_by_supplies"] {
+            let params = ReportParams::default()
+                .with("date_from", "2026-07-01")
+                .with("date_to", "2026-07-31");
+            let body = build_download_body(tid, &params);
+            assert_eq!(body["date_from"], "2026-07-01", "{tid}");
+            assert_eq!(body["date_to"], "2026-07-31", "{tid}");
+        }
+    }
+
+    #[test]
+    fn build_body_marked_products_nested_date() {
+        // /v1/report/marked-products-sales/create: date{from,to} — ISO datetime.
+        let params = ReportParams::default()
+            .with("date_from", "2026-07-01")
+            .with("date_to", "2026-07-31");
+        let body = build_download_body("ozon.marked_products_sales", &params);
+        assert_eq!(body["date"]["from"], "2026-07-01T00:00:00.000Z");
+        assert_eq!(body["date"]["to"], "2026-07-31T23:59:59.999Z");
+    }
+
+    #[test]
+    fn build_body_cash_flow_page_and_date() {
+        // /v1/finance/cash-flow-statement/list: date{from,to} + page_size.
+        let params = ReportParams::default()
+            .with("date_from", "2026-07-01")
+            .with("date_to", "2026-07-31");
+        let body = build_download_body("ozon.cash_flow", &params);
+        assert_eq!(body["date"]["from"], "2026-07-01T00:00:00.000Z");
+        assert_eq!(body["page_size"], 1000);
+        // page проставляется в sweep, не здесь.
+        assert!(body.get("page").is_none());
+    }
+
+    #[test]
+    fn build_body_analytics_stocks_skus() {
+        // /v1/analytics/stocks: skus[].
+        let params = ReportParams::default().with("skus", "100, 200,300");
+        let body = build_download_body("ozon.analytics_stocks", &params);
+        assert_eq!(body["skus"], json!(["100", "200", "300"]));
+    }
+
+    #[test]
+    fn build_body_accrual_postings_numbers() {
+        // /v1/finance/accrual/postings: posting_numbers[] (обязательны).
+        let params = ReportParams::default().with("posting_numbers", "234-1-1, 234-1-2");
+        let body = build_download_body("ozon.accrual_postings", &params);
+        assert_eq!(body["posting_numbers"], json!(["234-1-1", "234-1-2"]));
+    }
+
+    #[test]
+    fn build_body_accrual_by_day_date() {
+        // /v1/finance/accrual/by-day: date YYYY-MM-DD.
+        let params = ReportParams { period: Some("2026-07-15".into()), ..Default::default() };
+        let body = build_download_body("ozon.accrual_by_day", &params);
+        assert_eq!(body["date"], "2026-07-15");
+        assert!(body.get("last_id").is_none()); // last_id проставляется в sweep.
+    }
+
+    #[test]
+    fn build_body_discounted_empty() {
+        // /v1/report/discounted/create: пустое тело.
+        let body = build_download_body("ozon.discounted", &ReportParams::default());
+        assert!(body.as_object().map_or(true, serde_json::Map::is_empty));
+    }
+
+    #[test]
+    fn reports_count_is_21() {
         let caps = capabilities();
-        assert_eq!(caps.reports.len(), 8, "got {} reports", caps.reports.len());
+        assert_eq!(caps.reports.len(), 21, "got {} reports", caps.reports.len());
         // accrual_types удалён — это служебный справочник, не выгрузка.
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_types"));
         // b2b_sales_json удалён — дублёр b2b_sales (PDF).
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.b2b_sales_json"));
-        // cash_flow/analytics/act_discrepancy удалены — требуют сложных схем/UI.
-        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.cash_flow"));
-        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.analytics"));
+        // act_discrepancy удалён — требует сложных схем/UI.
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.act_discrepancy"));
-        // transaction_list/totals удалены (deprecated → отключены 8 сентября 2026).
+        // transaction_list/totals НЕ включены (deprecated → отключены 8 сентября 2026).
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.transaction_list"));
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.transaction_totals"));
+        // stock_on_warehouses НЕ включён (deprecated → заменён на analytics/stocks).
+        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.stock_on_warehouses"));
         // realization_by_day удалён (требует подписку Premium Plus/Pro).
         assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.realization_by_day"));
-        // accrual_postings/by_day удалены (не списочные по API: требуют
-        // posting_numbers / один date + last_id — не встают в модель Report).
-        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_postings"));
-        assert!(!caps.reports.iter().any(|r| r.type_id == "ozon.accrual_by_day"));
+        // accrual_postings/by_day ВОЗВРАЩЕНЫ (реализованы по доке: posting_numbers
+        // и date+last_id — через OzonPaginatedReport, не browsable).
+        assert!(caps.reports.iter().any(|r| r.type_id == "ozon.accrual_postings"));
+        assert!(caps.reports.iter().any(|r| r.type_id == "ozon.accrual_by_day"));
+        // cash_flow включён (inline, sweep страниц).
+        assert!(caps.reports.iter().any(|r| r.type_id == "ozon.cash_flow"));
     }
 
     #[test]

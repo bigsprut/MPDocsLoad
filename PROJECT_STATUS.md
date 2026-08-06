@@ -40,7 +40,7 @@ crates/
 ├── scheduler/         — cron + retry + автозапуск Windows (HKCU Run)
 ├── config/            — config.toml + пути (%APPDATA%\mdwf)
 ├── test-provider/     — TestProvider mock
-├── providers/ozon/    — Ozon Seller API (8 отчётов)
+├── providers/ozon/    — Ozon Seller API (21 отчёт)
 ├── providers/wildberries/ — WB OpenAPI (14 отчётов)
 ├── cli/               — mdwf CLI (clap)
 ├── gui/               — mdwf-gui (GTK4 + libadwaita)
@@ -80,12 +80,13 @@ crates/
 
 Пользователь поставил 6 задач. Статус:
 
-1. ✅ **Удалить deprecated/Premium отчёты Ozon** — СДЕЛАНО (коммит `de2b2d5`).
-   Убраны `transaction_list`, `transaction_totals` (deprecated → отключены
-   8 сентября 2026), `realization_by_day` (Premium Plus/Pro). Теперь **8 отчётов Ozon**
-   (было 10 — в этом чате удалены ещё `accrual_postings`/`accrual_by_day`: по docs.ozon.ru
-   они не списочные — `postings` требует `posting_numbers`, `by-day` один `date`+`last_id`;
-   не встают в модель Report → ранее баг 400).
+1. ✅ **Удалить deprecated/Premium отчёты Ozon** — СДЕЛАНО + расширено до **21 отчёта**.
+   Убраны `transaction_list`/`transaction_totals` (deprecated → отключены 8 сентября 2026),
+   `realization_by_day` (Premium), `stock_on_warehouses` (deprecated → заменён на
+   `/v1/analytics/stocks`). **accrual_postings/by_day ВОЗВРАЩЕНЫ** (реализованы по доке:
+   posting_numbers / date+last_id — через новый `OzonPaginatedReport`, не browsable).
+   Теперь **21 отчёт Ozon**: 8 существующих + 8 seller-отчётов (create→code→file) +
+   3 inline-списка (cash_flow/stocks/turnover) + 2 accrual. Все Period, сверенo с docs.ozon.ru.
 
 2. ✅ **Перенос выбора маркетплейс+профиля в раздел «Магазин» + иконка/имя продавца в заголовке** — СДЕЛАНО.
    Новый раздел «Магазин» (первая вкладка): выбор маркетплейса+профиля + CRUD профилей
@@ -156,7 +157,13 @@ c82d6c2 feat(wb): пагинация /documents/list
 - **Удалены отчёты**: accrual_types (служебный), b2b_sales_json (дублёр),
   cash_flow/analytics/act_discrepancy (требуют сложных схем/UI),
   transaction_list/totals (deprecated), realization_by_day (Premium).
-  Теперь **8 отчётов Ozon** (было 18 → 10 → 8).
+  Теперь **21 отчёт Ozon** (было 18 → 10 → 8 → 21). Полный список эндпоинтов —
+  в `crates/providers/ozon/src/reports.rs::all_report_descriptors` и `make_report`.
+  Группы: финансовые (realization*, balance, buyout, cash_flow, accrual*),
+  штрафы (compensation, decompensation), реестры (b2b_sales, mutual_settlement),
+  seller-отчёты (products, returns, postings, discounted, warehouse_stock,
+  placement_by_products/supplies, marked_products_sales), аналитика (analytics_stocks,
+  analytics_turnover).
 
 ### GUI
 - **Выбор месяца двумя combo** (Январь…Декабрь + год) вместо текстового поля YYYY-MM.
