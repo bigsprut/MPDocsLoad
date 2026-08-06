@@ -38,6 +38,7 @@ pub fn build_and_present(
     let shop_view = crate::views::shop::build(cs);
     let reports_view = crate::views::reports::build(cs);
     let download_view = crate::views::download::build(cs);
+    let archive_view = crate::views::archive::build(cs);
     let settings_view = crate::views::settings::build(cs);
     let scheduler_view = crate::views::scheduler::build(cs);
     let logs_view = crate::views::logs::build(cs);
@@ -46,6 +47,7 @@ pub fn build_and_present(
     stack.add_titled(&shop_view, Some(ViewId::Shop.as_str()), "Магазин");
     stack.add_titled(&reports_view, Some(ViewId::Reports.as_str()), "Отчёты");
     stack.add_titled(&download_view, Some(ViewId::Download.as_str()), "Загрузка");
+    stack.add_titled(&archive_view, Some(ViewId::Archive.as_str()), "Архив");
     stack.add_titled(&settings_view, Some(ViewId::Settings.as_str()), "Настройки");
     stack.add_titled(&scheduler_view, Some(ViewId::Scheduler.as_str()), "Планировщик");
     stack.add_titled(&logs_view, Some(ViewId::Logs.as_str()), "Журнал");
@@ -213,6 +215,16 @@ fn dispatch_event(
         UiEvent::DownloadsListed { report_type, docs } => {
             crate::views::download::on_downloads_listed(report_type, docs.clone());
         }
+        UiEvent::ArchiveReportTypesLoaded(rts) => {
+            crate::views::archive::on_report_types_loaded(rts);
+        }
+        UiEvent::ArchiveListed(res) => {
+            crate::views::archive::on_archive_listed(res);
+            match res {
+                Ok(d) => status.set_text(&format!("Записей в архиве: {}", d.len())),
+                Err(e) => status.set_text(&format!("Ошибка: {e}")),
+            }
+        }
         UiEvent::Progress { message, .. } => {
             status.set_text(message);
         }
@@ -223,6 +235,7 @@ fn dispatch_event(
         UiEvent::ProfilesLoaded(list) => {
             status.set_text(&format!("Профилей: {}", list.len()));
             crate::views::shop::on_profiles_loaded(list);
+            crate::views::archive::on_profiles_loaded(list);
         }
         UiEvent::AuthFieldsLoaded { provider_id, fields } => {
             crate::views::shop::on_auth_fields_loaded(provider_id, fields);

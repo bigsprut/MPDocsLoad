@@ -20,6 +20,8 @@ pub enum ViewId {
     Shop,
     Reports,
     Download,
+    /// Офлайн-архив скачанных документов (П.6): навигация по downloads с фильтрами.
+    Archive,
     Settings,
     Scheduler,
     Logs,
@@ -33,6 +35,7 @@ impl ViewId {
             Self::Shop => "shop",
             Self::Reports => "reports",
             Self::Download => "download",
+            Self::Archive => "archive",
             Self::Settings => "settings",
             Self::Scheduler => "scheduler",
             Self::Logs => "logs",
@@ -100,6 +103,17 @@ pub enum UiCommand {
         profile_name: String,
         report_type: String,
     },
+    /// Архив (П.6): список скачанных файлов с опциональными фильтрами.
+    /// `None` = фильтр не выбран («все»). Ответ — UiEvent::ArchiveListed.
+    ListArchive {
+        profile_name: Option<String>,
+        report_type: Option<String>,
+        /// Период отчёта в формате YYYY-MM.
+        period: Option<String>,
+    },
+    /// Архив (П.6): список уникальных report_type среди скачанных файлов
+    /// (для combo «Отчёт»). Ответ — UiEvent::ArchiveReportTypesLoaded.
+    LoadArchiveReportTypes,
 }
 
 /// Соостояние экрана «Загрузка» для автосохранения между запусками.
@@ -179,6 +193,10 @@ pub enum UiEvent {
         report_type: String,
         docs: Vec<mdwf_storage::DownloadedDocInfo>,
     },
+    /// Архив (П.6): результат запроса отфильтрованного списка скачиваний.
+    ArchiveListed(Result<Vec<mdwf_storage::ArchiveEntry>, String>),
+    /// Архив (П.6): список уникальных report_type (для combo «Отчёт»).
+    ArchiveReportTypesLoaded(Vec<String>),
 }
 
 /// Результат скачивания: файлы + пути на диске.

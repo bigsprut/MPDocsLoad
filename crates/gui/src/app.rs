@@ -142,6 +142,13 @@ impl App {
             cs.send(UiCommand::LoadActiveShop);
             // Загружаем сохранённое состояние экрана «Загрузка».
             cs.send(UiCommand::LoadDownloadState);
+            // Архив (П.6): список report_types и начальный показ всех скачиваний.
+            cs.send(UiCommand::LoadArchiveReportTypes);
+            cs.send(UiCommand::ListArchive {
+                profile_name: None,
+                report_type: None,
+                period: None,
+            });
         });
 
         Ok(app)
@@ -382,6 +389,43 @@ async fn run_command_loop(
                     report_type,
                     docs,
                 });
+            }
+            UiCommand::ListArchive {
+                profile_name,
+                report_type,
+                period,
+            } => {
+                // Архив (П.6): опциональный фильтр по профилю резолвим в profile_id.
+                let outcome = (|| {
+                    let cat = domain.catalog.read();
+                    let cat = cat.as_ref()?;
+                    // None = не фильтровать (показать все профили).
+                    let profile_id = match &profile_name {
+                        Some(name) => Some(cat.get_profile_by_name(name).ok()??.id?),
+                        None => None,
+                    };
+                    cat.list_downloads_filtered(
+                        profile_id,
+                        report_type.as_deref(),
+                        period.as_deref(),
+                    )
+                    .ok()
+                })();
+                match outcome {
+                    Some(entries) => fwd.forward(UiEvent::ArchiveListed(Ok(entries))),
+                    None => fwd.forward(UiEvent::ArchiveListed(Err(
+                        "каталог недоступен".to_string(),
+                    ))),
+                }
+            }
+            UiCommand::LoadArchiveReportTypes => {
+                let rts = domain
+                    .catalog
+                    .read()
+                    .as_ref()
+                    .and_then(|cat| cat.distinct_report_types().ok())
+                    .unwrap_or_default();
+                fwd.forward(UiEvent::ArchiveReportTypesLoaded(rts));
             }
         }
     }

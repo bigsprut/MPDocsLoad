@@ -1123,42 +1123,14 @@ pub fn on_download_finished(result: &crate::channels::DownloadResult) {
     }
 }
 
-/// Открывает папку в проводнике Windows.
+/// Открывает папку в проводнике (тонкая обёртка над общим хелпером views::open_folder).
 fn open_folder(path: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(path)
-            .spawn()?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = path;
-    }
-    Ok(())
+    crate::views::open_folder(path)
 }
 
-/// Открывает файл ассоциированным приложением (напр. Excel — для .xlsx).
-/// Если файл не существует — возвращает ошибку (UI предложит «Перекачать»).
+/// Открывает файл ассоциированным приложением (тонкая обёртка над views::open_file).
 fn open_file(path: &str) -> std::io::Result<()> {
-    if !std::path::Path::new(path).exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "файл не найден (возможно, удалён/перемещён) — перекачайте",
-        ));
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // cmd /c start "" "<path>" — открывает ассоциированным приложением.
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", path])
-            .spawn()?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::process::Command::new("xdg-open").arg(path).spawn()?;
-    }
-    Ok(())
+    crate::views::open_file(path)
 }
 
 /// Обработчик: ошибка скачивания.
