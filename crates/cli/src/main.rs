@@ -11,6 +11,7 @@
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_precision_loss)]
 #![allow(clippy::unused_async)]
 #![allow(clippy::unused_self)]
 #![allow(clippy::must_use_candidate)]
@@ -69,6 +70,11 @@ enum Command {
     },
     /// Выгрузка отчётов.
     Download(DownloadArgs),
+    /// Архив скачанных файлов (офлайн-просмотр из локального каталога).
+    Archive {
+        #[command(subcommand)]
+        action: ArchiveCmd,
+    },
     /// Документы, недоступные через API (out-of-scope).
     OutOfScope {
         /// Фильтр по провайдеру (ozon/wildberries).
@@ -170,6 +176,22 @@ enum ReportsCmd {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum ArchiveCmd {
+    /// Список скачанных файлов с фильтрами (офлайн, без обращения к API).
+    List {
+        /// Фильтр по имени профиля (без --profile = все профили).
+        #[arg(long)]
+        profile: Option<String>,
+        /// Фильтр по типу отчёта (без --report = все отчёты).
+        #[arg(long)]
+        report: Option<String>,
+        /// Фильтр по периоду (YYYY-MM; без --period = все периоды).
+        #[arg(long)]
+        period: Option<String>,
+    },
+}
+
 #[derive(Parser, Debug)]
 struct DownloadArgs {
     /// Имя профиля.
@@ -221,7 +243,9 @@ async fn main() -> StdExitCode {
 }
 
 async fn run(cli: Cli) -> Result<ExitCode> {
-    use commands::{doctor, download, out_of_scope, profiles, providers, reports, schedule, Context};
+    use commands::{
+        archive, doctor, download, out_of_scope, profiles, providers, reports, schedule, Context,
+    };
     // Контекст создаётся один раз и переиспользуется всеми командами.
     let ctx = match Context::new() {
         Ok(c) => c,
@@ -235,6 +259,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Profiles { action } => profiles::run(&ctx, action).await,
         Command::Reports { action } => reports::run(&ctx, action).await,
         Command::Download(args) => download::run(&ctx, args).await,
+        Command::Archive { action } => archive::run(&ctx, action).await,
         Command::OutOfScope { provider } => out_of_scope::run(&ctx, provider).await,
         Command::Schedule { action } => schedule::run(&ctx, action).await,
         Command::Doctor => doctor::run(&ctx).await,

@@ -88,5 +88,8 @@ CREATE TABLE IF NOT EXISTS schedule_runs (
 
 CREATE INDEX IF NOT EXISTS idx_downloads_profile ON downloads(profile_id);
 CREATE INDEX IF NOT EXISTS idx_downloads_period  ON downloads(period);
+-- Композит для вкладки «Архив»: list_downloads_filtered фильтрует по profile_id + report_type (=).
+-- period не включён — он участвует в CASE-выражении (не sargable).
+CREATE INDEX IF NOT EXISTS idx_downloads_filter  ON downloads(profile_id, report_type);
 CREATE INDEX IF NOT EXISTS idx_schedules_next   ON schedules(next_run_at) WHERE enabled = 1;
 CREATE INDEX IF NOT EXISTS idx_filters_provider ON saved_filters(provider_id);

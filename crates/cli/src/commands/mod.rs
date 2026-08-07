@@ -1,5 +1,6 @@
 //! Команды CLI.
 
+pub mod archive;
 mod context;
 pub mod doctor;
 pub mod download;
