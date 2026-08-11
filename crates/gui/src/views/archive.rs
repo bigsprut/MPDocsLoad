@@ -5,6 +5,9 @@
 //! Действия над строкой: 📂 Открыть файл, 📁 Открыть папку, 📋 Копировать путь.
 //! Недеструктивно (без удаления). Данные читаются из локального SQLite —
 //! сетевых запросов и токенов не требуется.
+//!
+//! Фильтры автосохраняются в `ui_state["archive_screen"]` (как DownloadState во
+//! вкладке «Загрузка») и восстанавливаются при старте.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,7 +21,7 @@ use gtk4::{
 use mdwf_core::Profile;
 use mdwf_storage::ArchiveEntry;
 
-use crate::channels::CommandSender;
+use crate::channels::{ArchiveState, CommandSender};
 
 thread_local! {
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
@@ -33,6 +36,14 @@ thread_local! {
     static PROFILES: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
     /// Список report_type, реально присутствующих в архиве (из БД).
     static REPORT_TYPES: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    /// Отложенный restore: желаемый профиль/отчёт, если combo ещё не заполнен
+    /// при приходе ArchiveStateLoaded (аналог PENDING_REPORT во вкладке «Загрузка»).
+    static PENDING_PROFILE: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    static PENDING_REPORT_TYPE: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    /// Флаг защиты от автосохранения во время программного set_active (restore).
+    /// connect_changed проверяет его, чтобы не перезаписывать восстанавливаемое
+    /// состояние дефолтными значениями.
+    static RESTORING: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
 }
 
 /// Названия месяцев по-русски (индекс 0 = Январь). Индекс 0 в combo — «(все)».
@@ -120,7 +131,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
     // --- Результат/статус вкладки ---
     let result_label = Label::builder()
-        .label("Выберите фильтры и нажмите «Применить».")
+        .label("Загрузка архива…")
         .css_classes(["dim-label"])
         .halign(gtk4::Align::Start)
         .wrap(true)
@@ -140,10 +151,10 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
     // Сохраняем виджеты в thread-local для обновления из хуков.
     CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
-    W_PROFILE_COMBO.with(|w| *w.borrow_mut() = Some(profile_combo));
-    W_REPORT_COMBO.with(|w| *w.borrow_mut() = Some(report_combo));
-    W_MONTH_COMBO.with(|w| *w.borrow_mut() = Some(month_combo));
-    W_YEAR_COMBO.with(|w| *w.borrow_mut() = Some(year_combo));
+    W_PROFILE_COMBO.with(|w| *w.borrow_mut() = Some(profile_combo.clone()));
+    W_REPORT_COMBO.with(|w| *w.borrow_mut() = Some(report_combo.clone()));
+    W_MONTH_COMBO.with(|w| *w.borrow_mut() = Some(month_combo.clone()));
+    W_YEAR_COMBO.with(|w| *w.borrow_mut() = Some(year_combo.clone()));
     W_LIST.with(|w| *w.borrow_mut() = Some(list_box));
     W_RESULT.with(|w| *w.borrow_mut() = Some(result_label));
 
@@ -163,6 +174,14 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         });
     }
 
+    // Автосохранение фильтров при смене combo (как DownloadState во вкладке
+    // «Загрузка»). RESTORING защищает от сохранения во время программного
+    // set_active при restore сохранённого состояния.
+    profile_combo.connect_changed(|_| schedule_save());
+    report_combo.connect_changed(|_| schedule_save());
+    month_combo.connect_changed(|_| schedule_save());
+    year_combo.connect_changed(|_| schedule_save());
+
     root
 }
 
@@ -180,6 +199,12 @@ pub fn on_profiles_loaded(profiles: &[Profile]) {
         combo.append_text(name);
     }
     combo.set_active(Some(0));
+    // Отложенный restore: если сохранённый профиль ожидает применения — ищем.
+    let desired = PENDING_PROFILE.with(|p| p.borrow().clone());
+    if let Some(name) = desired {
+        set_combo_active_by_text(&combo, &name);
+        PENDING_PROFILE.with(|p| *p.borrow_mut() = None);
+    }
 }
 
 /// Хук: список report_type загружен — заполняем combo «Отчёт» (с «(все)»).
@@ -195,6 +220,12 @@ pub fn on_report_types_loaded(report_types: &[String]) {
         combo.append_text(rt);
     }
     combo.set_active(Some(0));
+    // Отложенный restore сохранённого отчёта.
+    let desired = PENDING_REPORT_TYPE.with(|p| p.borrow().clone());
+    if let Some(rt) = desired {
+        set_combo_active_by_text(&combo, &rt);
+        PENDING_REPORT_TYPE.with(|p| *p.borrow_mut() = None);
+    }
 }
 
 /// Хук: результат запроса архива — рендерим список.
@@ -206,6 +237,55 @@ pub fn on_archive_listed(res: &Result<Vec<ArchiveEntry>, String>) {
             notify(&format!("Найдено записей: {}", entries.len()));
         }
     }
+}
+
+/// Хук: сохранённое состояние фильтров загружено (при старте).
+/// Восстанавливаем combos (период сразу, профиль/отчёт — из pending или сразу,
+/// если combos уже заполнены) и применяем фильтр к списку.
+pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
+    // RESTORING: пока true, connect_changed не шлёт автосохранение.
+    RESTORING.with(|r| *r.borrow_mut() = true);
+
+    match state {
+        None => {
+            // Сохранённого состояния нет — показать все записи.
+            send_list_archive(None, None, None);
+        }
+        Some(st) => {
+            // Профиль: combo может быть уже заполнен (ProfilesLoaded приходит
+            // раньше ArchiveStateLoaded) — restore сразу; иначе в pending.
+            if let Some(name) = &st.profile_name {
+                let combo = W_PROFILE_COMBO.with(|w| w.borrow().clone());
+                if let Some(combo) = combo {
+                    if !set_combo_active_by_text(&combo, name) {
+                        // Не нашли в combo — запомним для отложенного restore.
+                        PENDING_PROFILE.with(|p| *p.borrow_mut() = Some(name.clone()));
+                    }
+                }
+            }
+            // Отчёт — аналогично.
+            if let Some(rt) = &st.report_type {
+                let combo = W_REPORT_COMBO.with(|w| w.borrow().clone());
+                if let Some(combo) = combo {
+                    if !set_combo_active_by_text(&combo, rt) {
+                        PENDING_REPORT_TYPE.with(|p| *p.borrow_mut() = Some(rt.clone()));
+                    }
+                }
+            }
+            // Период — combos месяц/год статичны (заполнены в build), restore сразу.
+            if let Some(period) = &st.period {
+                restore_period(period);
+            }
+            // Применяем восстановленный фильтр к списку.
+            send_list_archive(
+                st.profile_name.clone(),
+                st.report_type.clone(),
+                st.period.clone(),
+            );
+        }
+    }
+
+    RESTORING.with(|r| *r.borrow_mut() = false);
 }
 
 /// Рендерит список архивных записей в ListBox.
@@ -429,4 +509,81 @@ fn human_size(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+// ===== Persist фильтров =====
+
+/// Собирает ArchiveState из текущих combo и шлёт SaveArchiveState.
+/// Игнорируется во время restore (RESTORING=true), чтобы не перезаписывать
+/// восстанавливаемые значения дефолтными.
+fn schedule_save() {
+    if RESTORING.with(|r| *r.borrow()) {
+        return;
+    }
+    let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
+        return;
+    };
+    cs.send(crate::channels::UiCommand::SaveArchiveState(ArchiveState {
+        profile_name: selected_profile(),
+        report_type: selected_report(),
+        period: selected_period(),
+    }));
+}
+
+/// Шлёт ListArchive с заданными значениями фильтров.
+fn send_list_archive(profile: Option<String>, report: Option<String>, period: Option<String>) {
+    let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
+        return;
+    };
+    cs.send(crate::channels::UiCommand::ListArchive {
+        profile_name: profile,
+        report_type: report,
+        period,
+    });
+}
+
+/// Восстанавливает combo периода из строки YYYY-MM: месяц → combo Месяц
+/// (индекс 1..12), год → combo Год (поиск по тексту, т.к. годы динамические).
+fn restore_period(period: &str) {
+    let Some((year_s, month_s)) = period.split_once('-') else {
+        return;
+    };
+    let Ok(month) = month_s.parse::<u32>() else {
+        return;
+    };
+    let Ok(year) = year_s.parse::<i32>() else {
+        return;
+    };
+    if !(1..=12).contains(&month) {
+        return;
+    }
+    // combo[0]="(все)", combo[month]=месяц. set_active синхронно эмиссирует changed,
+    // но RESTORING=true блокирует автосохранение.
+    W_MONTH_COMBO.with(|w| {
+        if let Some(combo) = w.borrow().as_ref() {
+            combo.set_active(Some(month));
+        }
+    });
+    W_YEAR_COMBO.with(|w| {
+        if let Some(combo) = w.borrow().as_ref() {
+            set_combo_active_by_text(combo, &year.to_string());
+        }
+    });
+}
+
+/// Ищет текст в combo и делает его активным. Возвращает true если найден.
+fn set_combo_active_by_text(combo: &ComboBoxText, text: &str) -> bool {
+    let n = combo.model().map_or(0, |m| m.iter_n_children(None));
+    for i in 0..n {
+        combo.set_active(Some(i as u32));
+        if combo
+            .active_text()
+            .is_some_and(|t| t.as_str() == text)
+        {
+            return true;
+        }
+    }
+    // Не нашли — возвращаем дефолт.
+    combo.set_active(Some(0));
+    false
 }

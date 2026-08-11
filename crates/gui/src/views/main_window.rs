@@ -225,6 +225,9 @@ fn dispatch_event(
                 Err(e) => status.set_text(&format!("Ошибка: {e}")),
             }
         }
+        UiEvent::ArchiveStateLoaded(state) => {
+            crate::views::archive::on_archive_state_loaded(state.as_ref());
+        }
         UiEvent::Progress { message, .. } => {
             status.set_text(message);
         }

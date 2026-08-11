@@ -114,6 +114,20 @@ pub enum UiCommand {
     /// Архив (П.6): список уникальных report_type среди скачанных файлов
     /// (для combo «Отчёт»). Ответ — UiEvent::ArchiveReportTypesLoaded.
     LoadArchiveReportTypes,
+    /// Архив: сохранить состояние фильтров (автосохранение при смене combo).
+    SaveArchiveState(ArchiveState),
+    /// Архив: загрузить сохранённое состояние фильтров (при старте).
+    LoadArchiveState,
+}
+
+/// Состояние фильтров экрана «Архив» для автосохранения между запусками.
+/// Persist в `ui_state` по ключу `"archive_screen"`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ArchiveState {
+    pub profile_name: Option<String>,
+    pub report_type: Option<String>,
+    /// Период в формате YYYY-MM (combo Месяц+Год).
+    pub period: Option<String>,
 }
 
 /// Соостояние экрана «Загрузка» для автосохранения между запусками.
@@ -197,6 +211,8 @@ pub enum UiEvent {
     ArchiveListed(Result<Vec<mdwf_storage::ArchiveEntry>, String>),
     /// Архив (П.6): список уникальных report_type (для combo «Отчёт»).
     ArchiveReportTypesLoaded(Vec<String>),
+    /// Архив: сохранённое состояние фильтров загружено (при старте).
+    ArchiveStateLoaded(Option<ArchiveState>),
 }
 
 /// Результат скачивания: файлы + пути на диске.

@@ -142,13 +142,11 @@ impl App {
             cs.send(UiCommand::LoadActiveShop);
             // Загружаем сохранённое состояние экрана «Загрузка».
             cs.send(UiCommand::LoadDownloadState);
-            // Архив (П.6): список report_types и начальный показ всех скачиваний.
+            // Архив (П.6): список report_types + восстановление фильтров.
+            // Начальный ListArchive отправляется из on_archive_state_loaded
+            // (с восстановленными значениями, либо None если состояния нет).
             cs.send(UiCommand::LoadArchiveReportTypes);
-            cs.send(UiCommand::ListArchive {
-                profile_name: None,
-                report_type: None,
-                period: None,
-            });
+            cs.send(UiCommand::LoadArchiveState);
         });
 
         Ok(app)
@@ -424,6 +422,22 @@ async fn run_command_loop(
                     .and_then(|cat| cat.distinct_report_types().ok())
                     .unwrap_or_default();
                 fwd.forward(UiEvent::ArchiveReportTypesLoaded(rts));
+            }
+            UiCommand::SaveArchiveState(state) => {
+                if let Some(cat) = domain.catalog.read().as_ref() {
+                    let json = serde_json::to_string(&state).unwrap_or_default();
+                    if let Err(e) = cat.set_ui_state("archive_screen", &json) {
+                        tracing::warn!(error = %e, "failed to save archive state");
+                    }
+                }
+            }
+            UiCommand::LoadArchiveState => {
+                let state = domain.catalog.read().as_ref().and_then(|cat| {
+                    cat.get_ui_state("archive_screen").ok().flatten().and_then(
+                        |json| serde_json::from_str::<crate::channels::ArchiveState>(&json).ok(),
+                    )
+                });
+                fwd.forward(UiEvent::ArchiveStateLoaded(state));
             }
         }
     }
