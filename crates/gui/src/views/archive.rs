@@ -521,6 +521,7 @@ fn notify(msg: &str) {
 /// Путь к иконке типа файла в gresource. Регистронезависимо.
 fn ext_icon_resource(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {
+        "txt" => "/org/mdwf/icons/file-txt.png",
         "xlsx" | "xls" | "csv" => "/org/mdwf/icons/file-xlsx.png",
         "pdf" => "/org/mdwf/icons/file-pdf.png",
         "json" => "/org/mdwf/icons/file-json.png",

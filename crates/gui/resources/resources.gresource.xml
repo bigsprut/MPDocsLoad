@@ -15,7 +15,11 @@
     <file alias="wildberries.png" compressed="true">icons/wildberries.png</file>
     <file alias="test.png" compressed="true">icons/test.png</file>
     <file alias="shop-placeholder.png" compressed="true">icons/shop-placeholder.png</file>
-    <!-- Иконки типов файлов для списков документов (download/archive). -->
+    <!-- Иконки типов файлов для списков документов (download/archive).
+         Стандартные из темы Adwaita (text-x-generic, x-office-spreadsheet,
+         package-x-generic, text-x-script, text-html, application-x-generic);
+         PDF нарисован в стиле Adwaita (в теме его нет). -->
+    <file alias="file-txt.png" compressed="true">icons/file-txt.png</file>
     <file alias="file-xlsx.png" compressed="true">icons/file-xlsx.png</file>
     <file alias="file-pdf.png" compressed="true">icons/file-pdf.png</file>
     <file alias="file-json.png" compressed="true">icons/file-json.png</file>

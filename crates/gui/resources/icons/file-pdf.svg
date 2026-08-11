@@ -1,6 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
-  <path d="M10 2 H30 L40 12 V44 a2 2 0 0 1 -2 2 H10 a2 2 0 0 1 -2 -2 V4 a2 2 0 0 1 2 -2 Z" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
-  <path d="M30 2 L40 12 H30 Z" fill="#e2e8f0"/>
-  <rect x="7" y="27" width="34" height="14" rx="2.5" fill="#D93025"/>
-  <text x="24" y="37.5" font-family="DejaVu Sans, Arial, sans-serif" font-size="9" font-weight="bold" fill="#ffffff" text-anchor="middle">PDF</text>
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PDF-иконка в стиле Adwaita: красный лист со сгибом + белый «PDF».
+     В теме Adwaita нет отдельной PDF-иконки — эта нарисована в той же
+     геометрии (viewBox 128x128, как x-office-document). Красный —
+     общепринятая конвенция для PDF. -->
+<svg height="128px" viewBox="0 0 128 128" width="128px" xmlns="http://www.w3.org/2000/svg">
+  <!-- Лист: красный (#C01C28 — Adwaita error-red). -->
+  <path d="m 28 8 h 50 l 30.042969 29.917969 v 74.058593 c 0 4.433594 -3.609375 8.023438 -8.042969 8.023438 h -72 c -4.433594 0 -8 -3.566406 -8 -8 v -96 c 0 -4.433594 3.566406 -8 8 -8 z m 0 0" fill="#C01C28"/>
+  <!-- Сгиб верхнего-правого угла (темнее красного). -->
+  <path d="m 78 8 v 22 c 0 4.433594 3.609375 7.921875 8.042969 7.921875 l 22 -0.003906 z m 0 0" fill="#7A0F19"/>
+  <!-- Белая подпись «PDF» по центру. -->
+  <text x="64" y="82" font-family="DejaVu Sans, Cantarell, Arial, sans-serif" font-size="30" font-weight="bold" fill="#ffffff" text-anchor="middle">PDF</text>
 </svg>

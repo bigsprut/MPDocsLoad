@@ -1081,6 +1081,7 @@ fn human_size(bytes: u64) -> String {
 fn ext_icon_resource(ext: Option<&String>) -> &'static str {
     let lower = ext.map(|s| s.to_ascii_lowercase());
     match lower.as_deref() {
+        Some("txt") => "/org/mdwf/icons/file-txt.png",
         Some("xlsx" | "xls" | "csv") => "/org/mdwf/icons/file-xlsx.png",
         Some("pdf") => "/org/mdwf/icons/file-pdf.png",
         Some("json") => "/org/mdwf/icons/file-json.png",
