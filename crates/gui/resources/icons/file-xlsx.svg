@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <!-- Лист со сгибом (нейтральный контур). -->
+  <path d="M10 2 H30 L40 12 V44 a2 2 0 0 1 -2 2 H10 a2 2 0 0 1 -2 -2 V4 a2 2 0 0 1 2 -2 Z" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <!-- Сгиб верхнего-правого угла. -->
+  <path d="M30 2 L40 12 H30 Z" fill="#e2e8f0"/>
+  <!-- Цветная плашка с подписью типа (Excel green). -->
+  <rect x="7" y="27" width="34" height="14" rx="2.5" fill="#217346"/>
+  <text x="24" y="37.5" font-family="DejaVu Sans, Arial, sans-serif" font-size="9" font-weight="bold" fill="#ffffff" text-anchor="middle">XLSX</text>
+</svg>

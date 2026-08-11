@@ -12,7 +12,7 @@ use std::rc::Rc;
 use chrono::{Datelike, NaiveDate};
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, CheckButton, ComboBoxText, Entry, Label, ListBox, Orientation,
+    Box as GtkBox, Button, CheckButton, ComboBoxText, Entry, Image, Label, ListBox, Orientation,
     PolicyType, ScrolledWindow,
 };
 
@@ -973,13 +973,25 @@ fn render_list(docs: &[DocumentEntry]) {
             };
             row.append(&status_label);
 
-            // П.5: иконка типа файла (эмодзи) как префикс названия — по первому
-            // доступному расширению из doc.extensions (pdf/xlsx/xml/zip/…).
-            let name_with_icon = match doc.extensions.first() {
-                Some(e) => format!("{} {}", ext_emoji(e), doc.display_name),
-                None => doc.display_name.clone(),
-            };
-            row.append(&Label::builder().label(&name_with_icon).width_chars(36).xalign(0.0).ellipsize(gtk4::pango::EllipsizeMode::End).build());
+            // Иконка типа файла (PNG из gresource) + название в одном Box,
+            // чтобы не сбить выравнивание колонок с header.
+            let ext = doc.extensions.first();
+            let name_box = GtkBox::new(Orientation::Horizontal, 6);
+            name_box.append(
+                &Image::builder()
+                    .resource(ext_icon_resource(ext))
+                    .pixel_size(20)
+                    .build(),
+            );
+            name_box.append(
+                &Label::builder()
+                    .label(&doc.display_name)
+                    .width_chars(36)
+                    .xalign(0.0)
+                    .ellipsize(gtk4::pango::EllipsizeMode::End)
+                    .build(),
+            );
+            row.append(&name_box);
             let date_str = doc.date.map(|d| d.to_string()).unwrap_or_default();
             row.append(&Label::builder().label(&date_str).width_chars(12).xalign(0.0).build());
             let exts = doc.extensions.join(", ");
@@ -1063,16 +1075,18 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Эмодзи по типу файла (П.5). Регистронезависимо: WB отдаёт расширения как есть
-/// из ответа API, регистр явно не гарантирован — нормализуем.
-fn ext_emoji(ext: &str) -> &'static str {
-    match ext.to_ascii_lowercase().as_str() {
-        // Электронные таблицы.
-        "xlsx" | "xls" | "csv" => "📊",
-        // Архивы.
-        "zip" | "rar" | "7z" | "gz" | "tar" => "📦",
-        // Прочее (pdf, xml, txt, json, …) — как документ.
-        _ => "📄",
+/// Путь к иконке типа файла в gresource. Регистронезависимо: WB отдаёт
+/// расширения как есть из ответа API, регистр явно не гарантирован.
+/// None (нет расширения) → generic-иконка.
+fn ext_icon_resource(ext: Option<&String>) -> &'static str {
+    let lower = ext.map(|s| s.to_ascii_lowercase());
+    match lower.as_deref() {
+        Some("xlsx" | "xls" | "csv") => "/org/mdwf/icons/file-xlsx.png",
+        Some("pdf") => "/org/mdwf/icons/file-pdf.png",
+        Some("json") => "/org/mdwf/icons/file-json.png",
+        Some("xml") => "/org/mdwf/icons/file-xml.png",
+        Some("zip" | "rar" | "7z" | "gz" | "tar") => "/org/mdwf/icons/file-zip.png",
+        _ => "/org/mdwf/icons/file-generic.png",
     }
 }
 

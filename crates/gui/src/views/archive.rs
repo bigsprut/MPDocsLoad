@@ -15,7 +15,8 @@ use std::rc::Rc;
 use chrono::Datelike;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, ComboBoxText, Label, ListBox, Orientation, PolicyType, ScrolledWindow,
+    Box as GtkBox, Button, ComboBoxText, Image, Label, ListBox, Orientation, PolicyType,
+    ScrolledWindow,
 };
 use libadwaita as adw;
 use libadwaita::prelude::MessageDialogExt;
@@ -329,16 +330,24 @@ fn render_archive(entries: &[ArchiveEntry]) {
             row.set_margin_bottom(2);
             row.set_css_classes(&["doc-list-row"]);
 
-            // Профиль + иконка типа файла (П.5 паттерн) как префикс.
-            let profile_icon = ext_emoji(&e.file_format);
-            row.append(
+            // Колонка «Профиль»: иконка типа файла (PNG из gresource) + имя
+            // профиля в одном Box, чтобы не сбить выравнивание с header.
+            let profile_box = GtkBox::new(Orientation::Horizontal, 6);
+            profile_box.append(
+                &Image::builder()
+                    .resource(ext_icon_resource(&e.file_format))
+                    .pixel_size(20)
+                    .build(),
+            );
+            profile_box.append(
                 &Label::builder()
-                    .label(format!("{profile_icon} {}", e.profile_name))
+                    .label(&e.profile_name)
                     .width_chars(16)
                     .xalign(0.0)
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
                     .build(),
             );
+            row.append(&profile_box);
             row.append(
                 &Label::builder()
                     .label(&e.report_type)
@@ -509,12 +518,15 @@ fn notify(msg: &str) {
     });
 }
 
-/// Эмодзи по типу файла (как в П.5, для префикса в колонке «Профиль»).
-fn ext_emoji(ext: &str) -> &'static str {
+/// Путь к иконке типа файла в gresource. Регистронезависимо.
+fn ext_icon_resource(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {
-        "xlsx" | "xls" | "csv" => "📊",
-        "zip" | "rar" | "7z" | "gz" | "tar" => "📦",
-        _ => "📄",
+        "xlsx" | "xls" | "csv" => "/org/mdwf/icons/file-xlsx.png",
+        "pdf" => "/org/mdwf/icons/file-pdf.png",
+        "json" => "/org/mdwf/icons/file-json.png",
+        "xml" => "/org/mdwf/icons/file-xml.png",
+        "zip" | "rar" | "7z" | "gz" | "tar" => "/org/mdwf/icons/file-zip.png",
+        _ => "/org/mdwf/icons/file-generic.png",
     }
 }
 

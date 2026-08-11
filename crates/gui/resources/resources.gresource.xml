@@ -15,5 +15,12 @@
     <file alias="wildberries.png" compressed="true">icons/wildberries.png</file>
     <file alias="test.png" compressed="true">icons/test.png</file>
     <file alias="shop-placeholder.png" compressed="true">icons/shop-placeholder.png</file>
+    <!-- Иконки типов файлов для списков документов (download/archive). -->
+    <file alias="file-xlsx.png" compressed="true">icons/file-xlsx.png</file>
+    <file alias="file-pdf.png" compressed="true">icons/file-pdf.png</file>
+    <file alias="file-json.png" compressed="true">icons/file-json.png</file>
+    <file alias="file-xml.png" compressed="true">icons/file-xml.png</file>
+    <file alias="file-zip.png" compressed="true">icons/file-zip.png</file>
+    <file alias="file-generic.png" compressed="true">icons/file-generic.png</file>
   </gresource>
 </gresources>
