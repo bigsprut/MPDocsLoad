@@ -17,6 +17,8 @@ use gtk4::prelude::*;
 use gtk4::{
     Box as GtkBox, Button, ComboBoxText, Label, ListBox, Orientation, PolicyType, ScrolledWindow,
 };
+use libadwaita as adw;
+use libadwaita::prelude::MessageDialogExt;
 
 use mdwf_core::Profile;
 use mdwf_storage::ArchiveEntry;
@@ -429,6 +431,24 @@ fn render_archive(entries: &[ArchiveEntry]) {
             }
             actions_box.append(&copy_btn);
 
+            // 🗑 Удалить запись и файл (деструктивно, с подтверждением).
+            let del_btn = Button::builder()
+                .label("🗑")
+                .tooltip_text("Удалить запись и файл")
+                .css_classes(["destructive-action"])
+                .build();
+            {
+                let id = e.id;
+                let path = file_path.clone();
+                let file_name = std::path::Path::new(&path)
+                    .file_name()
+                    .map_or_else(|| path.clone(), |s| s.to_string_lossy().to_string());
+                del_btn.connect_clicked(move |_| {
+                    show_delete_confirm(id, &file_name, &path);
+                });
+            }
+            actions_box.append(&del_btn);
+
             row.append(&actions_box);
             list_box.append(&row);
         }
@@ -586,4 +606,48 @@ fn set_combo_active_by_text(combo: &ComboBoxText, text: &str) -> bool {
     // Не нашли — возвращаем дефолт.
     combo.set_active(Some(0));
     false
+}
+
+// ===== Удаление записи + файла =====
+
+/// Показывает диалог подтверждения удаления записи и файла. На «Удалить» —
+/// шлёт UiCommand::DeleteDownload. По образцу shop.rs (adw::MessageDialog).
+fn show_delete_confirm(id: i64, file_name: &str, file_path: &str) {
+    let dialog = adw::MessageDialog::builder()
+        .heading("Удалить файл?")
+        .body(format!(
+            "{file_name}\n\nЗапись будет удалена из архива, а файл — стёрт с диска. Действие необратимо."
+        ))
+        .build();
+    dialog.add_response("cancel", "Отмена");
+    dialog.add_response("delete", "Удалить");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+
+    let path = file_path.to_string();
+    dialog.connect_response(None, move |_dlg, response: &str| {
+        if response == "delete" {
+            let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
+                return;
+            };
+            cs.send(crate::channels::UiCommand::DeleteDownload {
+                id,
+                file_path: path.clone(),
+            });
+            notify("Удаление…");
+        }
+    });
+    dialog.present();
+}
+
+/// Хук: результат удаления записи. При успехе — обновляем список (переотправляем
+/// ListArchive с текущими выбранными фильтрами). При ошибке — сообщаем.
+pub fn on_download_deleted(res: &Result<i64, String>) {
+    match res {
+        Ok(_id) => {
+            notify("Запись удалена.");
+            // Refresh списка с текущими фильтрами combos.
+            send_list_archive(selected_profile(), selected_report(), selected_period());
+        }
+        Err(e) => notify(&format!("Ошибка удаления: {e}")),
+    }
 }

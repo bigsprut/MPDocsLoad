@@ -515,6 +515,20 @@ impl Catalog {
         Ok(n > 0)
     }
 
+    /// Удаляет запись о скачивании по первичному ключу `id`.
+    /// Безопасно: обратных FK на `downloads.id` нет (единственный FK — на profile
+    /// со стороны профилей, не наоборот). Дедупликация остаётся корректной —
+    /// `has_download`/`record_download ON CONFLICT` работают по живым данным,
+    /// после удаления слот UNIQUE освобождается, повторное скачивание возможно.
+    /// Физический файл с диска НЕ трогается — это ответственность app-слоя
+    /// (путь в `downloads.file_path`).
+    pub fn delete_download(&self, id: i64) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM downloads WHERE id=?1", params![id])
+            .map_err(map_sqlite_err)?;
+        Ok(())
+    }
+
     // ----- Сохранённые фильтры -----
 
     /// Сохраняет фильтр (с дедупликацией по имени).
@@ -1114,5 +1128,58 @@ mod tests {
         // Пустая БД — пустой список.
         let empty = make_cat();
         assert!(empty.distinct_report_types().unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_download_by_id() {
+        // Удаление строки по id: после удаления list_downloads_filtered не находит
+        // запись, а повторная вставка (record_download) работает — слот UNIQUE
+        // освобождён, дедупликация не сломана.
+        let cat = make_cat();
+        let pid = cat.upsert_profile(&Profile::new("p", "ozon")).unwrap();
+        let rec = NewDownload {
+            profile_id: pid,
+            report_type: "ozon.balance".into(),
+            period: Some("2026-07".into()),
+            params: None,
+            file_path: "/tmp/balance.xlsx".into(),
+            file_size: 100,
+            file_hash: Some("h-del".into()),
+            file_format: "xlsx".into(),
+            rows_count: None,
+            downloader_kind: "Api".into(),
+            source_url: None,
+            document_id: None,
+            document_date: None,
+        };
+        let id = cat.record_download(&rec).unwrap();
+        assert!(id > 0);
+
+        // До удаления — 1 запись.
+        let before = cat
+            .list_downloads_filtered(Some(pid), Some("ozon.balance"), None)
+            .unwrap();
+        assert_eq!(before.len(), 1);
+
+        // Удаляем.
+        cat.delete_download(id).unwrap();
+
+        // После удаления — 0 записей.
+        let after = cat
+            .list_downloads_filtered(Some(pid), Some("ozon.balance"), None)
+            .unwrap();
+        assert!(after.is_empty());
+
+        // Повторная вставка того же файла работает (слот UNIQUE свободен).
+        let id2 = cat.record_download(&rec).unwrap();
+        assert!(id2 > 0);
+        assert!(cat
+            .list_downloads_filtered(Some(pid), Some("ozon.balance"), None)
+            .unwrap()
+            .len()
+            == 1);
+
+        // Удаление несуществующего id — не ошибка (DELETE 0 строк).
+        cat.delete_download(999_999).unwrap();
     }
 }

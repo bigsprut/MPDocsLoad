@@ -228,6 +228,13 @@ fn dispatch_event(
         UiEvent::ArchiveStateLoaded(state) => {
             crate::views::archive::on_archive_state_loaded(state.as_ref());
         }
+        UiEvent::DownloadDeleted(res) => {
+            crate::views::archive::on_download_deleted(res);
+            match res {
+                Ok(_) => status.set_text("Запись удалена"),
+                Err(e) => status.set_text(&format!("Ошибка удаления: {e}")),
+            }
+        }
         UiEvent::Progress { message, .. } => {
             status.set_text(message);
         }

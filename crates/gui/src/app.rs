@@ -439,6 +439,31 @@ async fn run_command_loop(
                 });
                 fwd.forward(UiEvent::ArchiveStateLoaded(state));
             }
+            UiCommand::DeleteDownload { id, file_path } => {
+                // Деструктивно: удаляем запись из БД, затем файл с диска.
+                // Ошибка удаления файла НЕ блокирует удаление записи — warn в лог
+                // (запись уже удалена, осиротевший файл останется, это допустимо).
+                let outcome = (|| {
+                    let cat = domain.catalog.read();
+                    let cat = cat.as_ref()?;
+                    cat.delete_download(id).ok()
+                })();
+                match outcome {
+                    Some(()) => {
+                        // Удаляем файл с диска.
+                        if let Err(e) = std::fs::remove_file(&file_path) {
+                            // Нет файла — не ошибка (уже удалён/перемещён); прочее — warn.
+                            if e.kind() != std::io::ErrorKind::NotFound {
+                                tracing::warn!(error = %e, %file_path, "failed to delete file");
+                            }
+                        }
+                        fwd.forward(UiEvent::DownloadDeleted(Ok(id)));
+                    }
+                    None => fwd.forward(UiEvent::DownloadDeleted(Err(
+                        "каталог недоступен".to_string(),
+                    ))),
+                }
+            }
         }
     }
     warn!("command loop ended");

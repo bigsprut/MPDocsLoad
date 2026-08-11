@@ -118,6 +118,13 @@ pub enum UiCommand {
     SaveArchiveState(ArchiveState),
     /// Архив: загрузить сохранённое состояние фильтров (при старте).
     LoadArchiveState,
+    /// Архив: удалить запись о скачивании и файл с диска (деструктивно).
+    /// `file_path` — абсолютный путь к файлу для удаления. Ответ —
+    /// UiEvent::DownloadDeleted(Result<id, error>) для refresh списка.
+    DeleteDownload {
+        id: i64,
+        file_path: String,
+    },
 }
 
 /// Состояние фильтров экрана «Архив» для автосохранения между запусками.
@@ -213,6 +220,9 @@ pub enum UiEvent {
     ArchiveReportTypesLoaded(Vec<String>),
     /// Архив: сохранённое состояние фильтров загружено (при старте).
     ArchiveStateLoaded(Option<ArchiveState>),
+    /// Архив: запись о скачивании удалена (id — для контекста; ошибка, если файл
+    /// или БД не удалились). Список архива обновляется по этому событию.
+    DownloadDeleted(Result<i64, String>),
 }
 
 /// Результат скачивания: файлы + пути на диске.
