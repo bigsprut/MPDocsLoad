@@ -677,9 +677,19 @@ cargo run -p mdwf-cli -- doctor
 cargo test --workspace          # ~168 тестов (storage: 19, incl. Архив + delete)
 cargo clippy --workspace --tests -- -D warnings
 
-# Release
-cargo build --release -p mdwf-gui -p mdwf-cli
-./scripts/build-release.sh
+# Release-бандл (relocatable, для установки на прод без MSYS2)
+./scripts/build-release.sh          # → dist/mdwf/ (~100 МБ: 2 exe, 77 DLL через
+                                    #   ntldd -R, иконки Adwaita/hicolor, схемы,
+                                    #   gdk-pixbuf-лоадеры + postinstall.bat).
+                                    # GUI сам настраивает env (XDG_DATA_DIRS и др.)
+                                    # на соседние share/lib — relocatable.
+
+# Inno Setup-инсталлятор (нужен Inno Setup 6: jrsoftware.org/isdl.php)
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/mdwf.iss
+# → installer/Output/MDWFSetup-<version>.exe (Program Files, ярлык Пуск,
+#   [Run] пересобирает loaders.cache/схемы под путь установки, деинсталлятор).
+
+# Проверка бандла: timeout 8 ./dist/mdwf/mdwf-gui.exe (exit 124 = работает)
 
 # git: после каждого изменения — коммит + push на origin/master
 ```
@@ -696,7 +706,7 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **Большой аудит Ozon API** (живой прогон): фикс A/B/C + marked + warehouse auto-fill.
   С 19 FAIL до 16 OK из 21 отчёта.
 
-Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `3122a1c`.
+Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `98e49fc`.
 
 **Чат 2026-08-12 (GUI-проверка фиксов Ozon + auto-fill SKU):**
 - **Аудит code-path GUI vs CLI**: все 5 фиксов (A/B/C/marked/warehouse) в shared-коде
