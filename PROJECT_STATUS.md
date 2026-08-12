@@ -269,9 +269,12 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
 - ⚠️ warehouse_stock — `/v2/warehouse/list` вернул `warehouses:[]` → у продавца нет
   FBS/rFBS-складов (FBO-схема); отчёт неприменим.
 - ⚠️ accrual_postings — нужен `--posting-numbers` (флаг добавлен; нужны ID отправлений).
+- ✅ returns — **починен** (коммит c65e9a5): с марта 2025 `filter.status` обязателен
+  (раньше падал «unknown status», ошибочно считали серверным багом). CLI `--return-status`,
+  по умолчанию `ReturnedToOzon` (FBO; для FBS — `MovingToSeller`). Один статус за запрос.
 - ❌ Серверные ошибки Ozon (стабильно на 2026-06 и 2026-07, НЕ наш баг): b2b_sales
-  (`service.CreateDocumentB2BSalesReport...SSRS`), returns (`unknown status`),
-  postings (`Failed to build report. Try again later`).
+  (`service.CreateDocumentB2BSalesReport...SSRS`), postings
+  (`Failed to build report. Try again later`).
 
 **CLI-флаги** (остаток A): `--posting-numbers`, `--warehouse-ids`, `--skus` (CSV).
 **Живые API-тесты теперь разрешены пользователем** (раньше — нет).
@@ -488,8 +491,9 @@ thread_local! {
 ### Серверные ошибки Ozon (не наш баг, стабильно на 2026-06/07)
 - `ozon.b2b_sales` — `service.CreateDocumentB2BSalesReport: createMetazonMarketplaceSSRS`
   (внутренняя ошибка SSRS Ozon).
-- `ozon.returns` — `unknown status` (Ozon не отдаёт корректный статус генерации).
 - `ozon.postings` — `Failed to build report. Try again later`.
+- ~~`ozon.returns`~~ — **ПОЧИНЕН** (c65e9a5): `filter.status` обязателен с марта 2025,
+  был наш пропуск API-change, а не серверный баг. См. секцию аудита выше.
 - Тела запросов валидны (фикс A прошёл валидацию) — проблема на стороне Ozon.
   Возможно специфика аккаунта `oz_prof1` или отсутствие данных за период.
 
@@ -621,6 +625,20 @@ thread_local! {
     использует `save_with_dir` (возвращает директорию) + `dir.join(file_name)`,
     как GUI. Урок: каталог и UI-вывод — РАЗНОЕ; в БД пишем реальный путь,
     отображение форматируем отдельно в точке вывода.
+31. **Проверять changelog API — обязательные параметры появляются со временем.**
+    `ozon.returns` год падал «unknown status» и числился «серверным багом Ozon».
+    На самом деле с 5 марта 2025 Ozon сделал `filter.status` обязательным
+    (`/v2/report/returns/create`, proto-enum, одно значение — массив отвергается).
+    Локальная копия дока имела changelog (line 46296), но мы не сверялись с ним.
+    Урок: «серверная ошибка» может быть пропущенным API-change — всегда смотреть
+    changelog метода (раздел «Изменения» в доке). Стабильная одинаковая ошибка на
+    разных периодах = красный флаг, что мы шлём невалидный запрос, а не «баг Ozon».
+32. **Архив/списки: показывать человекочитаемые имена, не type_id.** В Архиве
+    колонка «Отчёт» и combo фильтра показывали технические type_id (`ozon.products`)
+    — непонятно. Резолв type_id→display_name через `capabilities().reports`
+    (синхронно, без API), combo по паттерну label→value (видим имя, фильтр по type_id).
+    Урок: всё, что видит пользователь — человекочитаемые имена; type_id только
+    внутри (БД/API), с tooltip для точной идентификации при необходимости.
 
 
 
@@ -666,7 +684,7 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **Большой аудит Ozon API** (живой прогон): фикс A/B/C + marked + warehouse auto-fill.
   С 19 FAIL до 16 OK из 21 отчёта.
 
-Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `fe30e40`.
+Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `c65e9a5`.
 
 **Чат 2026-08-12 (GUI-проверка фиксов Ozon + auto-fill SKU):**
 - **Аудит code-path GUI vs CLI**: все 5 фиксов (A/B/C/marked/warehouse) в shared-коде
@@ -685,6 +703,13 @@ cargo build --release -p mdwf-gui -p mdwf-cli
   «filename (size байт)» вместо реального пути → ломало «Архив». Каталог почищен:
   4 обманные записи products/realization_posting перекачаны как честные `.csv`,
   19 malformed-записей исправлены UPDATE пути. Бэкап БД создан. Урок #30.
+- **Человекочитаемые имена в Архиве** (коммит `a13e61b`): колонка «Отчёт» и combo
+  фильтра показывали type_id → теперь display_name (резолв через capabilities).
+  Урок #32.
+- **Починен отчёт по возвратам** (коммит `c65e9a5`): `ozon.returns` падал
+  «unknown status» — с марта 2025 `filter.status` обязателен (наш пропуск API-change,
+  не серверный баг). CLI `--return-status`, дефолт `ReturnedToOzon`. Урок #31.
+  Ограничение: один статус за запрос; полная агрегация — через /v1/returns/list.
 - **Клик-тест GUI**: пользователь прогоняет 15 отчётов через GUI вручную (инструкции
   выданы). Результаты ожидаются.
 
@@ -695,7 +720,8 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - ✅ 16 из 21 отчётов Ozon скачиваются корректно (см. секцию «Аудит Ozon API» выше).
 - ⚠️ `warehouse_stock` — у аккаунта нет FBS-складов (FBO-схема), отчёт неприменим.
 - ⚠️ `accrual_postings` — нужен `--posting-numbers` (флаг добавлен, нужны ID заказов).
-- ❌ `b2b_sales`/`returns`/`postings` — серверные ошибки Ozon (НЕ наш баг, стабильно).
+- ✅ `returns` — починен (c65e9a5): `filter.status` обязателен с марта 2025.
+- ❌ `b2b_sales`/`postings` — серверные ошибки Ozon (НЕ наш баг, стабильно).
 
 **Живые API-тесты теперь РАЗРЕШЕНЫ пользователем** (раньше — под запретом).
 Профили `oz_prof1` (Ozon) и `wb_prof` (WB) созданы, ключи валидны (health_check OK).
