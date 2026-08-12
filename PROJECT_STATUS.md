@@ -269,9 +269,12 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
 - ⚠️ warehouse_stock — `/v2/warehouse/list` вернул `warehouses:[]` → у продавца нет
   FBS/rFBS-складов (FBO-схема); отчёт неприменим.
 - ⚠️ accrual_postings — нужен `--posting-numbers` (флаг добавлен; нужны ID отправлений).
-- ✅ returns — **починен** (коммит c65e9a5): с марта 2025 `filter.status` обязателен
-  (раньше падал «unknown status», ошибочно считали серверным багом). CLI `--return-status`,
-  по умолчанию `ReturnedToOzon` (FBO; для FBS — `MovingToSeller`). Один статус за запрос.
+- ✅ returns — **полный отчёт** (коммит 84c7e51): переведён с `/v2/report/returns/create`
+  (требовал обязательный `filter.status`, одно значение из 35) на `/v1/returns/list` (JSON).
+  Намеренно НЕ шлёт filter.status/return_schema → **все возвраты: все статусы, FBO+FBS**.
+  Пагинация last_id+has_next; xlsx с 20 русскими колонками (вложенные поля).
+  Живой прогон: 420 строк (vs 383 для одного статуса ранее). Был «unknown status»
+  (год считали серверным багом — наш пропуск API-change марта 2025).
 - ❌ Серверные ошибки Ozon (стабильно на 2026-06 и 2026-07, НЕ наш баг): b2b_sales
   (`service.CreateDocumentB2BSalesReport...SSRS`), postings
   (`Failed to build report. Try again later`).
@@ -706,10 +709,11 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **Человекочитаемые имена в Архиве** (коммит `a13e61b`): колонка «Отчёт» и combo
   фильтра показывали type_id → теперь display_name (резолв через capabilities).
   Урок #32.
-- **Починен отчёт по возвратам** (коммит `c65e9a5`): `ozon.returns` падал
+- **Починен отчёт по возвратам** (коммиты `c65e9a5` → `84c7e51`): `ozon.returns` падал
   «unknown status» — с марта 2025 `filter.status` обязателен (наш пропуск API-change,
-  не серверный баг). CLI `--return-status`, дефолт `ReturnedToOzon`. Урок #31.
-  Ограничение: один статус за запрос; полная агрегация — через /v1/returns/list.
+  не серверный баг). Сначала фикс через `--return-status` (один статус), затем переведён
+  на `/v1/returns/list` — полный отчёт: все статусы + FBO/FBS одним xlsx (420 строк).
+  Урок #31 (проверять changelog).
 - **Клик-тест GUI**: пользователь прогоняет 15 отчётов через GUI вручную (инструкции
   выданы). Результаты ожидаются.
 
@@ -720,7 +724,7 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - ✅ 16 из 21 отчётов Ozon скачиваются корректно (см. секцию «Аудит Ozon API» выше).
 - ⚠️ `warehouse_stock` — у аккаунта нет FBS-складов (FBO-схема), отчёт неприменим.
 - ⚠️ `accrual_postings` — нужен `--posting-numbers` (флаг добавлен, нужны ID заказов).
-- ✅ `returns` — починен (c65e9a5): `filter.status` обязателен с марта 2025.
+- ✅ `returns` — полный отчёт (84c7e51): `/v1/returns/list`, все статусы + FBO/FBS.
 - ❌ `b2b_sales`/`postings` — серверные ошибки Ozon (НЕ наш баг, стабильно).
 
 **Живые API-тесты теперь РАЗРЕШЕНЫ пользователем** (раньше — под запретом).
