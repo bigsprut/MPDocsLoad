@@ -1272,13 +1272,14 @@ mod tests {
 
     #[test]
     fn build_body_marked_products_nested_date() {
-        // /v1/report/marked-products-sales/create: date{from,to} — ISO datetime.
+        // /v1/report/marked-products-sales/create: date{from,to} — date-only YYYY-MM-DD.
+        // Сервер требует ровно 10 символов; ISO datetime с T..Z (24 символа) отвергается.
         let params = ReportParams::default()
             .with("date_from", "2026-07-01")
             .with("date_to", "2026-07-31");
         let body = build_download_body("ozon.marked_products_sales", &params);
-        assert_eq!(body["date"]["from"], "2026-07-01T00:00:00.000Z");
-        assert_eq!(body["date"]["to"], "2026-07-31T23:59:59.999Z");
+        assert_eq!(body["date"]["from"], "2026-07-01");
+        assert_eq!(body["date"]["to"], "2026-07-31");
     }
 
     #[test]
