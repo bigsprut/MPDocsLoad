@@ -275,9 +275,9 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
   Пагинация last_id+has_next; xlsx с 20 русскими колонками (вложенные поля).
   Живой прогон: 420 строк (vs 383 для одного статуса ранее). Был «unknown status»
   (год считали серверным багом — наш пропуск API-change марта 2025).
-- ❌ Серверные ошибки Ozon (стабильно на 2026-06 и 2026-07, НЕ наш баг): b2b_sales
-  (`service.CreateDocumentB2BSalesReport...SSRS`), postings
-  (`Failed to build report. Try again later`).
+- ❌ Не-наши проблемы (ПЕРЕПРОВЕРЕНО этим чатом — запросы валидны по доке+changelog):
+  `b2b_sales` (нет документа B2B-продаж у аккаунта — неприменимо, как warehouse_stock),
+  `postings` (create успешен → запрос валиден; падает генерация на стороне Ozon).
 
 **CLI-флаги** (остаток A): `--posting-numbers`, `--warehouse-ids`, `--skus` (CSV).
 **Живые API-тесты теперь разрешены пользователем** (раньше — нет).
@@ -491,13 +491,18 @@ thread_local! {
 1. `returns-api.wildberries.ru` для claims — спека говорит `/api/v1/claims`, но в доке этого раздела нет
 2. Формат ответа claims — догадка
 
-### Серверные ошибки Ozon (не наш баг, стабильно на 2026-06/07)
-- `ozon.b2b_sales` — `service.CreateDocumentB2BSalesReport: createMetazonMarketplaceSSRS`
-  (внутренняя ошибка SSRS Ozon).
-- `ozon.postings` — `Failed to build report. Try again later`.
-- ~~`ozon.returns`~~ — **ПОЧИНЕН** (c65e9a5): `filter.status` обязателен с марта 2025,
-  был наш пропуск API-change, а не серверный баг. См. секцию аудита выше.
-- Тела запросов валидны (фикс A прошёл валидацию) — проблема на стороне Ozon.
+### Не-наши проблемы Ozon (ПЕРЕПРОВЕРЕНО этим чатом — не наш баг, в отличие от returns)
+- `ozon.b2b_sales` — `getFinanceDocumentID: finance document not found`. Запрос
+  `{date: YYYY-MM}` **корректен** (дока подтверждает — это единственный обязательный
+  параметр). Означает: у аккаунта **нет документа реестра продаж юр. лицам** за период
+  (не продаёт B2B). **Неприменимо к аккаунту**, как warehouse_stock без FBS-складов.
+- `ozon.postings` — `Failed to build report. Try again later`. Запрос корректен
+  (filter.processed_at_from/to обязательны с changelog — мы их шлём). **Create
+  успешен** (получаем code → формат валиден), падает только генерация на стороне Ozon.
+  Воркэраунд: меньший диапазон дат через GUI (возможно объём/таймаут).
+- **Перепроверка подтвердила**: оба — честно не наш баг (запросы валидны по доке +
+  changelog). В отличие от `returns`, который год считали серверным, а он был нашим
+  пропуском API-change (теперь полный отчёт через /v1/returns/list).
   Возможно специфика аккаунта `oz_prof1` или отсутствие данных за период.
 
 ### oz_prof1: нет FBS/rFBS-складов
