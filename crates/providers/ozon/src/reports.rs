@@ -821,8 +821,43 @@ impl Report for OzonAsyncReport {
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
         const POLL_MAX_ATTEMPTS: usize = 120; // ~10 минут максимум.
 
+        // Авто-fill: для warehouse_stock, если ID складов не переданы явно —
+        // получаем их через /v2/warehouse/list (склады FBS/rFBS продавца).
+        let params = if self.type_id == "ozon.warehouse_stock"
+            && params.get("warehouse_ids").map(str::is_empty).unwrap_or(true)
+        {
+            match self.client.fetch_warehouse_ids(auth).await {
+                Ok(ids) if !ids.is_empty() => {
+                    let p = params.clone().with("warehouse_ids", ids.join(","));
+                    tracing::info!(
+                        type_id = %self.type_id,
+                        count = ids.len(),
+                        "warehouse_ids auto-filled из /v2/warehouse/list"
+                    );
+                    p
+                }
+                Ok(_) => {
+                    // Список FBS/rFBS-складов пуст → отчёт «Остатки на FBS-складе»
+                    // неприменим. Возвращаем понятную ошибку вместо молчаливой
+                    // отправки запроса без warehouseId (→ 4xx «at least 1 item»).
+                    return Err(CoreError::Internal(
+                        "у продавца нет FBS/rFBS-складов ( /v2/warehouse/list вернул пустой список) \
+                         — отчёт «Остатки на FBS-складе» неприменим. \
+                         Если используете FBO — отчёт недоступен для вашей схемы работы."
+                            .into(),
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "не удалось получить warehouse_ids; пробуем без них");
+                    params.clone()
+                }
+            }
+        } else {
+            params.clone()
+        };
+
         // Шаг 1: запрос отчёта → получаем code.
-        let body = build_download_body(&self.type_id, params);
+        let body = build_download_body(&self.type_id, &params);
         let resp = self.client.post(self.endpoint, &body, auth).await?;
 
         // Извлекаем code. Большинство create-эндпоинтов возвращают {result:{code}},

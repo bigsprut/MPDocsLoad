@@ -333,6 +333,55 @@ impl OzonHttpClient {
         let body = json!({ "code": code });
         self.post_url(&url, &body, auth).await
     }
+
+    /// Получает список ID всех складов продавца через /v2/warehouse/list
+    /// (пагинация по cursor). Используется для ozon.warehouse_stock, когда ID
+    /// складов не переданы явно (auto-fill). Дока: POST /v2/warehouse/list
+    /// {limit<=200, cursor?} → {warehouses:[{warehouse_id,...}], has_next}.
+    pub async fn fetch_warehouse_ids(
+        &self,
+        auth: &dyn Authenticator,
+    ) -> CoreResult<Vec<String>> {
+        let url = format!("{}/v2/warehouse/list", self.base_url);
+        let mut ids = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let mut body = json!({ "limit": 200 });
+            if let Some(c) = &cursor {
+                body["cursor"] = json!(c);
+            }
+            let resp = self.post_url(&url, &body, auth).await?;
+            if let Some(whs) = resp.get("warehouses").and_then(serde_json::Value::as_array) {
+                for wh in whs {
+                    // warehouse_id — int64. as_i64() покрывает; для >i64 редки.
+                    if let Some(id) = wh.get("warehouse_id").and_then(serde_json::Value::as_i64) {
+                        ids.push(id.to_string());
+                    } else if let Some(id) = wh
+                        .get("warehouse_id")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        // На случай если сервер отдаёт строкой.
+                        ids.push(id.to_string());
+                    }
+                }
+            }
+            let has_next = resp
+                .get("has_next")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if !has_next {
+                break;
+            }
+            cursor = resp
+                .get("cursor")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(ids)
+    }
 }
 
 /// Извлекает задержку из ответа Ozon 429. Ozon использует несколько заголовков:
