@@ -408,7 +408,15 @@ async fn run_command_loop(
                         .ok()
                 })();
                 match outcome {
-                    Some(entries) => fwd.forward(UiEvent::ArchiveListed(Ok(entries))),
+                    Some(mut entries) => {
+                        // Обогащаем человекочитаемыми именами отчётов (storage не
+                        // имеет доступа к реестру провайдеров — делаем здесь).
+                        let dm = report_display_name_map(&domain);
+                        for e in &mut entries {
+                            e.report_display_name = dm.get(&e.report_type).cloned();
+                        }
+                        fwd.forward(UiEvent::ArchiveListed(Ok(entries)));
+                    }
                     None => fwd.forward(UiEvent::ArchiveListed(Err(
                         "каталог недоступен".to_string(),
                     ))),
@@ -421,7 +429,17 @@ async fn run_command_loop(
                     .as_ref()
                     .and_then(|cat| cat.distinct_report_types().ok())
                     .unwrap_or_default();
-                fwd.forward(UiEvent::ArchiveReportTypesLoaded(rts));
+                // Резолвим type_id → display_name через реестр провайдеров
+                // (capabilities().reports, синхронно, без API). Fallback — сам type_id.
+                let dm = report_display_name_map(&domain);
+                let infos: Vec<crate::channels::ReportTypeInfo> = rts
+                    .iter()
+                    .map(|t| crate::channels::ReportTypeInfo {
+                        display_name: dm.get(t).cloned().unwrap_or_else(|| t.clone()),
+                        type_id: t.clone(),
+                    })
+                    .collect();
+                fwd.forward(UiEvent::ArchiveReportTypesLoaded(infos));
             }
             UiCommand::SaveArchiveState(state) => {
                 if let Some(cat) = domain.catalog.read().as_ref() {
@@ -795,6 +813,22 @@ async fn do_download(
         }),
         Err(e) => Err(e),
     }
+}
+
+/// Карта type_id → человекочитаемое имя по всем провайдерам реестра.
+/// Источник — `capabilities().reports` (статический список в памяти, без API).
+/// Используется для отображения понятных названий в Архиве (вместо технических
+/// type_id вроде `ozon.products`) и combo фильтра «Отчёт».
+fn report_display_name_map(
+    domain: &Domain,
+) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for p in domain.registry.list() {
+        for r in &p.capabilities().reports {
+            map.insert(r.type_id.clone(), r.display_name.clone());
+        }
+    }
+    map
 }
 
 /// Преобразует период фильтра Архива (YYYY-MM) в диапазон дат `(from, to)` для

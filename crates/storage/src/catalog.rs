@@ -150,6 +150,10 @@ pub struct ArchiveEntry {
     pub profile_name: String,
     pub provider_id: String,
     pub report_type: String,
+    /// Человекочитаемое имя отчёта (из capabilities().reports провайдера).
+    /// Заполняется app-слоем (storage не имеет доступа к реестру провайдеров);
+    /// из БД приходит None. View показывает его, с fallback на `report_type`.
+    pub report_display_name: Option<String>,
     /// Период отчёта (параметр запроса: YYYY-MM/YYYY-MM-DD) — для Ozon.
     /// Для WB-документов NULL (нет периода запроса); вместо него смотрим `document_date`.
     pub period: Option<String>,
@@ -465,6 +469,9 @@ impl Catalog {
                     profile_name: row.get(2)?,
                     provider_id: row.get(3)?,
                     report_type: row.get(4)?,
+                    // Storage не имеет доступа к реестру провайдеров — app-слой
+                    // заполнит человекочитаемое имя после выборки.
+                    report_display_name: None,
                     // Колонка отображения: период запроса (Ozon) ИЛИ дата документа (WB).
                     period: period.or(document_date.clone()),
                     file_path: row.get(6)?,

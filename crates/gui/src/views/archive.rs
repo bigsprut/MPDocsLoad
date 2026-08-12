@@ -24,7 +24,7 @@ use libadwaita::prelude::MessageDialogExt;
 use mdwf_core::Profile;
 use mdwf_storage::ArchiveEntry;
 
-use crate::channels::{ArchiveState, CommandSender};
+use crate::channels::{ArchiveState, CommandSender, ReportTypeInfo};
 
 thread_local! {
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
@@ -37,8 +37,10 @@ thread_local! {
     /// Карта: отображаемое имя профиля → имя (уникальный ключ в БД).
     /// Заполняется из ProfilesLoaded; используется для резолва выбора combo.
     static PROFILES: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    /// Список report_type, реально присутствующих в архиве (из БД).
-    static REPORT_TYPES: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    /// Список (display_name, type_id) отчётов, реально присутствующих в архиве.
+    /// combo показывает display_name (label), фильтр в БД — по type_id (value).
+    /// Паттерн label→value как WB-категории (CATEGORIES в download.rs).
+    static REPORT_TYPES: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
     /// Отложенный restore: желаемый профиль/отчёт, если combo ещё не заполнен
     /// при приходе ArchiveStateLoaded (аналог PENDING_REPORT во вкладке «Загрузка»).
     static PENDING_PROFILE: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
@@ -211,22 +213,28 @@ pub fn on_profiles_loaded(profiles: &[Profile]) {
 }
 
 /// Хук: список report_type загружен — заполняем combo «Отчёт» (с «(все)»).
-pub fn on_report_types_loaded(report_types: &[String]) {
+/// combo показывает человекочитаемый display_name, фильтр в БД — по type_id.
+pub fn on_report_types_loaded(infos: &[ReportTypeInfo]) {
     let combo = W_REPORT_COMBO.with(|w| w.borrow().clone());
     let Some(combo) = combo else {
         return;
     };
     combo.remove_all();
     combo.append_text("(все)");
-    REPORT_TYPES.with(|r| *r.borrow_mut() = report_types.to_vec());
-    for rt in report_types {
-        combo.append_text(rt);
+    // Пары (display_name, type_id): видим — имя, фильтруем — type_id.
+    let pairs: Vec<(String, String)> = infos
+        .iter()
+        .map(|i| (i.display_name.clone(), i.type_id.clone()))
+        .collect();
+    for (label, _value) in &pairs {
+        combo.append_text(label);
     }
+    REPORT_TYPES.with(|r| *r.borrow_mut() = pairs);
     combo.set_active(Some(0));
-    // Отложенный restore сохранённого отчёта.
+    // Отложенный restore сохранённого отчёта (по type_id — value, не по тексту).
     let desired = PENDING_REPORT_TYPE.with(|p| p.borrow().clone());
     if let Some(rt) = desired {
-        set_combo_active_by_text(&combo, &rt);
+        set_report_combo_active_by_value(&combo, &rt);
         PENDING_REPORT_TYPE.with(|p| *p.borrow_mut() = None);
     }
 }
@@ -270,7 +278,7 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
             if let Some(rt) = &st.report_type {
                 let combo = W_REPORT_COMBO.with(|w| w.borrow().clone());
                 if let Some(combo) = combo {
-                    if !set_combo_active_by_text(&combo, rt) {
+                    if !set_report_combo_active_by_value(&combo, rt) {
                         PENDING_REPORT_TYPE.with(|p| *p.borrow_mut() = Some(rt.clone()));
                     }
                 }
@@ -348,9 +356,16 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .build(),
             );
             row.append(&profile_box);
+            // Человекочитаемое имя отчёта (с fallback на type_id); tooltip —
+            // технический type_id для точной идентификации.
+            let report_label = e
+                .report_display_name
+                .clone()
+                .unwrap_or_else(|| e.report_type.clone());
             row.append(
                 &Label::builder()
-                    .label(&e.report_type)
+                    .label(&report_label)
+                    .tooltip_text(&e.report_type)
                     .width_chars(22)
                     .xalign(0.0)
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
@@ -475,13 +490,19 @@ fn selected_profile() -> Option<String> {
 }
 
 /// Возвращает выбранный report_type (None = «(все)»).
+/// combo показывает display_name (label); возвращаем type_id (value) для фильтра БД.
 fn selected_report() -> Option<String> {
     let combo = W_REPORT_COMBO.with(|w| w.borrow().clone())?;
     let text = combo.active_text()?.to_string();
     if text == "(все)" || text.is_empty() {
         return None;
     }
-    Some(text)
+    REPORT_TYPES.with(|r| {
+        r.borrow()
+            .iter()
+            .find(|(label, _)| label == &text)
+            .map(|(_, value)| value.clone())
+    })
 }
 
 /// Возвращает выбранный период в формате YYYY-MM (None = «(все)»).
@@ -619,6 +640,21 @@ fn set_combo_active_by_text(combo: &ComboBoxText, text: &str) -> bool {
     // Не нашли — возвращаем дефолт.
     combo.set_active(Some(0));
     false
+}
+
+/// Делает активным элемент combo «Отчёт» по type_id (value), НЕ по видимому тексту.
+/// combo показывает display_name (label), поэтому restore сохранённого type_id
+/// требует поиска по value в REPORT_TYPES: индекс i в массиве = combo index i+1
+/// (индекс 0 — «(все)»). Возвращает true если найден.
+fn set_report_combo_active_by_value(combo: &ComboBoxText, type_id: &str) -> bool {
+    let idx = REPORT_TYPES.with(|r| r.borrow().iter().position(|(_, value)| value == type_id));
+    if let Some(i) = idx {
+        combo.set_active(Some((i + 1) as u32));
+        true
+    } else {
+        combo.set_active(Some(0));
+        false
+    }
 }
 
 // ===== Удаление записи + файла =====

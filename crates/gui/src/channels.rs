@@ -216,8 +216,9 @@ pub enum UiEvent {
     },
     /// Архив (П.6): результат запроса отфильтрованного списка скачиваний.
     ArchiveListed(Result<Vec<mdwf_storage::ArchiveEntry>, String>),
-    /// Архив (П.6): список уникальных report_type (для combo «Отчёт»).
-    ArchiveReportTypesLoaded(Vec<String>),
+    /// Архив: список уникальных report_type с человекочитаемыми именами (combo «Отчёт»).
+    /// combo показывает display_name, фильтр в БД — по type_id.
+    ArchiveReportTypesLoaded(Vec<ReportTypeInfo>),
     /// Архив: сохранённое состояние фильтров загружено (при старте).
     ArchiveStateLoaded(Option<ArchiveState>),
     /// Архив: запись о скачивании удалена (id — для контекста; ошибка, если файл
@@ -269,6 +270,16 @@ pub struct ReportInfo {
     pub is_browsable: bool,
     /// Какому провайдеру принадлежит отчёт (чтобы не угадывать из префикса type_id).
     pub provider_id: String,
+}
+
+/// Пара type_id → человекочитаемое имя для combo «Отчёт» в Архиве.
+/// `display_name` — что видит пользователь; `type_id` — технический фильтр в БД
+/// (combo хранит label→value, как WB-категории). app-слой резолвит из реестра
+/// провайдеров; если type_id неизвестен — display_name = type_id (fallback).
+#[derive(Debug, Clone)]
+pub struct ReportTypeInfo {
+    pub type_id: String,
+    pub display_name: String,
 }
 
 /// Категория документа для выпадающего списка в UI.
