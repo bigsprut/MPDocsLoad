@@ -212,6 +212,15 @@ struct DownloadArgs {
     /// Категория документа (для WB documents).
     #[arg(long)]
     category: Option<String>,
+    /// Номера отправлений через запятую (для ozon.accrual_postings, 1–200).
+    #[arg(long)]
+    posting_numbers: Option<String>,
+    /// Идентификаторы складов через запятую (для ozon.warehouse_stock, ≤50).
+    #[arg(long)]
+    warehouse_ids: Option<String>,
+    /// SKU товаров через запятую (для ozon.analytics_stocks, ≤100).
+    #[arg(long)]
+    skus: Option<String>,
 }
 
 #[tokio::main]

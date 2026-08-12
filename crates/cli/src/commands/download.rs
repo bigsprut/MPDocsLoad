@@ -40,6 +40,15 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
         if let Some(cat) = &args.category {
             params = params.with("category", cat);
         }
+        if let Some(v) = &args.posting_numbers {
+            params = params.with("posting_numbers", v);
+        }
+        if let Some(v) = &args.warehouse_ids {
+            params = params.with("warehouse_ids", v);
+        }
+        if let Some(v) = &args.skus {
+            params = params.with("skus", v);
+        }
 
         let progress = Arc::new(NoopProgress) as Arc<dyn mdwf_core::ProgressCallback>;
         match report
