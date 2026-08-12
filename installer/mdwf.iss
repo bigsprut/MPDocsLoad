@@ -38,6 +38,10 @@ OutputDir=Output
 OutputBaseFilename=MDWFSetup-{#MyAppVersion}
 ; Файлы берём из собранного бандла (build-release.sh → dist/mdwf/).
 PrivilegesRequiredOverridesAllowed=dialog
+; AppMutex: НЕ дать ставить поверх запущенного MDWF. Имя mutex ДОЛЖНО совпадать
+; с SINGLE_INSTANCE_NAME в crates/gui/src/main.rs (захватывается на старте GUI).
+; Inno проверяет наличие mutex — если MDWF запущен, попросит его закрыть.
+AppMutex=MDWF_App_Mutex
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"

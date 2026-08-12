@@ -725,6 +725,20 @@ thread_local! {
     окно» (искал баг рендеринга GTK, добавил GSK_RENDERER=gl — это отдельная
     полезная закалка, но НЕ та проблема) — надо было уточнить, что именно за окно.
     Спойлер: GTK-окно рендерилось нормально всё время.
+42. **Single-instance + инсталлер `AppMutex` через named mutex.** Крейт
+    `#![forbid(unsafe_code)]` → Win32 `CreateMutexW` напрямую нельзя. Решение: крейт
+    `single-instance` (внутри CreateMutex, снаружи safe API). В `main.rs`:
+    `SingleInstance::new(SINGLE_INSTANCE_NAME)` ДО `adw::Application` (иначе
+    gtk::Application-second-instance форвардит `activate` и выходит — урок #37);
+    `if !instance.is_single()` → диалог «уже запущен» через `glib::MainLoop` (НЕ
+    deprecated `gtk4::main`) + чистый выход. `_instance` держим до конца `main`
+    (дропнуть = отпустить mutex). **Имя mutex ДОЛЖНО совпадать** с `AppMutex` в
+    `installer/mdwf.iss` (`MDWF_App_Mutex`) — Inno проверяет этот mutex и не даст
+    ставить инсталлер поверх запущенного MDWF. Константа `SINGLE_INSTANCE_NAME`
+    с комментарием-предупреждением. Проверка: `OpenMutex` из другого процесса
+    видит mutex пока MDWF запущен; второй инстанс → exit 124 (блокирует на диалоге),
+    в логе НЕТ «MDWF GUI starting» (ветка диалога, не app). Тонкость тестов: bash-
+    переменная пути почему-то пустела во второй команде — литеральный путь надёжнее.
 
 
 
@@ -863,6 +877,11 @@ cargo clippy --workspace --tests -- -D warnings
   gresource-путь (`add_resource_path`) на Windows НЕ работает (verified has_icon=false
   при всех паттернах) — см. уроки #39, #40.
 - **`make-icon.sh`** теперь генерит и disk-PNG (синхрон с `.ico`).
+- **Single-instance + `AppMutex`** (отдельная просьба юзера): named mutex
+  `MDWF_App_Mutex` через крейт `single-instance` (forbid(unsafe_code) → обёртка) в
+  `main.rs` ДО `adw::Application` + `AppMutex=MDWF_App_Mutex` в `.iss`. Второй запуск
+  GUI → диалог «уже запущен» (`glib::MainLoop`); Inno не ставит поверх запущенного.
+  Проверено: mutex held (OpenMutex), второй инстанс→exit 124 (диалог). Урок #42.
 - **Итог**: установленное через настоящий `setup.exe` приложение рендерится (0%
   чёрного) и показывает брендовую иконку. Обе претензии закрыты на реальной установке.
   Уроки #38-40.

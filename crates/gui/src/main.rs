@@ -52,6 +52,7 @@ mod widgets;
 use std::process::ExitCode;
 
 use anyhow::Result;
+use gtk4::prelude::{DialogExt, WidgetExt};
 use tracing_subscriber::EnvFilter;
 
 pub use app::App;
@@ -106,6 +107,19 @@ fn main() -> Result<ExitCode> {
     // без share/) — no-op, остаётся MSYS2 из PATH.
     setup_bundle_env();
 
+    // Single-instance + инсталлятор AppMutex: захват named mutex ДО создания
+    // adw::Application (иначе gtk::Application-second-instance форвардит activate
+    // на «primary» и сразу выходит — при битом single-instance выглядело мёртвым
+    // окном; см. урок #37). Имя mutex = SINGLE_INSTANCE_NAME = AppMutex в .iss →
+    // Inno не даст поставить инсталлер поверх запущенного MDWF.
+    // `_instance` держит mutex до конца main (дропнуть раньше нельзя — отпустит).
+    let _instance = single_instance::SingleInstance::new(SINGLE_INSTANCE_NAME)?;
+    if !_instance.is_single() {
+        // Второй экземпляр: осмысленное сообщение + чистый выход (без форвардинга).
+        show_already_running_dialog();
+        return Ok(ExitCode::SUCCESS);
+    }
+
     // Логирование (спец. §2.7.1 [logging]).
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,mdwf=debug"));
@@ -123,4 +137,35 @@ fn main() -> Result<ExitCode> {
 
     let app = App::new()?;
     Ok(app.run())
+}
+
+/// Имя named mutex для single-instance. **ДОЛЖНО совпадать** с `AppMutex` в
+/// `installer/mdwf.iss` — Inno Setup проверяет этот mutex, чтобы не ставить
+/// инсталлер поверх запущенного MDWF. Меняем — меняем в обоих местах.
+const SINGLE_INSTANCE_NAME: &str = "MDWF_App_Mutex";
+
+/// Диалог «MDWF уже запущен» для второго экземпляра + чистый выход.
+/// glib::MainLoop (не deprecated gtk4::main). Если GTK не инициализируется —
+/// тихий выход (первый экземпляр уже работает, пугать нечем).
+fn show_already_running_dialog() {
+    if gtk4::init().is_err() {
+        return;
+    }
+    let dialog = gtk4::MessageDialog::builder()
+        .text("MDWF уже запущен")
+        .secondary_text(
+            "Уже есть открытое окно MDWF — используйте его. \
+             Чтобы запустить новый экземпляр, сначала закройте текущий.",
+        )
+        .message_type(gtk4::MessageType::Info)
+        .buttons(gtk4::ButtonsType::Ok)
+        .modal(true)
+        .build();
+    let loop_ = glib::MainLoop::new(None, false);
+    let quit_loop = loop_.clone();
+    dialog.connect_response(move |_, _| {
+        quit_loop.quit();
+    });
+    dialog.show();
+    loop_.run();
 }
