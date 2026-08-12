@@ -34,11 +34,17 @@ pub(crate) fn open_file(path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Открывает папку в проводнике (Windows: explorer). Общий хелпер (П.6).
+/// Открывает папку в проводнике (Windows). Общий хелпер (П.6).
+///
+/// Использует `cmd /c start "" <path>` (как open_file) — надёжнее прямого
+/// `explorer <path>`, который при уже запущенном проводнике иногда открывает
+/// 2 окна (handoff в работающий экземпляр).
 pub(crate) fn open_folder(path: &str) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer").arg(path).spawn()?;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", path])
+            .spawn()?;
     }
     #[cfg(not(target_os = "windows"))]
     {

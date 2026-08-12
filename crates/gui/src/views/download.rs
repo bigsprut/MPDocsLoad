@@ -1126,9 +1126,10 @@ pub fn on_download_finished(result: &crate::channels::DownloadResult) {
         if let Some(first_path) = result.saved_paths.first() {
             if let Some(parent) = std::path::Path::new(first_path).parent() {
                 let folder = parent.display().to_string();
-                let link = gtk4::LinkButton::builder()
+                // Обычный Button (НЕ LinkButton): у LinkButton срабатывает и
+                // авто-открытие URI, и connect_clicked → открывалось 2 проводника.
+                let link = gtk4::Button::builder()
                     .label("📁 Открыть папку")
-                    .uri(format!("file:///{folder}"))
                     .has_tooltip(true)
                     .tooltip_text(&folder)
                     .build();
