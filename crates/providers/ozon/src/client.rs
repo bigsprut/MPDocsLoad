@@ -438,6 +438,66 @@ impl OzonHttpClient {
         }
         Ok(skus)
     }
+
+    /// Получает номера отправлений (posting_number) за период через
+    /// /v2/posting/fbo/list (FBO-схема; offset-пагинация, limit≤1000,
+    /// filter.{since,to} = YYYY-MM-DD). Используется для ozon.accrual_postings,
+    /// когда posting_numbers не переданы явно (auto-fill). Дока: POST
+    /// /v2/posting/fbo/list → `{result:[{posting_number, ...}], ...}`.
+    ///
+    /// Примечание: FBO-only. Для FBS-аккаунтов нужен /v3/posting/fbs/list
+    /// (datetime-фильтры) — не реализовано (oz_prof1 работает по FBO).
+    pub async fn fetch_posting_numbers(
+        &self,
+        auth: &dyn Authenticator,
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+    ) -> CoreResult<Vec<String>> {
+        let url = format!("{}/v2/posting/fbo/list", self.base_url);
+        let mut nums = Vec::new();
+        let limit = 1000i64;
+        let mut offset = 0i64;
+        let mut iter = 0u32;
+        loop {
+            let mut filter = serde_json::Map::new();
+            // since/to — google.protobuf.Timestamp (ISO datetime), НЕ date-only
+            // (иначе «invalid google.protobuf.Timestamp value»).
+            if let Some(df) = date_from {
+                if let Some(iso) = crate::date_format::date_only_to_iso(df, false) {
+                    filter.insert("since".into(), json!(iso));
+                }
+            }
+            if let Some(dt) = date_to {
+                if let Some(iso) = crate::date_format::date_only_to_iso(dt, true) {
+                    filter.insert("to".into(), json!(iso));
+                }
+            }
+            let body = json!({
+                "limit": limit,
+                "offset": offset,
+                "translit": false,
+                "filter": filter,
+            });
+            let resp = self.post_url(&url, &body, auth).await?;
+            // result — массив отправлений; у каждого есть posting_number.
+            let rows = resp.get("result").and_then(serde_json::Value::as_array);
+            let n = rows.map_or(0, Vec::len) as i64;
+            if let Some(postings) = rows {
+                for p in postings {
+                    if let Some(pn) = p.get("posting_number").and_then(serde_json::Value::as_str) {
+                        nums.push(pn.to_string());
+                    }
+                }
+            }
+            // Выход: страница меньше лимта (конец) либо защита от цикла (~200k).
+            if n < limit || iter >= 200 {
+                break;
+            }
+            offset += limit;
+            iter += 1;
+        }
+        Ok(nums)
+    }
 }
 
 /// Извлекает задержку из ответа Ozon 429. Ozon использует несколько заголовков:

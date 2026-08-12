@@ -417,8 +417,9 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             ReportCategory::Finance,
             client,
             "/v1/finance/accrual/postings",
-            // Один запрос по posting_numbers (1–200). Ответ: {posting_accruals:[...]}.
-            PaginationKind::Single { array_field: "posting_accruals" },
+            // posting_numbers[] обязательны (1–200). Если не переданы — auto-fill
+            // через /v2/posting/fbo/list, затем батчинг ≤200. Ответ: {posting_accruals:[...]}.
+            PaginationKind::AccrualPostings,
         )),
         "ozon.accrual_by_day" => Arc::new(OzonPaginatedReport::new(
             "ozon.accrual_by_day",
@@ -1001,11 +1002,6 @@ enum PaginationKind {
     /// `{date, last_id}`. Цикл: last_id из ответа подставляется в следующий запрос,
     /// пока accruals непустой И last_id меняется.
     LastId,
-    /// Один запрос без пагинации. `array_field` — путь к массиву в ответе
-    /// (напр. `posting_accruals` для accrual/postings).
-    /// Результат — массив из одного ответа. Используется для эндпоинтов, где
-    /// серверная пагинация отсутствует.
-    Single { array_field: &'static str },
     /// /v1/analytics/stocks: `{items:[...]}`. Запрос `{skus:[...]}` ≤100 за раз.
     /// Если SKU не переданы — auto-fill через /v3/product/list (все товары
     /// продавца), затем батчинг ≤100 SKU на запрос. Результат агрегируется из
@@ -1016,6 +1012,11 @@ enum PaginationKind {
     /// last_id (int64) — курсор (id последнего возврата страницы). Без filter.status
     /// и return_schema → все статусы и схемы (FBO+FBS). Цикл пока has_next=true.
     ReturnsList,
+    /// /v1/finance/accrual/postings: `{posting_accruals:[...]}`. Запрос:
+    /// `{posting_numbers:[...]}` (1–200, обязательны). Если не переданы — auto-fill
+    /// через /v2/posting/fbo/list (номера отправлений за период), затем батчинг ≤200.
+    /// Ответ: `posting_accruals[]` (денормализация в xlsx). Агрегация из всех батчей.
+    AccrualPostings,
 }
 
 /// Максимальное число страниц/итераций sweep (защита от бесконечного цикла).
@@ -1168,16 +1169,6 @@ impl Report for OzonPaginatedReport {
                     }
                 }
             }
-            PaginationKind::Single { array_field } => {
-                // Один запрос, без пагинации. Читаем массив по заданному пути.
-                let body = build_download_body(&self.type_id, params);
-                let resp = self.client.post(self.endpoint, &body, auth).await?;
-                if let Some(rows) = resp.get(array_field).and_then(|v| v.as_array()) {
-                    if let Some(arr) = collected.as_array_mut() {
-                        arr.extend(rows.iter().cloned());
-                    }
-                }
-            }
             PaginationKind::Skus => {
                 // /v1/analytics/stocks: skus[] обязательны и ≤100 за запрос.
                 // Если SKU не переданы явно (GUI / CLI без --skus) — auto-fill
@@ -1291,6 +1282,67 @@ impl Report for OzonPaginatedReport {
                         break;
                     }
                     iter += 1;
+                }
+            }
+            PaginationKind::AccrualPostings => {
+                // posting_numbers[] обязательны (1–200 за запрос). Если не переданы
+                // (GUI / CLI без --posting-numbers) — auto-fill через /v2/posting/fbo/list
+                // (номера отправлений за период). Затем батчинг ≤200.
+                let (df, dt) = match (
+                    params.get("date_from").map(str::to_string),
+                    params.get("date_to").map(str::to_string),
+                ) {
+                    (Some(a), Some(b)) => (Some(a), Some(b)),
+                    _ => period_to_date_range(params.period.as_deref()),
+                };
+                let postings: Vec<String> = match params.get("posting_numbers") {
+                    Some(csv) if !csv.is_empty() => csv
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect(),
+                    _ => match self
+                        .client
+                        .fetch_posting_numbers(auth, df.as_deref(), dt.as_deref())
+                        .await
+                    {
+                        Ok(v) if !v.is_empty() => {
+                            tracing::info!(
+                                type_id = %self.type_id,
+                                count = v.len(),
+                                "posting_numbers auto-filled из /v2/posting/fbo/list"
+                            );
+                            v
+                        }
+                        Ok(_) => {
+                            return Err(CoreError::Internal(
+                                "нет отправлений за период ( /v2/posting/fbo/list вернул пустой \
+                                 список) — отчёт «Начисления по отправлениям» нечего строить."
+                                    .into(),
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(CoreError::Internal(format!(
+                                "не удалось получить posting_numbers через /v2/posting/fbo/list: {e}"
+                            )));
+                        }
+                    },
+                };
+                // Батчинг ≤200 posting_numbers на запрос (лимит /v1/finance/accrual/postings).
+                // Между батчами — мягкий pacing (защита от per-second rate limit).
+                for (i, chunk) in postings.chunks(200).enumerate() {
+                    if i > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                    let mut body = build_download_body(&self.type_id, params);
+                    body["posting_numbers"] = json!(chunk.to_vec());
+                    let resp = self.client.post(self.endpoint, &body, auth).await?;
+                    if let Some(rows) = resp.get("posting_accruals").and_then(|v| v.as_array()) {
+                        if let Some(arr) = collected.as_array_mut() {
+                            arr.extend(rows.iter().cloned());
+                        }
+                    }
                 }
             }
         }
