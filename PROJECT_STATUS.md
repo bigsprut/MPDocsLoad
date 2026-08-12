@@ -677,17 +677,14 @@ cargo run -p mdwf-cli -- doctor
 cargo test --workspace          # ~168 тестов (storage: 19, incl. Архив + delete)
 cargo clippy --workspace --tests -- -D warnings
 
-# Release-бандл (relocatable, для установки на прод без MSYS2)
-./scripts/build-release.sh          # → dist/mdwf/ (~100 МБ: 2 exe, 77 DLL через
-                                    #   ntldd -R, иконки Adwaita/hicolor, схемы,
-                                    #   gdk-pixbuf-лоадеры + postinstall.bat).
-                                    # GUI сам настраивает env (XDG_DATA_DIRS и др.)
-                                    # на соседние share/lib — relocatable.
-
-# Inno Setup-инсталлятор (нужен Inno Setup 6: jrsoftware.org/isdl.php)
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/mdwf.iss
-# → installer/Output/MDWFSetup-<version>.exe (Program Files, ярлык Пуск,
-#   [Run] пересобирает loaders.cache/схемы под путь установки, деинсталлятор).
+# Release-бандл + инсталлятор ОДНОЙ командой (нужен Inno Setup 6/7):
+bash scripts/build-setup.sh
+# → installer/Output/MDWFSetup-<version>.exe (внутри: build-release.sh → бандл
+#   dist/mdwf/ ~100 МБ: 2 exe, 77 DLL через ntldd -R, иконки Adwaita/hicolor,
+#   схемы, gdk-pixbuf-лоадеры; затем авто-поиск ISCC + компиляция .iss).
+# GUI relocatable: main.rs сам настраивает XDG_DATA_DIRS/GDK_PIXBUF_MODULE_FILE
+# на соседние share/lib. Инсталлер [Run] пересобирает cache/схемы под путь.
+# Inno Setup: jrsoftware.org/isdl.php (если нет — скрипт подскажет).
 
 # Проверка бандла: timeout 8 ./dist/mdwf/mdwf-gui.exe (exit 124 = работает)
 
