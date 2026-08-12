@@ -67,6 +67,31 @@ cp -r "$MSYS_ROOT/share/icons/Adwaita" "$DIST_APP/share/icons/" 2>/dev/null \
     || echo "  WARN: Adwaita не найден"
 cp -r "$MSYS_ROOT/share/icons/hicolor" "$DIST_APP/share/icons/" 2>/dev/null || true
 
+# Иконка ПРИЛОЖЕНИЯ «mdwf» в on-disk теме hicolor — для GtkWindow::set_default_icon_name.
+# PNG, отрендеренные из app-icon.svg (crates/gui/resources/icons/<size>x<size>/apps/).
+# hicolor/index.theme уже объявляет <size>x<size>/apps, так что имя «mdwf» резолвится.
+# (GTK4 add_resource_path + gresource на Windows не подхватывает иконку — только disk.)
+for s in 16 32 48 64 128 256; do
+    src="$REPO_ROOT/crates/gui/resources/icons/${s}x${s}/apps/mdwf.png"
+    [[ -f "$src" ]] && cp "$src" \
+        "$DIST_APP/share/icons/hicolor/${s}x${s}/apps/mdwf.png" 2>/dev/null || true
+done
+icon_added=$(find "$DIST_APP/share/icons/hicolor" -name mdwf.png 2>/dev/null | wc -l)
+echo "  app-icon 'mdwf' sizes в hicolor: $icon_added"
+
+# Перегенерировать icon-theme.cache темы hicolor. Исходный кэш скопирован из MSYS2
+# и НЕ содержит «mdwf» → без этого GtkWindow::set_default_icon_name("mdwf") даёт
+# has_icon=false (GTK доверяет кэшу и не сканит директории → брендовая иконка не
+# ставится на окно). Регенерируем (включая mdwf); если тулза недоступна — удаляем
+# кэш (GTK fallback на скан директорий, проверено: has_icon=true).
+if gtk4-update-icon-cache --force "$DIST_APP/share/icons/hicolor/" >/dev/null 2>&1 \
+    || gtk-update-icon-cache --force "$DIST_APP/share/icons/hicolor/" >/dev/null 2>&1; then
+    echo "  icon-theme.cache hicolor перегенерирован --force (включает mdwf)"
+else
+    rm -f "$DIST_APP/share/icons/hicolor/icon-theme.cache"
+    echo "  icon-theme.cache hicolor удалён (GTK fallback на скан директорий)"
+fi
+
 # gsettings-схемы (GTK/libadwaita настройки). Компилируем в бандл.
 mkdir -p "$DIST_APP/share/glib-2.0/schemas"
 cp "$MSYS_ROOT/share/glib-2.0/schemas/"*.xml "$DIST_APP/share/glib-2.0/schemas/" 2>/dev/null || true

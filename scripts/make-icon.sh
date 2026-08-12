@@ -52,3 +52,17 @@ done
 } > "$OUT"
 
 echo "Создан $OUT ($(stat -c %s "$OUT") байт, $n размеров: ${SIZES[*]})"
+
+# 4. Disk-hicolor PNG для GtkWindow::set_default_icon_name("mdwf").
+# build-release.sh копирует их в share/icons/hicolor/<size>x<size>/apps/mdwf.png.
+# На Windows GTK4 не подхватывает иконку из gresource (add_resource_path не работает),
+# поэтому ships как файлы в стандартной on-disk теме hicolor (см. build-release.sh).
+DISK_SIZES=(16 32 48 64 128 256)
+DISK_BASE="$REPO_ROOT/crates/gui/resources/icons"
+for s in "${DISK_SIZES[@]}"; do
+    d="$DISK_BASE/${s}x${s}/apps"
+    mkdir -p "$d"
+    rsvg-convert -w "$s" -h "$s" "$SVG" -o "$d/mdwf.png"
+done
+echo "Disk-hicolor PNG: ${DISK_SIZES[*]} в $DISK_BASE/<size>x<size>/apps/mdwf.png"
+echo "ВАЖНО: после их смены — пересобрать бандл (gtk4-update-icon-cache --force)."

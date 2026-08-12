@@ -53,8 +53,18 @@ pub use app::App;
 
 /// Relocatable-бандл: если рядом с exe есть `share/` (релизный дистрибутив),
 /// настраиваем env так, чтобы GTK/libadwaita/gdk-pixbuf нашли иконки, схемы и
-/// лоадеры рядом с приложением. На dev-машине (target/debug) — нет share/, no-op.
+/// лоадеры рядом с приложением. На dev-машине (target/debug) — нет share/, no-op
+/// (но GSK_RENDERER ниже применяется ВСЕГДА — и в dev, и в бандле).
 fn setup_bundle_env() {
+    // Рендерер GTK4. Дефолтный NGL на некоторых Windows-машинах с определёнными
+    // GPU-драйверами даёт ЧЁРНОЕ окно (известная проблема GTK4-on-Windows).
+    // `gl` (legacy GL-рендерер) совместим с практически любой GPU/драйвером и
+    // полностью достаточен для business-app вроде MDWF (формы/данные, без
+    // тяжёлой графики). Пользователь может переопределить через env (напр. cairo).
+    if std::env::var_os("GSK_RENDERER").is_none() {
+        std::env::set_var("GSK_RENDERER", "gl");
+    }
+
     let Ok(exe) = std::env::current_exe() else {
         return;
     };

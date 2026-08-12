@@ -2,7 +2,7 @@
 
 > **Этот файл — для передачи контекста в новый диалог.**
 > Прочитайте его целиком перед продолжением работы над MDWF.
-> Обновлено: 2026-08-12.
+> Обновлено: 2026-08-13.
 
 ---
 
@@ -688,6 +688,31 @@ thread_local! {
     `scheduler loop started` → `MDWF GUI exited` через <1с, без ошибок. Не баг
     продукта — лечится `taskkill` primary. Вывод: при «мгновенном чистом выходе» GUI
     СНАЧАЛА проверить `tasklist` на живой одноимённый процесс, потом уж искать баг.
+38. **Чёрное окно GTK4 на Windows — форсировать `GSK_RENDERER=gl`.** Дефолтный
+    рендерер NGL на некоторых GPU-драйверах (на чистой машине без MSYS2) даёт
+    полностью ЧЁРНОЕ окно (известная проблема GTK4-on-Windows). `gl` (legacy GL)
+    совместим с практически любой GPU и достаточен для business-app (формы/данные).
+    Ставится в `main.rs::setup_bundle_env` ДО `gtk::init`: `set_var("GSK_RENDERER","gl")`
+    только если пользователь не задал свой (overridable). `cairo` (software) — крайний
+    fallback. Проверка: яркость окна avg>30 + black_fraction<5% (не чёрное). Урок
+    вылез при жалобе юзера «чёрное окно» — дев-машина рендерила нормально (NGL там
+    работал), баг был только на чистой машине.
+39. **Иконка запущенного окна на Windows — НЕ через gresource.** GTK4
+    `gtk_window_set_default_icon_name` на Windows упорно НЕ находит иконку из
+    `IconTheme::add_resource_path` + gresource: проверены паттерны `themed/<size>x<size>/apps/`
+    (+index.theme), `scalable/apps/`, `<size>x<size>/apps/` — везде `has_icon=false`
+    (при том что `has_icon("open-menu-symbolic")=true` — тема живёт). Рабочий путь:
+    **ships как ФАЙЛЫ в on-disk теме hicolor бандла** (`share/icons/hicolor/<size>x<size>/apps/mdwf.png`),
+    `build-release.sh` их кладёт. exe-иконка (winres) — отдельно, для проводника/ярлыков.
+    В коде: `gtk4::Window::set_default_icon_name("mdwf")` после gtk/adw init.
+40. **`icon-theme.cache` нужно регенерировать `--force` после добавления иконки.** При
+    копировании темы hicolor из MSYS2 подтягивается её `icon-theme.cache`, в котором
+    НЕТ новой иконки (mdwf) → GTK доверяет кэшу, не сканит директории → `has_icon=false`
+    → брендовая иконка не ставится на окно. `gtk4-update-icon-cache` БЕЗ `--force`
+    тихо пропускает обновление (кэш не меняется) — нужен именно `--force` (или удалить
+    кэш → GTK fallback на скан). Проверено: `--force` → кэш содержит mdwf → has_icon=true.
+    Кэш self-contained (без абсолютных путей) → relocatable, переживает копирование
+    инсталлером. См. `build-release.sh` (шаг иконок hicolor).
 
 
 
@@ -804,6 +829,25 @@ cargo clippy --workspace --tests -- -D warnings
 
 **Структура вкладок GUI (sidebar):** Магазин → Отчёты → Загрузка → Архив →
 Настройки → Планировщик → Журнал → О программе.
+
+**Чат 2026-08-13 (фикс чёрного окна + брендовая иконка запущенного окна) — PROD-качество:**
+Жалоба юзера: «чёрное окно после запуска» + «вижу только дефолтную иконку» + «мне
+нужен прод». Диагностика ОБЪЕКТИВНАЯ (пиксель-анализ скриншота через PowerShell
+`System.Drawing`, т.к. vision-инструмент URL с Windows-путём не парсит):
+- **Чёрное окно**: дев-машина рендерила нормально (NGL работал), баг — на чистой
+  машине. Фикс: `GSK_RENDERER=gl` в `main.rs::setup_bundle_env` (overridable).
+  Проверка: установленное через `setup.exe` приложение — `avg=163.7`, `black_fraction=0%`.
+- **Брендовая иконка**: exe-иконка (winres) была вшита правильно (есть 256×256), но
+  иконка ЗАПУЩЕННОГО окна не выставлялась (`WM_GETICON=0`). Фикс:
+  `gtk4::Window::set_default_icon_name("mdwf")` + ships как файлы в on-disk теме
+  hicolor бандла (`build-release.sh` кладёт `share/icons/hicolor/<size>x<size>/apps/mdwf.png`,
+  регенерит `icon-theme.cache --force`). Проверка: `has_icon(mdwf)=true`, `WM_GETICON≠0`.
+  gresource-путь (`add_resource_path`) на Windows НЕ работает (verified has_icon=false
+  при всех паттернах) — см. уроки #39, #40.
+- **`make-icon.sh`** теперь генерит и disk-PNG (синхрон с `.ico`).
+- **Итог**: установленное через настоящий `setup.exe` приложение рендерится (0%
+  чёрного) и показывает брендовую иконку. Обе претензии закрыты на реальной установке.
+  Уроки #38-40.
 
 **Чат 2026-08-12 (проверка `setup.exe` на чистой Windows) — ВЕРИФИКАЦИЯ ЗАВЕРШЕНА, бандл ГОТОВ:**
 - **Методология**: два тест-скрипта симуляции чистой машины. `scripts/test-clean-env.sh`

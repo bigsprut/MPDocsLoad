@@ -8,6 +8,12 @@
 
   Грузятся через Image::set_from_resource("resource:///org/mdwf/icons/ozon.png").
   Стилизованы (цвет + буква), НЕ точные копии защищённых логотипов.
+
+  ВНИМАНИЕ: иконка ПРИЛОЖЕНИЯ (для запущенного окна/таскбара) сюда НЕ кладётся —
+  GTK4 add_resource_path + hicolor-layout на Windows упорно не подхватывает её
+  (has_icon=false при проверенных паттернах). Вместо этого app-иконка ships как
+  файлы в share/icons/hicolor/<size>/apps/mdwf.png бандла (см. scripts/build-release.sh)
+  — стандартная on-disk тема hicolor отдаёт имя «mdwf», иконка находится (has_icon=true).
 -->
 <gresources>
   <gresource prefix="/org/mdwf/icons">

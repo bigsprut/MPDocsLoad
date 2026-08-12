@@ -59,6 +59,19 @@ impl App {
         // Image::set_from_resource("resource:///org/mdwf/icons/<name>.png") —
         // без регистрации в IconTheme (надёжнее на Windows/MinGW).
 
+        // Брендовая иконка ЗАПУЩЕННОГО окна (titlebar + таскбар). exe-иконку (winres)
+        // видно в проводнике/ярлыках, а у запущенного окна без этого — generic-иконка.
+        // Имя «mdwf» резолвится из on-disk темы hicolor бандла
+        // (share/icons/hicolor/<size>/apps/mdwf.png — кладёт scripts/build-release.sh).
+        // Путь GTK4 add_resource_path + hicolor-layout в gresource на Windows НЕ работает
+        // (has_icon=false при всех проверенных паттернах) — поэтому только disk-hicolor.
+        gtk4::Window::set_default_icon_name("mdwf");
+        // Диагностика: нашлась ли app-иконка в теме (должна — из disk-hicolor бандла).
+        tracing::debug!(
+            has_mdwf = gtk4::IconTheme::default().has_icon("mdwf"),
+            "app icon 'mdwf' in theme"
+        );
+
         let gtk_app = adw::Application::new(Some(APP_ID), gtk4::gio::ApplicationFlags::FLAGS_NONE);
 
         // Конфиг + каталог + secrets.
