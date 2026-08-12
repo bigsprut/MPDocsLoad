@@ -1971,6 +1971,7 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "async-trait",
  "chrono",
  "gio",
  "glib",

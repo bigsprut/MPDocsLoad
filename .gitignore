@@ -26,3 +26,6 @@ Thumbs.db
 
 # AI assistant workspace (планы диалогов и пр. служебные файлы)
 .zcode/
+
+# Release bundle (build-release.sh) — ~100MB, не в git
+dist/

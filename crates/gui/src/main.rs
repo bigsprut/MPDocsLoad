@@ -51,7 +51,46 @@ use tracing_subscriber::EnvFilter;
 
 pub use app::App;
 
+/// Relocatable-бандл: если рядом с exe есть `share/` (релизный дистрибутив),
+/// настраиваем env так, чтобы GTK/libadwaita/gdk-pixbuf нашли иконки, схемы и
+/// лоадеры рядом с приложением. На dev-машине (target/debug) — нет share/, no-op.
+fn setup_bundle_env() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else { return };
+    let share = dir.join("share");
+    if !share.exists() {
+        return; // не бандл — пропускаем (dev-сборка, MSYS2 в PATH)
+    }
+    // XDG_DATA_DIRS → share/ (иконки Adwaita/hicolor + glib-2.0/schemas).
+    // Разделитель на Windows — «;».
+    let prev = std::env::var("XDG_DATA_DIRS").unwrap_or_default();
+    let xdg = if prev.is_empty() {
+        share.display().to_string()
+    } else {
+        format!("{prev};{}", share.display())
+    };
+    std::env::set_var("XDG_DATA_DIRS", xdg);
+    // gdk-pixbuf loaders.cache (если есть — регенерируется инсталлятором/скриптом).
+    let loaders_cache = dir
+        .join("lib")
+        .join("gdk-pixbuf-2.0")
+        .join("2.10.0")
+        .join("loaders.cache");
+    if loaders_cache.exists() {
+        std::env::set_var("GDK_PIXBUF_MODULE_FILE", loaders_cache);
+    }
+    tracing::debug!(exe_dir = %dir.display(), "relocatable bundle env set");
+}
+
 fn main() -> Result<ExitCode> {
+    // Relocatable GTK-бандл: настроить env на соседние share/lib ДО gtk::init,
+    // чтобы иконки (Adwaita), gsettings-схемы и gdk-pixbuf-лоадеры находились
+    // рядом с exe, а не по путям сборки (D:\msys64). На дев-машине (target/debug
+    // без share/) — no-op, остаётся MSYS2 из PATH.
+    setup_bundle_env();
+
     // Логирование (спец. §2.7.1 [logging]).
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,mdwf=debug"));

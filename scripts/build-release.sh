@@ -4,92 +4,117 @@
 # Что делает:
 #   1. Подготавливает окружение (MSYS2/gnu).
 #   2. Собирает GUI и CLI в release-профиле.
-#   3. Копирует GTK-рантайм DLL рядом с .exe (~70 MB bundle).
-#   4. Формирует dist/mdwf/ с готовым к запуску приложением.
+#   3. Копирует GTK-рантайм: ВСЕ DLL-зависимости через `ntldd -R` (рекурсивно,
+#      а не хардкод-список), иконки (Adwaita/hicolor), gsettings-схемы,
+#      gdk-pixbuf-лоадеры + инструменты для их пересборки инсталлятором.
+#   4. Формирует dist/mdwf/ — готовый к запуску relocatable-бандл.
 #
-# Использование:
-#   ./scripts/build-release.sh
+# ВАЖНО: приложение relocatable — main.rs сам настраивает env (XDG_DATA_DIRS,
+# GDK_PIXBUF_MODULE_FILE) на соседние share/lib. Инсталлятор (installer/mdwf.iss)
+# при установке пересобирает loaders.cache и схемы под путь установки.
+#
+# Использование: ./scripts/build-release.sh
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MSYS2_MINGW_BIN="${MSYS2_MINGW_BIN:-D:/msys64/mingw64/bin}"
+MSYS_ROOT="${MSYS2_MINGW_BIN%/bin}"
 DIST="$REPO_ROOT/dist"
 DIST_APP="$DIST/mdwf"
 
-echo "=== [1/5] Подготовка окружения ==="
+echo "=== [1/6] Подготовка окружения ==="
 export PATH="$MSYS2_MINGW_BIN:$PATH"
-export PKG_CONFIG_PATH="${MSYS2_MINGW_BIN%/bin}/lib/pkgconfig"
+export PKG_CONFIG_PATH="$MSYS_ROOT/lib/pkgconfig"
 export RUSTUP_TOOLCHAIN="stable-x86_64-pc-windows-gnu"
 
 pkg-config --modversion gtk4 || { echo "gtk4 не найден через pkg-config"; exit 1; }
+command -v ntldd >/dev/null || { echo "ntldd не найден (нужен для сбора DLL)"; exit 1; }
 
-echo "=== [2/5] Release-сборка GUI и CLI ==="
+echo "=== [2/6] Release-сборка GUI и CLI ==="
 cd "$REPO_ROOT"
 cargo build --release -p mdwf-gui -p mdwf-cli
 
-echo "=== [3/5] Подготовка dist/ ==="
+echo "=== [3/6] Подготовка dist/ ==="
 rm -rf "$DIST"
 mkdir -p "$DIST_APP"
-
 cp "$REPO_ROOT/target/x86_64-pc-windows-gnu/release/mdwf-gui.exe" "$DIST_APP/"
 cp "$REPO_ROOT/target/x86_64-pc-windows-gnu/release/mdwf.exe" "$DIST_APP/"
-cp "$REPO_ROOT/README.md" "$DIST_APP/"
+cp "$REPO_ROOT/README.md" "$DIST_APP/" 2>/dev/null || true
 
-echo "=== [4/5] Копирование GTK-рантайма (DLL, schemas, pixbuf loaders) ==="
-# Минимальный набор DLL для запуска GTK4/libadwaita-приложения.
-# Список может расширяться; используем копирование по маске нужных библиотек.
-GTK_DLLS=(
-    libgtk-4-1.dll
-    libadwaita-1-0.dll
-    libglib-2.0-0.dll
-    libgobject-2.0-0.dll
-    libgio-2.0-0.dll
-    libpango-1.0-0.dll
-    libcairo-2.dll
-    libgdk_pixbuf-2.0-0.dll
-    libharfbuzz-0.dll
-    libgraphene-1.0-0.dll
-    libpangocairo-1.0-0.dll
-    libffi-8.dll
-    libintl-8.dll
-    libpcre2-8-0.dll
-    libpng16-16.dll
-    libfreetype-6.dll
-    libfontconfig-1.dll
-    libepoxy-0.dll
-    libzstd.dll
-    libbz2-1.dll
-    libexpat-1.dll
-    libgcc_s_seh-1.dll
-    libstdc++-6.dll
-    libwinpthread-1.dll
-    libxml2-2.dll
-    zlib1.dll
-)
-
-copied=0
-for dll in "${GTK_DLLS[@]}"; do
-    src="$MSYS2_MINGW_BIN/$dll"
-    if [[ -f "$src" ]]; then
-        cp "$src" "$DIST_APP/"
-        copied=$((copied + 1))
+echo "=== [4/6] Сбор DLL-зависимостей (ntldd -R, рекурсивно) ==="
+# Собираем ВСЕ транзитивные зависимости обоих exe, фильтруем до mingw (отсекаем
+# системные kernel32 и т.п.), копируем рядом с exe. Заменяет хардкод-список DLL.
+{
+    ntldd -R "$DIST_APP/mdwf-gui.exe" 2>/dev/null
+    ntldd -R "$DIST_APP/mdwf.exe" 2>/dev/null
+} | grep -i mingw \
+  | sed -E 's|.*=>[[:space:]]*||; s|[[:space:]]*\(.*||' \
+  | sort -u > "$DIST/_deps.txt"
+dll_count=0
+while IFS= read -r dll; do
+    if [[ -f "$dll" ]]; then
+        cp -n "$dll" "$DIST_APP/" && dll_count=$((dll_count + 1))
     fi
-done
-echo "  скопировано DLL: $copied"
+done < "$DIST/_deps.txt"
+rm -f "$DIST/_deps.txt"
+echo "  скопировано DLL: $dll_count"
 
-# GTK schemas + gdk-pixbuf loaders (для корректного рендеринга).
+echo "=== [5/6] Иконки (Adwaita/hicolor), gsettings-схемы, gdk-pixbuf-лоадеры ==="
+# Иконки стандартной темы (стрелки/контролы libadwaita).
+mkdir -p "$DIST_APP/share/icons"
+cp -r "$MSYS_ROOT/share/icons/Adwaita" "$DIST_APP/share/icons/" 2>/dev/null \
+    || echo "  WARN: Adwaita не найден"
+cp -r "$MSYS_ROOT/share/icons/hicolor" "$DIST_APP/share/icons/" 2>/dev/null || true
+
+# gsettings-схемы (GTK/libadwaita настройки). Компилируем в бандл.
 mkdir -p "$DIST_APP/share/glib-2.0/schemas"
-cp -r "$MSYS2_MINGW_BIN/../share/glib-2.0/schemas/." "$DIST_APP/share/glib-2.0/schemas/" 2>/dev/null || true
-mkdir -p "$DIST_APP/lib/gdk-pixbuf-2.0"
-cp -r "$MSYS2_MINGW_BIN/../lib/gdk-pixbuf-2.0/." "$DIST_APP/lib/gdk-pixbuf-2.0/" 2>/dev/null || true
-
-# Компилируем схемы в bundle.
+cp "$MSYS_ROOT/share/glib-2.0/schemas/"*.xml "$DIST_APP/share/glib-2.0/schemas/" 2>/dev/null || true
 glib-compile-schemas "$DIST_APP/share/glib-2.0/schemas/" 2>/dev/null || true
 
-echo "=== [5/5] Готово ==="
+# gdk-pixbuf-лоадеры (PNG/JPEG/SVG/… для рендера изображений) + cache.
+# Лоадеры лежат в поддиректории loaders/ (не в самом 2.10.0/). Cache генерируется
+# под пути бандла; инсталлятор (postinstall.bat) пересоберёт под {app}.
+mkdir -p "$DIST_APP/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+cp "$MSYS_ROOT/lib/gdk-pixbuf-2.0/2.10.0/loaders/"*.dll \
+    "$DIST_APP/lib/gdk-pixbuf-2.0/2.10.0/loaders/" 2>/dev/null || true
+gdk-pixbuf-query-loaders "$DIST_APP/lib/gdk-pixbuf-2.0/2.10.0/loaders/"*.dll \
+    > "$DIST_APP/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" 2>/dev/null || true
+
+# Инструменты для пересборки loaders.cache/схем при установке (Inno [Run]).
+cp "$MSYS2_MINGW_BIN/gdk-pixbuf-query-loaders.exe" "$DIST_APP/" 2>/dev/null || true
+cp "$MSYS2_MINGW_BIN/glib-compile-schemas.exe" "$DIST_APP/" 2>/dev/null || true
+
+# postinstall.bat: пересобирает loaders.cache и gsettings-схемы под АБСОЛЮТНЫЙ
+# путь установки (%~dp0 = каталог этого .bat = {app}). Бандл relocatable, поэтому
+# пути из build-time кэша (dist/) на прод-машине нерелевантны — пересобираем.
+# Запускается инсталлятором (Inno [Run]) молча после копирования файлов.
+cat > "$DIST_APP/postinstall.bat" <<'BAT'
+@echo off
+setlocal
+set "APPDIR=%~dp0"
+set "LDIR=%APPDIR%lib\gdk-pixbuf-2.0\2.10.0"
+set "SDIR=%APPDIR%share\glib-2.0\schemas"
+rem Сбор абсолютных путей лоадеров (cmd не раскрывает glob в аргументах exe).
+rem Лоадеры в поддиректории loaders/.
+set "ARGS="
+for %%f in ("%LDIR%\loaders\*.dll") do call set "ARGS=%%ARGS%% "%%f""
+if exist "%APPDIR%gdk-pixbuf-query-loaders.exe" (
+    "%APPDIR%gdk-pixbuf-query-loaders.exe" %ARGS% > "%LDIR%\loaders.cache"
+)
+if exist "%APPDIR%glib-compile-schemas.exe" (
+    "%APPDIR%glib-compile-schemas.exe" "%SDIR%"
+)
+endlocal
+BAT
+unix2dos "$DIST_APP/postinstall.bat" 2>/dev/null || sed -i 's/$/\r/' "$DIST_APP/postinstall.bat"
+
+echo "=== [6/6] Готово ==="
+echo "Размер бандла:"
 du -sh "$DIST_APP" 2>/dev/null || true
+echo "exe:"
 ls "$DIST_APP"/*.exe
 echo ""
 echo "Распространяемая папка: $DIST_APP"
-echo "Запуск: $DIST_APP/mdwf-gui.exe"
+echo "Запуск:                 $DIST_APP/mdwf-gui.exe"
+echo "Инсталлятор:            iscc installer/mdwf.iss  (нужен Inno Setup)"
