@@ -260,12 +260,12 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
 - **+ `warehouse_stock`**: авто-fill ID складов через `/v2/warehouse/list` (fetch_warehouse_ids)
   если `--warehouse-ids` не передан; если FBS-складов нет — понятная ошибка.
 
-**Результат живого прогона после фиксов (16 OK из 21):**
-- ✅ OK (16): realization, realization_posting, buyout, balance, cash_flow,
+**Результат живого прогона после фиксов (18 OK из 21):**
+- ✅ OK (18): realization, realization_posting, buyout, balance, cash_flow,
   accrual_by_day, compensation, decompensation, mutual_settlement, products,
   discounted, placement_by_products, placement_by_supplies, marked_products_sales,
-  analytics_turnover, analytics_stocks (**auto-fill SKU через `/v3/product/list`** —
-  работает и в CLI, и в GUI без ручного ввода; см. «auto-fill SKU» ниже).
+  analytics_turnover, analytics_stocks (auto-fill SKU), **returns** (полный /v1/returns/list),
+  **accrual_postings** (auto-fill posting_numbers).
 - ⚠️ warehouse_stock — `/v2/warehouse/list` вернул `warehouses:[]` → у продавца нет
   FBS/rFBS-складов (FBO-схема); отчёт неприменим.
 - ✅ accrual_postings — **auto-fill** (коммит 881f71a): если `posting_numbers` не
@@ -651,6 +651,21 @@ thread_local! {
     (синхронно, без API), combo по паттерну label→value (видим имя, фильтр по type_id).
     Урок: всё, что видит пользователь — человекочитаемые имена; type_id только
     внутри (БД/API), с tooltip для точной идентификации при необходимости.
+33. **Иконка exe: PNG-in-ICO + winres, без ImageMagick.** В MSYS2-окружении НЕТ
+    ImageMagick (`convert` — это Windows-утилита FAT→NTFS!), Pillow, icotool. ICO
+    собирается вручную (заголовок 6 байт + директория 16 байт/изображение + PNG-блобы;
+    PNG-in-ICO работает на Win10/11). Затем `winres` (build-dep) встраивает `.ico` в exe
+    через `windres` (должен быть в PATH → `scripts/env.sh`). Проверка —
+    `ExtractAssociatedIcon`. Урок: не рассчитывать на `convert`/`magick` в MSYS2.
+34. **Relocatable GTK-бандл на Windows.** Бандл должен сам находить свои ресурсы:
+    `main.rs::setup_bundle_env` ДО `gtk::init` ставит `XDG_DATA_DIRS` (→ share/icons
+    Adwaita + glib-2.0/schemas) и `GDK_PIXBUF_MODULE_FILE` (→ lib/gdk-pixbuf/.../
+    loaders.cache) на соседние с exe папки — иначе на чистой машине битые иконки/схемы.
+    DLL — `ntldd -R` (рекурсивно, отсечь системные), НЕ хардкод-список. gdk-pixbuf
+    loaders лежат в `lib/gdk-pixbuf-2.0/2.10.0/loaders/` (поддиректория!), cache —
+    уровнем выше; пересобирается инсталлером (postinstall.bat) под путь установки
+    (relocatable — gdk-pixbuf вычисляет prefix по расположению cache). Урок: GTK на
+    Windows relocatable только через env-сетап в main.rs + правильную структуру share/lib.
 
 
 
@@ -705,9 +720,9 @@ cargo clippy --workspace --tests -- -D warnings
 - **4 доп. фичи**: persist фильтров Архива, CLI `archive list`, удаление записи+файла,
   индекс `idx_downloads_filter`.
 - **Большой аудит Ozon API** (живой прогон): фикс A/B/C + marked + warehouse auto-fill.
-  С 19 FAIL до 16 OK из 21 отчёта.
+  С 19 FAIL до 18 OK из 21 отчёта.
 
-Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `98e49fc`.
+Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `7b009a0`.
 
 **Чат 2026-08-12 (GUI-проверка фиксов Ozon + auto-fill SKU):**
 - **Аудит code-path GUI vs CLI**: все 5 фиксов (A/B/C/marked/warehouse) в shared-коде
@@ -749,18 +764,34 @@ cargo clippy --workspace --tests -- -D warnings
   bump `next_run_at`; кто первый забрал, тот выполняет. `run_due_schedules` теперь due-check
   (раньше гонял все включённые). Фикс `max_parallel_jobs` (RunningGuard). `wintasks.rs`
   (schtasks.exe, disable через Query pre-check — cp866-вывод не парсится).
-- **Клик-тест GUI**: пользователь прогоняет 15 отчётов через GUI вручную (инструкции
-  выданы). Результаты ожидаются.
+- **Клик-тест GUI**: пользователь проверял отчёты вручную (returns, open_folder и др.).
+  Полный sweep 15 отчётов формально не завершён, но ключевые рабочие.
+- **Фикс «Открыть папку» (2 проводника)** (коммит `f5cb652`): LinkButton дублировал
+  открытие (URI + clicked) → заменён на Button; `open_folder` через `cmd /c start`
+  вместо прямого `explorer` (квирк 2 окон).
+- **Дистрибуция: полный relocatable-бандл + Inno Setup** (коммиты `98e49fc`, `6dee243`,
+  `a3de175`, `4d71e0a`, `88cb934`, `7b009a0`): см. секцию 13. Бандл 99 МБ (77 DLL через
+  `ntldd -R`, иконки Adwaita/hicolor, схемы, gdk-pixbuf-лоадеры), relocatable
+  (`main.rs::setup_bundle_env`). `installer/mdwf.iss` → `setup.exe`. Одна команда:
+  `build-setup.cmd` (двойной клик, сам ищет bash+ISCC) или `bash scripts/build-setup.sh`.
+  **Inno Setup 7.1.0 установлен per-user** на этой dev-машине
+  (`%LOCALAPPDATA%\Programs\Inno Setup 7\ISCC.exe`) — iscc доступен.
+- **Иконка приложения** (коммит `7b009a0`): SVG (градиент Ozon→WB + знак download) →
+  `app-icon.ico` (7 размеров, PNG-in-ICO, ручная сборка — нет ImageMagick/Pillow/icotool,
+  `convert` это Windows-утилита). `build.rs` через `winres` встраивает в `mdwf-gui.exe`.
 
-**Структура вкладок GUI (sidebar):** Магазин → Отчёты → Загрузка → **Архив** →
+**Структура вкладок GUI (sidebar):** Магазин → Отчёты → Загрузка → Архив →
 Настройки → Планировщик → Журнал → О программе.
 
 **Что уже проверено живым прогоном (Ozon, oz_prof1):**
-- ✅ 16 из 21 отчётов Ozon скачиваются корректно (см. секцию «Аудит Ozon API» выше).
+- ✅ **18 из 21** отчётов Ozon скачиваются корректно простым `--period` (без ручных
+  параметров): все auto-fill'ы (`analytics_stocks` SKU, `warehouse_stock` склады,
+  `accrual_postings` отправления) делают GUI-нерабочие ранее отчёты доступными.
 - ⚠️ `warehouse_stock` — у аккаунта нет FBS-складов (FBO-схема), отчёт неприменим.
-- ⚠️ `accrual_postings` — нужен `--posting-numbers` (флаг добавлен, нужны ID заказов).
-- ✅ `returns` — полный отчёт (84c7e51): `/v1/returns/list`, все статусы + FBO/FBS.
-- ❌ `b2b_sales`/`postings` — серверные ошибки Ozon (НЕ наш баг, стабильно).
+- ✅ `returns` — полный отчёт (`/v1/returns/list`, все статусы + FBO/FBS).
+- ✅ `accrual_postings` — auto-fill posting_numbers (`/v2/posting/fbo/list`), 665→2300 строк.
+- ❌ `b2b_sales`/`postings` — перепроверены, честно НЕ наш баг (нет B2B-документа /
+  Ozon-side генерация падает).
 
 **Живые API-тесты теперь РАЗРЕШЕНЫ пользователем** (раньше — под запретом).
 Профили `oz_prof1` (Ozon) и `wb_prof` (WB) созданы, ключи валидны (health_check OK).
