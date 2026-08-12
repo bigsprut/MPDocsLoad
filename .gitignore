@@ -29,3 +29,6 @@ Thumbs.db
 
 # Release bundle (build-release.sh) — ~100MB, не в git
 dist/
+
+# Inno Setup build output (setup.exe — бинарный артефакт)
+installer/Output/
