@@ -268,7 +268,10 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
   работает и в CLI, и в GUI без ручного ввода; см. «auto-fill SKU» ниже).
 - ⚠️ warehouse_stock — `/v2/warehouse/list` вернул `warehouses:[]` → у продавца нет
   FBS/rFBS-складов (FBO-схема); отчёт неприменим.
-- ⚠️ accrual_postings — нужен `--posting-numbers` (флаг добавлен; нужны ID отправлений).
+- ✅ accrual_postings — **auto-fill** (коммит 881f71a): если `posting_numbers` не
+  переданы — `fetch_posting_numbers` через `/v2/posting/fbo/list` (номера отправлений
+  за период), батчинг ≤200. Живой прогон: 665 отправлений → xlsx 2300 строк начислений.
+  FBO-only (для FBS нужен /v3/posting/fbs/list). Был ⚠️ «нужен --posting-numbers».
 - ✅ returns — **полный отчёт** (коммит 84c7e51): переведён с `/v2/report/returns/create`
   (требовал обязательный `filter.status`, одно значение из 35) на `/v1/returns/list` (JSON).
   Намеренно НЕ шлёт filter.status/return_schema → **все возвраты: все статусы, FBO+FBS**.
@@ -692,7 +695,7 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **Большой аудит Ozon API** (живой прогон): фикс A/B/C + marked + warehouse auto-fill.
   С 19 FAIL до 16 OK из 21 отчёта.
 
-Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `c65e9a5`.
+Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `881f71a`.
 
 **Чат 2026-08-12 (GUI-проверка фиксов Ozon + auto-fill SKU):**
 - **Аудит code-path GUI vs CLI**: все 5 фиксов (A/B/C/marked/warehouse) в shared-коде
@@ -719,6 +722,9 @@ cargo build --release -p mdwf-gui -p mdwf-cli
   не серверный баг). Сначала фикс через `--return-status` (один статус), затем переведён
   на `/v1/returns/list` — полный отчёт: все статусы + FBO/FBS одним xlsx (420 строк).
   Урок #31 (проверять changelog).
+- **accrual_postings auto-fill** (коммит `881f71a`): `fetch_posting_numbers` через
+  `/v2/posting/fbo/list` + `PaginationKind::AccrualPostings` (батчинг ≤200). Живой прогон:
+  665 отправлений → 2300 строк начислений. Теперь работает без `--posting-numbers`.
 - **Клик-тест GUI**: пользователь прогоняет 15 отчётов через GUI вручную (инструкции
   выданы). Результаты ожидаются.
 
@@ -736,13 +742,12 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 Профили `oz_prof1` (Ozon) и `wb_prof` (WB) созданы, ключи валидны (health_check OK).
 
 **Возможные дальнейшие задачи (на усмотрение пользователя):**
-1. **accrual_postings** — авто-fill номеров отправлений через `/v3/posting/fbs/list`
-   (по аналогии с warehouse/skus auto-fill — прецедент уже есть в `fetch_skus`/
-   `fetch_warehouse_ids`). Пока `--posting-numbers` только CLI.
-2. **Серверные ошибки Ozon** (b2b_sales/returns/postings) — попробовать другой период,
-   или уточнить через поддержку Ozon.
-3. **Аудит WB API** (по аналогии с Ozon) — живой прогон всех 13 отчётов WB, сверка с
-   dev.wildberries.ru / eslazarev/wildberries-sdk.
+1. **Аудит WB API** (по аналогии с Ozon) — живой прогон всех 13 отчётов WB, сверка с
+   dev.wildberries.ru / eslazarev/wildberries-sdk. Главный неисследованный фронт.
+2. **Серверные ошибки Ozon** (postings — Ozon-side генерация; b2b_sales — неприменим,
+   нет B2B-документа). Перепроверены этим чатом — честно не наш баг.
+3. **FBS-поддержка для auto-fill**: accrual_postings сейчас FBO-only
+   (`/v2/posting/fbo/list`). Для FBS-аккаунтов добавить `/v3/posting/fbs/list`.
 4. **Доработки из известных проблем** (секция 11): async-отчёты WB (acceptance_report),
    max_parallel_jobs планировщика, и др.
 5. **Журнал (logs.rs)** — сейчас заглушка, не логирует. Можно наполнять событиями
