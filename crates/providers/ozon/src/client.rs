@@ -382,6 +382,62 @@ impl OzonHttpClient {
         }
         Ok(ids)
     }
+
+    /// Получает список SKU всех товаров продавца через /v3/product/list
+    /// (пагинация по cursor last_id). Используется для ozon.analytics_stocks,
+    /// когда SKU не переданы явно (auto-fill). Дока: POST /v3/product/list
+    /// `{limit<=1000, last_id?, filter:{visibility:"ALL"}}` →
+    /// `{result:{items:[{product_id, offer_id, sku, ...}], total, last_id}}`.
+    ///
+    /// Возвращает **числовые SKU Ozon** (int64, поле `sku`) как строки — именно
+    /// их ждёт `/v1/analytics/stocks` в параметре `skus` (НЕ offer_id-артикул
+    /// продавца). Защита от бесконечного цикла: ~200 страниц (~200k товаров).
+    pub async fn fetch_skus(
+        &self,
+        auth: &dyn Authenticator,
+    ) -> CoreResult<Vec<String>> {
+        let url = format!("{}/v3/product/list", self.base_url);
+        let mut skus = Vec::new();
+        let mut last_id = String::new();
+        let mut iter = 0u32;
+        loop {
+            let body = json!({
+                "limit": 1000,
+                "last_id": last_id,
+                "filter": { "visibility": "ALL" }
+            });
+            let resp = self.post_url(&url, &body, auth).await?;
+            let result = resp.get("result").cloned().unwrap_or(json!({}));
+            if let Some(items) = result.get("items").and_then(serde_json::Value::as_array) {
+                for item in items {
+                    // sku — int64 (Ozon internal numeric SKU). На случай если сервер
+                    // отдаёт строкой — пробуем и as_i64, и as_str.
+                    if let Some(sku) = item.get("sku").and_then(serde_json::Value::as_i64) {
+                        skus.push(sku.to_string());
+                    } else if let Some(sku) =
+                        item.get("sku").and_then(serde_json::Value::as_str)
+                    {
+                        skus.push(sku.to_string());
+                    }
+                }
+            }
+            let next_last_id = result
+                .get("last_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            // Выход: пустой/неизменный last_id (конец списка) либо лимит итераций.
+            if next_last_id.is_empty() || next_last_id == last_id {
+                break;
+            }
+            last_id = next_last_id;
+            iter += 1;
+            if iter >= 200 {
+                break;
+            }
+        }
+        Ok(skus)
+    }
 }
 
 /// Извлекает задержку из ответа Ozon 429. Ozon использует несколько заголовков:

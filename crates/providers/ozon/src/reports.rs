@@ -394,8 +394,9 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             ReportCategory::Finance,
             client,
             "/v1/analytics/stocks",
-            // Нет серверной пагинации — один батч ≤100 SKU. Ответ: {items:[...]}.
-            PaginationKind::Single { array_field: "items" },
+            // skus[] обязательны, ≤100 за запрос. Если не переданы — auto-fill
+            // через /v3/product/list, затем батчинг. Ответ: {items:[...]}.
+            PaginationKind::Skus,
         )),
         "ozon.analytics_turnover" => Arc::new(OzonPaginatedReport::new(
             "ozon.analytics_turnover",
@@ -968,10 +969,15 @@ enum PaginationKind {
     /// пока accruals непустой И last_id меняется.
     LastId,
     /// Один запрос без пагинации. `array_field` — путь к массиву в ответе
-    /// (напр. `posting_accruals` для accrual/postings, `items` для analytics/stocks).
+    /// (напр. `posting_accruals` для accrual/postings).
     /// Результат — массив из одного ответа. Используется для эндпоинтов, где
-    /// серверная пагинация отсутствует (батч ≤N SKU на стороне клиента).
+    /// серверная пагинация отсутствует.
     Single { array_field: &'static str },
+    /// /v1/analytics/stocks: `{items:[...]}`. Запрос `{skus:[...]}` ≤100 за раз.
+    /// Если SKU не переданы — auto-fill через /v3/product/list (все товары
+    /// продавца), затем батчинг ≤100 SKU на запрос. Результат агрегируется из
+    /// всех батчей.
+    Skus,
 }
 
 /// Максимальное число страниц/итераций sweep (защита от бесконечного цикла).
@@ -1131,6 +1137,82 @@ impl Report for OzonPaginatedReport {
                 if let Some(rows) = resp.get(array_field).and_then(|v| v.as_array()) {
                     if let Some(arr) = collected.as_array_mut() {
                         arr.extend(rows.iter().cloned());
+                    }
+                }
+            }
+            PaginationKind::Skus => {
+                // /v1/analytics/stocks: skus[] обязательны и ≤100 за запрос.
+                // Если SKU не переданы явно (GUI / CLI без --skus) — auto-fill
+                // через /v3/product/list (все товары продавца). Затем батчинг ≤100.
+                const STOCKS_BATCH_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+                let skus: Vec<String> = match params.get("skus") {
+                    Some(csv) if !csv.is_empty() => csv
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect(),
+                    _ => match self.client.fetch_skus(auth).await {
+                        Ok(v) if !v.is_empty() => {
+                            tracing::info!(
+                                type_id = %self.type_id,
+                                count = v.len(),
+                                "skus auto-filled из /v3/product/list"
+                            );
+                            v
+                        }
+                        Ok(_) => {
+                            // Товаров нет — отчёт «Аналитика по остаткам» нечего
+                            // строить. Понятная ошибка вместо 4xx «at least 1 item».
+                            return Err(CoreError::Internal(
+                                "у продавца нет товаров ( /v3/product/list вернул пустой список) \
+                                 — отчёт «Аналитика по остаткам» нечего строить."
+                                    .into(),
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(CoreError::Internal(format!(
+                                "не удалось получить список SKU через /v3/product/list: {e}"
+                            )));
+                        }
+                    },
+                };
+                // Батчинг ≤100 SKU на запрос (лимит /v1/analytics/stocks). Между
+                // батчами — пауза STOCKS_BATCH_DELAY: метод имеет жёсткий per-second
+                // rate limit, и без pacing каталог в ~2840 SKU (29 батчей)
+                // триггерит 429 «You have reached request rate limit per second».
+                for (i, chunk) in skus.chunks(100).enumerate() {
+                    if i > 0 {
+                        tokio::time::sleep(STOCKS_BATCH_DELAY).await;
+                    }
+                    let mut body = build_download_body(&self.type_id, params);
+                    body["skus"] = json!(chunk.to_vec());
+                    // Batch-level retry: per-request retry в клиенте (3 попытки)
+                    // иногда не хватает — throttle снимается дольше. Без этой
+                    // страховки один 429 убивает всю выгрузку из N батчей.
+                    let resp = {
+                        let mut batch_attempts = 0u32;
+                        loop {
+                            match self.client.post(self.endpoint, &body, auth).await {
+                                Ok(r) => break r,
+                                Err(e) if e.is_rate_limited() && batch_attempts < 5 => {
+                                    batch_attempts += 1;
+                                    tracing::warn!(
+                                        error = %e,
+                                        batch = i,
+                                        attempt = batch_attempts,
+                                        "rate-limit на батче analytics_stocks, пауза 10с"
+                                    );
+                                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        }
+                    };
+                    if let Some(rows) = resp.get("items").and_then(|v| v.as_array()) {
+                        if let Some(arr) = collected.as_array_mut() {
+                            arr.extend(rows.iter().cloned());
+                        }
                     }
                 }
             }
