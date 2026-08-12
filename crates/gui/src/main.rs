@@ -6,6 +6,11 @@
 //! состояние и отправляют команды в доменный слой. Асинхронные задачи tokio
 //! communiцируют с GTK через `glib::MainContext`.
 
+// GUI-subsystem: НЕ аллоцировать консольное окно при запуске (иначе рядом с GUI
+// появляется чёрное окно терминала). Только для GUI-бинаря; CLI (mdwf.exe)
+// остаётся console-subsystem — ему терминал нужен. На non-Windows — no-op.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::doc_markdown)]
