@@ -127,8 +127,30 @@ impl App {
             let guard = app.domain.runtime.read();
             guard.as_ref().expect("runtime initialized").handle().clone()
         };
+        let sched_domain = app.domain.clone();
+        let sched_fwd = event_forwarder.clone();
         handle.spawn(async move {
             run_command_loop(cmd_rx, domain, event_forwarder).await;
+        });
+
+        // Фоновый планировщик: автозагрузка по cron, пока GUI открыт.
+        handle.spawn(async move {
+            let cfg = sched_domain.config.read().clone();
+            if !cfg.raw.scheduler.enabled_on_start {
+                tracing::info!("scheduler: enabled_on_start=false — фоновый цикл не запущен");
+                return;
+            }
+            let catalog = match sched_domain.catalog.read().clone() {
+                Some(c) => c,
+                None => return,
+            };
+            let executor = Arc::new(GuiJobExecutor {
+                domain: sched_domain.clone(),
+                fwd: sched_fwd,
+            }) as Arc<dyn mdwf_scheduler::JobExecutor>;
+            let max_parallel = cfg.raw.scheduler.max_parallel_jobs;
+            let runner = Arc::new(mdwf_scheduler::Runner::new(catalog, executor, max_parallel));
+            runner.run_loop(std::time::Duration::from_secs(60)).await;
         });
 
         let cs = app.command_sender.clone();
@@ -480,6 +502,107 @@ async fn run_command_loop(
                     None => fwd.forward(UiEvent::DownloadDeleted(Err(
                         "каталог недоступен".to_string(),
                     ))),
+                }
+            }
+            // ===== Планировщик =====
+            UiCommand::ListSchedules => {
+                fwd.forward(UiEvent::SchedulesListed(list_schedule_views(&domain)));
+            }
+            UiCommand::AddSchedule {
+                name,
+                profile_name,
+                report_type,
+                cron_expr,
+                period_offset,
+            } => {
+                let outcome: Result<(), String> = (|| {
+                    let cat = domain.catalog.read();
+                    let cat = cat.as_ref().ok_or("каталог недоступен")?;
+                    let next = mdwf_scheduler::next_run(&cron_expr, chrono::Utc::now())
+                        .map_err(|_| "неверное cron-выражение".to_string())?;
+                    let profile = cat
+                        .get_profile_by_name(&profile_name)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("профиль «{profile_name}» не найден"))?;
+                    let profile_id = profile.id.ok_or("профиль без id")?;
+                    let new = mdwf_storage::NewSchedule {
+                        id: None,
+                        name: name.clone(),
+                        profile_id,
+                        reports: vec![report_type.clone()],
+                        cron_expr: cron_expr.clone(),
+                        period_offset,
+                        params: None,
+                        enabled: true,
+                        next_run_at_ts: Some(next.to_rfc3339()),
+                    };
+                    cat.upsert_schedule(&new).map_err(|e| e.to_string())?;
+                    Ok(())
+                })();
+                match outcome {
+                    Ok(()) => log_event(
+                        &fwd,
+                        crate::channels::LogKind::Success,
+                        format!("Расписание «{name}» добавлено"),
+                    ),
+                    Err(e) => log_event(
+                        &fwd,
+                        crate::channels::LogKind::Error,
+                        format!("Не удалось добавить расписание: {e}"),
+                    ),
+                }
+                fwd.forward(UiEvent::SchedulesListed(list_schedule_views(&domain)));
+            }
+            UiCommand::DeleteSchedule { name } => {
+                {
+                    let cat = domain.catalog.read();
+                    if let Some(cat) = cat.as_ref() {
+                        let _ = cat.delete_schedule(&name);
+                    }
+                }
+                log_event(
+                    &fwd,
+                    crate::channels::LogKind::Info,
+                    format!("Расписание «{name}» удалено"),
+                );
+                fwd.forward(UiEvent::SchedulesListed(list_schedule_views(&domain)));
+            }
+            UiCommand::SetScheduleEnabled { name, enabled } => {
+                {
+                    let cat = domain.catalog.read();
+                    if let Some(cat) = cat.as_ref() {
+                        let _ = cat.set_schedule_enabled(&name, enabled);
+                    }
+                }
+                fwd.forward(UiEvent::SchedulesListed(list_schedule_views(&domain)));
+            }
+            UiCommand::RunScheduleNow { name } => {
+                // Выгрузка асинхронная (может занять время) — в отдельной задаче.
+                let domain = domain.clone();
+                let fwd = fwd.clone();
+                tokio::spawn(async move {
+                    run_schedule_by_name(domain, fwd, name).await;
+                });
+            }
+            UiCommand::SetAutostart { enabled } => {
+                let outcome = if enabled {
+                    mdwf_scheduler::enable_autostart()
+                } else {
+                    mdwf_scheduler::disable_autostart()
+                };
+                match outcome {
+                    Ok(()) => {
+                        log_event(
+                            &fwd,
+                            crate::channels::LogKind::Info,
+                            format!(
+                                "Автозапуск с ОС: {}",
+                                if enabled { "включён" } else { "выключен" }
+                            ),
+                        );
+                        fwd.forward(UiEvent::AutostartChanged(Ok(enabled)));
+                    }
+                    Err(e) => fwd.forward(UiEvent::AutostartChanged(Err(e.to_string()))),
                 }
             }
         }
@@ -856,6 +979,185 @@ fn log_event(
         kind,
         message: message.into(),
     }));
+}
+
+/// Период (YYYY-MM) для запуска расписания: текущий месяц + offset.
+/// offset = 0 → текущий месяц, -1 → прошлый (для отчётов за прошедший месяц).
+fn format_period_offset(offset: i32) -> String {
+    let now = chrono::Local::now();
+    let date = if offset >= 0 {
+        now.checked_add_months(chrono::Months::new(offset as u32))
+    } else {
+        now.checked_sub_months(chrono::Months::new((-offset) as u32))
+    }
+    .unwrap_or(now);
+    date.format("%Y-%m").to_string()
+}
+
+/// Список расписаний с человекочитаемыми именами (профиль, отчёты) для UI.
+fn list_schedule_views(domain: &Domain) -> Result<Vec<crate::channels::ScheduleView>, String> {
+    let cat = domain.catalog.read();
+    let cat = cat.as_ref().ok_or("каталог недоступен")?;
+    let schedules = cat.list_schedules().map_err(|e| e.to_string())?;
+    let profiles: std::collections::HashMap<i64, String> = cat
+        .list_profiles()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter_map(|p| p.id.map(|id| (id, p.name)))
+        .collect();
+    let report_map = report_display_name_map(domain);
+    Ok(schedules
+        .into_iter()
+        .map(|s| {
+            let profile_name = profiles
+                .get(&s.profile_id)
+                .cloned()
+                .unwrap_or_else(|| format!("#{}", s.profile_id));
+            let report_names: Vec<String> = s
+                .reports
+                .iter()
+                .map(|r| report_map.get(r).cloned().unwrap_or_else(|| r.clone()))
+                .collect();
+            crate::channels::ScheduleView {
+                id: s.id,
+                name: s.name,
+                profile_id: s.profile_id,
+                profile_name,
+                reports: s.reports,
+                report_names,
+                cron_expr: s.cron_expr,
+                period_offset: s.period_offset,
+                enabled: s.enabled,
+                next_run_at: s.next_run_at,
+                last_run_at: s.last_run_at,
+                last_run_status: s.last_run_status,
+            }
+        })
+        .collect())
+}
+
+/// Исполнитель задач расписания для GUI: выгрузку делает через do_download
+/// (переиспользуем — он персистит файлы + пишет в каталог + логирует в Журнал).
+struct GuiJobExecutor {
+    domain: Arc<Domain>,
+    fwd: EventForwarder,
+}
+
+#[async_trait::async_trait]
+impl mdwf_scheduler::JobExecutor for GuiJobExecutor {
+    async fn execute(
+        &self,
+        req: mdwf_scheduler::JobRequest,
+    ) -> mdwf_core::CoreResult<mdwf_scheduler::JobResult> {
+        use mdwf_scheduler::{JobResult, RunStatus};
+        // Резолвим profile_id → profile (name + provider_id).
+        let (profile_name, provider_id) = {
+            let cat = self.domain.catalog.read();
+            let cat = cat.as_ref().ok_or_else(|| {
+                mdwf_core::CoreError::Internal("каталог недоступен".into())
+            })?;
+            let p = cat
+                .list_profiles()?
+                .into_iter()
+                .find(|p| p.id == Some(req.profile_id))
+                .ok_or_else(|| {
+                    mdwf_core::CoreError::Internal(format!("профиль {} не найден", req.profile_id))
+                })?;
+            (p.name, p.provider_id)
+        };
+        let period = format_period_offset(req.period_offset);
+        let mut total = 0usize;
+        let mut failed = 0usize;
+        for report_type in &req.reports {
+            let params = mdwf_core::ReportParams {
+                period: Some(period.clone()),
+                ..Default::default()
+            };
+            match do_download(
+                &self.domain,
+                &provider_id,
+                &profile_name,
+                report_type,
+                Vec::new(),
+                params,
+                CancellationToken::new(),
+                &self.fwd,
+            )
+            .await
+            {
+                Ok(r) => total += r.files.len(),
+                Err(_) => failed += 1,
+            }
+        }
+        let status = if failed == 0 {
+            RunStatus::Ok
+        } else if total > 0 {
+            RunStatus::Partial
+        } else {
+            RunStatus::Failed
+        };
+        let kind = if failed == 0 {
+            crate::channels::LogKind::Success
+        } else {
+            crate::channels::LogKind::Error
+        };
+        let detail = if failed > 0 {
+            format!(", ошибок: {failed}")
+        } else {
+            String::new()
+        };
+        log_event(
+            &self.fwd,
+            kind,
+            format!("Расписание «{}»: {} файл(ов){detail}", req.schedule_name, total),
+        );
+        Ok(JobResult {
+            files_count: total,
+            status,
+            error: None,
+        })
+    }
+}
+
+/// Запускает одно расписание по имени (ручной «Выполнить сейчас»): исполняет,
+/// обновляет last_run/next_run, логирует, перезагружает список в UI.
+async fn run_schedule_by_name(domain: Arc<Domain>, fwd: EventForwarder, name: String) {
+    let schedule = {
+        let cat = domain.catalog.read();
+        match cat.as_ref().and_then(|c| c.get_schedule(&name).ok().flatten()) {
+            Some(s) => s,
+            None => {
+                log_event(&fwd, crate::channels::LogKind::Error, format!("Расписание «{name}» не найдено"));
+                return;
+            }
+        }
+    };
+    let executor = GuiJobExecutor {
+        domain: domain.clone(),
+        fwd: fwd.clone(),
+    };
+    let req = mdwf_scheduler::JobRequest {
+        schedule_id: schedule.id,
+        schedule_name: schedule.name.clone(),
+        profile_id: schedule.profile_id,
+        reports: schedule.reports.clone(),
+        period_offset: schedule.period_offset,
+    };
+    let status = match mdwf_scheduler::JobExecutor::execute(&executor, req).await {
+        Ok(r) => r.status,
+        Err(_) => mdwf_scheduler::RunStatus::Failed,
+    };
+    // Обновим last_run/next_run в каталоге.
+    if let Some(cat) = domain.catalog.read().as_ref() {
+        let next = mdwf_scheduler::next_run(&schedule.cron_expr, chrono::Utc::now()).ok();
+        let _ = cat.update_schedule_run(
+            schedule.id,
+            Some(chrono::Utc::now().to_rfc3339()),
+            status.as_str(),
+            next.map(|t| t.to_rfc3339()),
+        );
+    }
+    fwd.forward(crate::channels::UiEvent::SchedulesListed(list_schedule_views(&domain)));
 }
 
 /// Карта type_id → человекочитаемое имя по всем провайдерам реестра.

@@ -212,6 +212,12 @@ fn dispatch_event(
         UiEvent::Log(entry) => {
             crate::views::logs::append(entry.clone());
         }
+        UiEvent::SchedulesListed(res) => {
+            crate::views::scheduler::on_schedules_loaded(res);
+        }
+        UiEvent::AutostartChanged(res) => {
+            crate::views::scheduler::on_autostart_changed(res);
+        }
         UiEvent::DownloadStateLoaded(state) => {
             crate::views::download::on_download_state_loaded(state.as_ref());
         }
@@ -284,6 +290,8 @@ fn dispatch_event(
                 seller_name.as_deref(),
                 profile_name,
             );
+            // Планировщик: запоминаем активный профиль (цель нового расписания).
+            crate::views::scheduler::on_active_shop_changed(profile_name);
             // Локальный статус в shop-вкладке.
             crate::views::shop::on_active_shop_changed(
                 provider_id,
@@ -297,6 +305,8 @@ fn dispatch_event(
                 Ok(r) => {
                     status.set_text(&format!("Отчётов: {}", r.len()));
                     crate::views::reports::on_reports_loaded(&Ok(r.clone()));
+                    // Планировщик: combo отчётов в форме добавления.
+                    crate::views::scheduler::on_reports_loaded(r);
                     crate::views::download::on_reports_loaded(r);
                 }
                 Err(e) => {

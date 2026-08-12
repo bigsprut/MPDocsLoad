@@ -19,6 +19,7 @@ mdwf-core.workspace = true
 mdwf-storage.workspace = true
 mdwf-secrets.workspace = true
 mdwf-scheduler.workspace = true
+async-trait.workspace = true
 mdwf-providers-ozon.workspace = true
 mdwf-providers-wildberries.workspace = true
 mdwf-test-provider.workspace = true

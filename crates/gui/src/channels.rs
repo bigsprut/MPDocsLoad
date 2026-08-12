@@ -125,6 +125,34 @@ pub enum UiCommand {
         id: i64,
         file_path: String,
     },
+    // ===== Планировщик =====
+    /// Список расписаний. Ответ — UiEvent::SchedulesListed.
+    ListSchedules,
+    /// Добавить расписание (один отчёт). После — reload списка.
+    AddSchedule {
+        name: String,
+        profile_name: String,
+        report_type: String,
+        cron_expr: String,
+        period_offset: i32,
+    },
+    /// Удалить расписание по имени. После — reload списка.
+    DeleteSchedule {
+        name: String,
+    },
+    /// Включить/выключить расписание. После — reload списка.
+    SetScheduleEnabled {
+        name: String,
+        enabled: bool,
+    },
+    /// Запустить расписание вручную сейчас (по имени). Лог — через UiEvent::Log.
+    RunScheduleNow {
+        name: String,
+    },
+    /// Включить/выключить автозапуск с ОС. Ответ — UiEvent::AutostartChanged.
+    SetAutostart {
+        enabled: bool,
+    },
 }
 
 /// Состояние фильтров экрана «Архив» для автосохранения между запусками.
@@ -226,6 +254,28 @@ pub enum UiEvent {
     DownloadDeleted(Result<i64, String>),
     /// Журнал: новая запись (выгрузки/ошибки/запуски расписаний)._append во вкладку.
     Log(LogEntry),
+    /// Планировщик: список расписаний (с резолвом имён профиля/отчётов).
+    SchedulesListed(Result<Vec<ScheduleView>, String>),
+    /// Планировщик: изменился автозапуск с ОС (новое состояние или ошибка).
+    AutostartChanged(Result<bool, String>),
+}
+
+/// Расписание для отображения в Планировщике. Как `ScheduleRecord`, но с
+/// человекочитаемыми именами (профиль, отчёты), резолвятся в app-loop.
+#[derive(Debug, Clone)]
+pub struct ScheduleView {
+    pub id: i64,
+    pub name: String,
+    pub profile_id: i64,
+    pub profile_name: String,
+    pub reports: Vec<String>,
+    pub report_names: Vec<String>,
+    pub cron_expr: String,
+    pub period_offset: i32,
+    pub enabled: bool,
+    pub next_run_at: Option<String>,
+    pub last_run_at: Option<String>,
+    pub last_run_status: Option<String>,
 }
 
 /// Результат скачивания: файлы + пути на диске.

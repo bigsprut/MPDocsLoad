@@ -652,6 +652,18 @@ impl Catalog {
         Ok(())
     }
 
+    /// Включает/выключает расписание по имени (без полного upsert). next_run_at не
+    /// трогаем — runner сам пересчитает (should_run умеет в None/stale).
+    pub fn set_schedule_enabled(&self, name: &str, enabled: bool) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE schedules SET enabled=?1 WHERE name=?2",
+            params![enabled, name],
+        )
+        .map_err(map_sqlite_err)?;
+        Ok(())
+    }
+
     /// Обновляет статус последнего запуска и следующий запуск.
     pub fn update_schedule_run(
         &self,

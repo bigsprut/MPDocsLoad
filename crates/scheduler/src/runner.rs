@@ -64,7 +64,17 @@ pub struct Runner {
     catalog: Catalog,
     executor: Arc<dyn JobExecutor>,
     max_parallel: u32,
-    running: Mutex<usize>,
+    running: Arc<Mutex<usize>>,
+}
+
+/// RAII-защита счётчика running: декремент при выходе из области (в т.ч. при
+/// панике внутри задачи). Без этого max_parallel_jobs навсегда залипал после
+/// N запусков (инкремент был, декремента не было).
+struct RunningGuard(Arc<Mutex<usize>>);
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        *self.0.lock() = self.0.lock().saturating_sub(1);
+    }
 }
 
 impl Runner {
@@ -74,7 +84,7 @@ impl Runner {
             catalog,
             executor,
             max_parallel,
-            running: Mutex::new(0),
+            running: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -140,6 +150,8 @@ impl Runner {
         let executor = self.executor.clone();
         let catalog = self.catalog.clone();
         let now = Utc::now();
+        // Guard декрементирует running по завершении задачи (нормальном или панике).
+        let guard = RunningGuard(self.running.clone());
         let req = JobRequest {
             schedule_id: s.id,
             schedule_name: s.name.clone(),
@@ -149,6 +161,7 @@ impl Runner {
         };
 
         tokio::spawn(async move {
+            let _guard = guard; // удерживаем до конца задачи
             let (status, files_count, _err) = match executor.execute(req).await {
                 Ok(res) => (res.status, res.files_count, res.error),
                 Err(e) => (RunStatus::Failed, 0, Some(e.to_string())),
@@ -166,8 +179,6 @@ impl Runner {
                 files = files_count,
                 "schedule run completed"
             );
-            // running уменьшается через отдельный guard — упрощаем: убираем через catalog clone.
-            // (В полноценной версии — через Arc<AtomicUsize>.)
         });
     }
 }
