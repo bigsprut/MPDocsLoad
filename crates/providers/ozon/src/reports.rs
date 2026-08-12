@@ -646,7 +646,12 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
         // --- Async-отчёты «create → code → /v1/report/info → файл» ---
         // products/create и discounted/create: тело пустое (фильтры опциональны,
         // добавятся из values ниже) — попадают в общую ветку `_`.
-        // returns/create: filter{date_from,to} — ISO datetime, language.
+        // returns/create: filter{date_from,date_to,status} — ISO datetime + status.
+        // С 5 марта 2025 Ozon сделал filter.status ОБЯЗАТЕЛЬНЫМ (proto-enum, ровно
+        // одно значение — массив отвергается). Без него сервер отвечает
+        // «unknown status». Значение берём из params["return_status"] (CLI
+        // --return-status); по умолчанию «ReturnedToOzon» — возвраты на склад Ozon
+        // (схема FBO, наиболее частая; для FBS — «MovingToSeller» и т.п.).
         "ozon.returns" => {
             let mut filter = serde_json::Map::new();
             if let Some(df) = &date_from {
@@ -659,6 +664,8 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
                     filter.insert("date_to".into(), json!(iso));
                 }
             }
+            let status = params.get("return_status").unwrap_or("ReturnedToOzon");
+            filter.insert("status".into(), json!(status));
             body["filter"] = json!(filter);
             body["language"] = json!("DEFAULT");
         }
@@ -754,6 +761,7 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
         if !matches!(
             k.as_str(),
             "ids" | "date_from" | "date_to" | "warehouse_ids" | "skus" | "posting_numbers"
+            | "return_status"
         ) {
             body[k.as_str()] = json!(v);
         }
@@ -1334,14 +1342,27 @@ mod tests {
 
     #[test]
     fn build_body_returns_filter_iso() {
-        // /v2/report/returns/create: filter{date_from,to} — ISO datetime.
+        // /v2/report/returns/create: filter{date_from,date_to,status} — ISO datetime
+        // + status (обязателен с марта 2025). По умолчанию ReturnedToOzon (FBO).
         let params = ReportParams::default()
             .with("date_from", "2026-07-01")
             .with("date_to", "2026-07-31");
         let body = build_download_body("ozon.returns", &params);
         assert_eq!(body["filter"]["date_from"], "2026-07-01T00:00:00.000Z");
         assert_eq!(body["filter"]["date_to"], "2026-07-31T23:59:59.999Z");
+        assert_eq!(body["filter"]["status"], "ReturnedToOzon");
         assert_eq!(body["language"], "DEFAULT");
+    }
+
+    #[test]
+    fn build_body_returns_custom_status() {
+        // --return-status переопределяет статус (напр. MovingToSeller для FBS).
+        let params = ReportParams::default()
+            .with("date_from", "2026-07-01")
+            .with("date_to", "2026-07-31")
+            .with("return_status", "MovingToSeller");
+        let body = build_download_body("ozon.returns", &params);
+        assert_eq!(body["filter"]["status"], "MovingToSeller");
     }
 
     #[test]

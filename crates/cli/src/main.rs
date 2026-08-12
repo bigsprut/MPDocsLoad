@@ -221,6 +221,10 @@ struct DownloadArgs {
     /// SKU товаров через запятую (для ozon.analytics_stocks, ≤100).
     #[arg(long)]
     skus: Option<String>,
+    /// Статус возврата (для ozon.returns). По умолчанию ReturnedToOzon (схема FBO);
+    /// для FBS — напр. MovingToSeller. Значения — визуальные статусы возврата Ozon.
+    #[arg(long)]
+    return_status: Option<String>,
 }
 
 #[tokio::main]

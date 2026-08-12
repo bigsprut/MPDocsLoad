@@ -49,6 +49,9 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
         if let Some(v) = &args.skus {
             params = params.with("skus", v);
         }
+        if let Some(v) = &args.return_status {
+            params = params.with("return_status", v);
+        }
 
         let progress = Arc::new(NoopProgress) as Arc<dyn mdwf_core::ProgressCallback>;
         match report
