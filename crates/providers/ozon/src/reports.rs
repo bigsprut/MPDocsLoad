@@ -330,12 +330,16 @@ pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRe
             client,
             "/v1/report/products/create",
         )),
-        "ozon.returns" => Arc::new(OzonAsyncReport::new(
+        "ozon.returns" => Arc::new(OzonPaginatedReport::new(
             "ozon.returns",
             "Отчёт о возвратах",
             ReportCategory::Documents,
             client,
-            "/v2/report/returns/create",
+            // /v1/returns/list — возвраты FBO+FBS одним списком (все статусы),
+            // без обязательного filter.status (в отличие от /v2/report/returns/create).
+            // Пагинация: last_id (int64) + has_next, limit≤500.
+            "/v1/returns/list",
+            PaginationKind::ReturnsList,
         )),
         "ozon.postings" => Arc::new(OzonAsyncReport::new(
             "ozon.postings",
@@ -646,28 +650,25 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
         // --- Async-отчёты «create → code → /v1/report/info → файл» ---
         // products/create и discounted/create: тело пустое (фильтры опциональны,
         // добавятся из values ниже) — попадают в общую ветку `_`.
-        // returns/create: filter{date_from,date_to,status} — ISO datetime + status.
-        // С 5 марта 2025 Ozon сделал filter.status ОБЯЗАТЕЛЬНЫМ (proto-enum, ровно
-        // одно значение — массив отвергается). Без него сервер отвечает
-        // «unknown status». Значение берём из params["return_status"] (CLI
-        // --return-status); по умолчанию «ReturnedToOzon» — возвраты на склад Ozon
-        // (схема FBO, наиболее частая; для FBS — «MovingToSeller» и т.п.).
+        // returns: /v1/returns/list — filter.logistic_return_date {time_from,time_to} (ISO).
+        // Намеренно НЕ шлём filter.status и filter.return_schema → сервер вернёт ВСЕ
+        // возвраты (все статусы, FBO+FBS). Это и есть «отчёт по всем возвратам».
+        // limit (≤500) и last_id проставляются в sweep (PaginationKind::ReturnsList).
         "ozon.returns" => {
-            let mut filter = serde_json::Map::new();
+            let mut date = serde_json::Map::new();
             if let Some(df) = &date_from {
                 if let Some(iso) = date_format::date_only_to_iso(df, false) {
-                    filter.insert("date_from".into(), json!(iso));
+                    date.insert("time_from".into(), json!(iso));
                 }
             }
             if let Some(dt) = &date_to {
                 if let Some(iso) = date_format::date_only_to_iso(dt, true) {
-                    filter.insert("date_to".into(), json!(iso));
+                    date.insert("time_to".into(), json!(iso));
                 }
             }
-            let status = params.get("return_status").unwrap_or("ReturnedToOzon");
-            filter.insert("status".into(), json!(status));
+            let mut filter = serde_json::Map::new();
+            filter.insert("logistic_return_date".into(), json!(date));
             body["filter"] = json!(filter);
-            body["language"] = json!("DEFAULT");
         }
         // postings/create: filter{processed_at_from,to} — ISO datetime, language.
         "ozon.postings" => {
@@ -761,7 +762,6 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
         if !matches!(
             k.as_str(),
             "ids" | "date_from" | "date_to" | "warehouse_ids" | "skus" | "posting_numbers"
-            | "return_status"
         ) {
             body[k.as_str()] = json!(v);
         }
@@ -1011,6 +1011,11 @@ enum PaginationKind {
     /// продавца), затем батчинг ≤100 SKU на запрос. Результат агрегируется из
     /// всех батчей.
     Skus,
+    /// /v1/returns/list: `{returns:[...], has_next:bool}`. Запрос:
+    /// `{filter:{logistic_return_date:{time_from,time_to}}, limit≤500, last_id}`.
+    /// last_id (int64) — курсор (id последнего возврата страницы). Без filter.status
+    /// и return_schema → все статусы и схемы (FBO+FBS). Цикл пока has_next=true.
+    ReturnsList,
 }
 
 /// Максимальное число страниц/итераций sweep (защита от бесконечного цикла).
@@ -1249,6 +1254,45 @@ impl Report for OzonPaginatedReport {
                     }
                 }
             }
+            PaginationKind::ReturnsList => {
+                // /v1/returns/list: filter.logistic_return_date + last_id (int64) + has_next.
+                // Без filter.status и return_schema → все статусы и схемы (FBO+FBS).
+                let mut last_id: i64 = 0;
+                let mut iter = 0u32;
+                loop {
+                    let mut body = build_download_body(&self.type_id, params);
+                    body["limit"] = json!(500);
+                    body["last_id"] = json!(last_id);
+                    let resp = self.client.post(self.endpoint, &body, auth).await?;
+                    let has_next = resp
+                        .get("has_next")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    let rows = resp.get("returns").and_then(|v| v.as_array());
+                    let n = rows.map_or(0, Vec::len);
+                    if let Some(rows) = rows {
+                        if let Some(arr) = collected.as_array_mut() {
+                            arr.extend(rows.iter().cloned());
+                        }
+                        // Курсор next last_id = id последнего возврата страницы
+                        // (id — строка-int64, напр. "1000015552").
+                        if let Some(id_val) = rows.last().and_then(|r| r.get("id")) {
+                            if let Some(id) = id_val.as_i64() {
+                                last_id = id;
+                            } else if let Some(s) = id_val.as_str() {
+                                if let Ok(id) = s.parse::<i64>() {
+                                    last_id = id;
+                                }
+                            }
+                        }
+                    }
+                    // Выход: пустая страница, has_next=false, либо лимит итераций.
+                    if n == 0 || !has_next || iter >= MAX_PAGES {
+                        break;
+                    }
+                    iter += 1;
+                }
+            }
         }
 
         let period = params.period.clone().unwrap_or_else(|| "current".into());
@@ -1257,6 +1301,7 @@ impl Report for OzonPaginatedReport {
         let array_key = match self.type_id.as_str() {
             "ozon.accrual_postings" => "posting_accruals",
             "ozon.accrual_by_day" => "accruals",
+            "ozon.returns" => "returns",
             _ => "items",
         };
         let wrapped = serde_json::json!({
@@ -1342,27 +1387,23 @@ mod tests {
 
     #[test]
     fn build_body_returns_filter_iso() {
-        // /v2/report/returns/create: filter{date_from,date_to,status} — ISO datetime
-        // + status (обязателен с марта 2025). По умолчанию ReturnedToOzon (FBO).
+        // /v1/returns/list: filter.logistic_return_date {time_from,time_to} — ISO.
+        // Без filter.status и return_schema → все статусы и схемы (FBO+FBS).
         let params = ReportParams::default()
             .with("date_from", "2026-07-01")
             .with("date_to", "2026-07-31");
         let body = build_download_body("ozon.returns", &params);
-        assert_eq!(body["filter"]["date_from"], "2026-07-01T00:00:00.000Z");
-        assert_eq!(body["filter"]["date_to"], "2026-07-31T23:59:59.999Z");
-        assert_eq!(body["filter"]["status"], "ReturnedToOzon");
-        assert_eq!(body["language"], "DEFAULT");
-    }
-
-    #[test]
-    fn build_body_returns_custom_status() {
-        // --return-status переопределяет статус (напр. MovingToSeller для FBS).
-        let params = ReportParams::default()
-            .with("date_from", "2026-07-01")
-            .with("date_to", "2026-07-31")
-            .with("return_status", "MovingToSeller");
-        let body = build_download_body("ozon.returns", &params);
-        assert_eq!(body["filter"]["status"], "MovingToSeller");
+        assert_eq!(
+            body["filter"]["logistic_return_date"]["time_from"],
+            "2026-07-01T00:00:00.000Z"
+        );
+        assert_eq!(
+            body["filter"]["logistic_return_date"]["time_to"],
+            "2026-07-31T23:59:59.999Z"
+        );
+        // Намеренно нет filter.status и filter.return_schema (все возвраты).
+        assert!(body["filter"].get("status").is_none());
+        assert!(body["filter"].get("return_schema").is_none());
     }
 
     #[test]

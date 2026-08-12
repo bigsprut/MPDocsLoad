@@ -26,6 +26,7 @@ pub fn workbook_bytes(type_id: &str, json: &Value) -> CoreResult<Vec<u8>> {
         "ozon.analytics_stocks" => sheet_from_array_report(&mut wb, "Остатки", json, "items", headers_analytics_stocks()),
         "ozon.cash_flow" => sheet_from_array_report(&mut wb, "Движение средств", json, "items", headers_cash_flow()),
         "ozon.realization" => sheet_from_array_report(&mut wb, "Реализация", json, "result.rows", headers_realization()),
+        "ozon.returns" => sheet_from_array_report(&mut wb, "Возвраты", json, "returns", headers_returns()),
         "ozon.accrual_postings" => sheet_accrual_postings(&mut wb, json),
         "ozon.accrual_by_day" => sheet_accrual_by_day(&mut wb, json),
         "ozon.balance" => workbook_balance(&mut wb, json),
@@ -62,6 +63,34 @@ fn headers_buyout() -> Headers {
         ("vat_percent", "Ставка НДС, %"),
         ("quantity", "Количество"),
         ("amount", "Сумма к начислению"),
+    ]
+}
+
+/// Колонки для /v1/returns/list (возвраты FBO+FBS). Поля вложены (product.*,
+/// visual.status.*, logistic.*, place.*, compensation_status.*, storage.*).
+/// extract_path резолвит точечные пути. Источник: docs.ozon.ru.
+fn headers_returns() -> Headers {
+    &[
+        ("posting_number", "Номер отправления"),
+        ("order_number", "Номер заказа"),
+        ("schema", "Схема"),
+        ("type", "Тип возврата"),
+        ("product.sku", "SKU"),
+        ("product.offer_id", "Артикул"),
+        ("product.name", "Наименование товара"),
+        ("product.quantity", "Количество"),
+        ("product.price.price", "Цена"),
+        ("return_reason_name", "Причина возврата"),
+        ("visual.status.display_name", "Статус возврата"),
+        ("visual.status.sys_name", "Статус (код)"),
+        ("logistic.return_date", "Дата возврата"),
+        ("visual.change_moment", "Дата изменения статуса"),
+        ("place.name", "Склад (место)"),
+        ("compensation_status.status.display_name", "Компенсация"),
+        ("storage.days", "Дней хранения"),
+        ("storage.sum.price", "Сумма хранения"),
+        ("logistic.barcode", "Штрихкод"),
+        ("id", "ID возврата"),
     ]
 }
 
