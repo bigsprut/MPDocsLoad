@@ -666,6 +666,28 @@ thread_local! {
     уровнем выше; пересобирается инсталлером (postinstall.bat) под путь установки
     (relocatable — gdk-pixbuf вычисляет prefix по расположению cache). Урок: GTK на
     Windows relocatable только через env-сетап в main.rs + правильную структуру share/lib.
+35. **Relocatable-бандл проверять СКРАБЛЕННЫМ env, а не «запуском на дев-машине».**
+    Дев-машина ВРАЁТ: GTK4/libadwaita стоят глобально в `D:\msys64\mingw64` и есть
+    в PATH → бандл работает ИЗ-ЗА системы, а не из своих ресурсов. Чистая Windows
+    этого не имеет. Методология (`scripts/test-clean-env.sh`): запуск `dist/mdwf/
+    mdwf-gui.exe` через `env -i` с PATH = ТОЛЬКО System32 (вырезано msys64/mingw),
+    сняты `GTK_*`/`GDK_*`/`GSETTINGS_*`/`FONTCONFIG_*`/`XDG_*`/`GLIB_*`, `timeout N`
+    (exit 124 = ОК). Только так видна реальная полнота бандла. Дополнительно
+    `scripts/test-installed.sh` воспроизводит flow инсталлера (копирование в путь
+    С ПРОБЕЛОМ → postinstall.bat → запуск) — имитация `C:\Program Files\MDWF`.
+    ИТОГ проверки v1.4.0: бандл ПОЛОН — все DLL на месте (app стартует без MSYS2),
+    установленный через реальный `setup.exe` апп делает живой API-вызов (UI построился).
+36. **GNU `timeout` в MSYS НЕ убивает native Windows GUI-процесс.** SIGTERM не
+    доходит до Windows `.exe` → процесс-«зомби» остаётся жить после `timeout N`.
+    Для GUI-тестов обязателен `taskkill //IM mdwf-gui.exe //F` ДО и ПОСЛЕ каждого
+    прогона (см. `scripts/test-clean-env.sh`). Без него зомби накапливаются.
+37. **`gtk::Application` (libadwaita `adw::Application`) с фиксированным APP_ID →
+    single-instance ломает тесты.** Если живёт «зомби»-primary (см. #36), следующий
+    запуск видит его по APP_ID, форвардит `activate` и **немедленно выходит (exit 0,
+    без окна)** — выглядит как «краш через 0.9с», но это артефакт. Симптом: в логе
+    `scheduler loop started` → `MDWF GUI exited` через <1с, без ошибок. Не баг
+    продукта — лечится `taskkill` primary. Вывод: при «мгновенном чистом выходе» GUI
+    СНАЧАЛА проверить `tasklist` на живой одноимённый процесс, потом уж искать баг.
 
 
 
@@ -783,6 +805,40 @@ cargo clippy --workspace --tests -- -D warnings
 **Структура вкладок GUI (sidebar):** Магазин → Отчёты → Загрузка → Архив →
 Настройки → Планировщик → Журнал → О программе.
 
+**Чат 2026-08-12 (проверка `setup.exe` на чистой Windows) — ВЕРИФИКАЦИЯ ЗАВЕРШЕНА, бандл ГОТОВ:**
+- **Методология**: два тест-скрипта симуляции чистой машины. `scripts/test-clean-env.sh`
+  запускает бандл через `env -i` с PATH=только System32 (вырезано msys64/mingw),
+  сняты все `GTK_*`/`GDK_*`/`XDG_*`/`GSETTINGS_*` — дев-машина иначе ВРЁТ (GTK стоит
+  глобально). `scripts/test-installed.sh` воспроизводит flow инсталлера (копирование
+  в путь с ПРОБЕЛОМ → `postinstall.bat` → запуск). Уроки #35-37.
+- **Результаты (всё зелёное)**:
+  - ✅ Бандл стартует без MSYS2 (`timeout` → exit 124) — **DLL-набор полон**, ничего
+    не недостаёт. Единственный warning — безобидный `win32 session dbus binary not found`.
+  - ✅ Настоящий `MDWFSetup-1.4.0.exe /VERYSILENT` в путь с пробелом: install-лог Inno
+    подтверждает копирование файлов + `[Run] postinstall.bat` → **`Process exit code: 0`**.
+  - ✅ `loaders.cache` после реальной установки — **относительные пути**
+    (`lib\gdk-pixbuf-2.0\...\*.dll`), бандл по-настоящему relocatable (работает в любом пути).
+  - ✅ Установленное приложение стартует без MSYS2 + делает **живой API-вызов**
+    (`POST /v1/seller/info` к Ozon) — т.е. UI полностью построился.
+  - ✅ CLI `mdwf.exe` в бандле: `providers list` (3 провайдера) + `reports list`
+    (21 Ozon / 13 WB) — exit 0.
+  - ✅ **Деинсталлятор** `unins000.exe /VERYSILENT`: exit 0, каталог очищен полностью.
+- **Главный инсайт тестирования**: «мгновенный чистый exit (0.9с, без окна, без ошибки)»
+  оказался **артефактом теста**, не багом — `timeout` в MSSYS не убивает native GUI
+  (зомби), а `gtk::Application` с фиксированным APP_ID форвардит `activate` на живой
+  зомби-primary и сразу выходит. Лечится `taskkill //IM mdwf-gui.exe //F` перед прогоном
+  (встроено в тест-скрипты). Уроки #36, #37.
+- **Скриншоты** установочного прогона: `dist/_clean_test/screen*.png` (на диске; vision-
+  инструмент URL с Windows-путём не парсит — можно открыть глазами). Процессные
+  доказательства рендеринга: app доходит до API-вызова из UI-сетапа, gdk-pixbuf-лоадеры
+  валидны, gresource-иконки вшиты в бинарник, Adwaita+схемы в бандле.
+- **⚠️ Наблюдение (не баг, продукт-решение)**: инсталлер требует прав админа
+  (`PrivilegesRequired` по умолчанию → `{autopf}` = Program Files). У MDWF НЕТ системных
+  компонентов (keyring/config/scheduler — все per-user), поэтому per-user install
+  (`%LOCALAPPDATA%\Programs`, без админа) был бы дружелюбнее и разрешал бы тихую установку
+  без UAC. На усмотрение пользователя — переключить при необходимости
+  (`PrivilegesRequiredOverridesAllowed=commandline dialog` + `/CURRENTUSER`).
+
 **Что уже проверено живым прогоном (Ozon, oz_prof1):**
 - ✅ **18 из 21** отчётов Ozon скачиваются корректно простым `--period` (без ручных
   параметров): все auto-fill'ы (`analytics_stocks` SKU, `warehouse_stock` склады,
@@ -807,6 +863,9 @@ cargo clippy --workspace --tests -- -D warnings
    и др. (max_parallel_jobs починен, Журнал/Планировщик сделаны).
 5. **GUI-клик-тест Журнала/Планировщика**: добавить расписание с cron «через минуту»,
    дождаться фоновой автозагрузки, проверить запись в Журнале.
+6. ✅ **Проверка `setup.exe` на чистой Windows** — ВЫПОЛНЕНО этим чатом (бандл полон,
+   инсталлер/deинсталлятор работают, relocatable). Детали выше. Возможное улучшение:
+   **per-user install без админа** (MDWF не имеет системных компонентов).
 
 **⚠️ Перед сборкой:** закрыть запущенный GUI (exe блокирует линковку на Windows).
 
