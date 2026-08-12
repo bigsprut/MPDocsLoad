@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!--
+    Иконка MDWF (Marketplace Downloader Framework).
+    Градиент Ozon-синий (#005bff) → WB-маджента (#cb11ab) — два маркетплейса.
+    Белый знак «download» (стрелка в лоток) — суть: выгрузка документов.
+    Источник для app-icon.ico (winres встраивает в mdwf-gui.exe).
+  -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#005bff"/>
+      <stop offset="1" stop-color="#cb11ab"/>
+    </linearGradient>
+  </defs>
+  <!-- Скруглённая плитка (app-icon). -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#g)"/>
+  <!-- Стрелка вниз (ствол + наконечник). -->
+  <path d="M108,36 H148 V124 H188 L128,188 L68,124 H108 Z" fill="#ffffff"/>
+  <!-- Лоток (полка, в которую уходит стрелка). -->
+  <rect x="60" y="200" width="136" height="30" rx="15" fill="#ffffff"/>
+</svg>
