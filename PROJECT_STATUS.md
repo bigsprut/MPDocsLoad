@@ -678,13 +678,17 @@ cargo test --workspace          # ~168 тестов (storage: 19, incl. Архи
 cargo clippy --workspace --tests -- -D warnings
 
 # Release-бандл + инсталлятор ОДНОЙ командой (нужен Inno Setup 6/7):
-bash scripts/build-setup.sh
+#   Вариант A — двойной клик по build-setup.cmd (в корне; для Windows: сам найдёт
+#               bash из MSYS2/Git Bash и запустит сборку).
+#   Вариант B — из Git Bash/MSYS2: bash scripts/build-setup.sh
 # → installer/Output/MDWFSetup-<version>.exe (внутри: build-release.sh → бандл
 #   dist/mdwf/ ~100 МБ: 2 exe, 77 DLL через ntldd -R, иконки Adwaita/hicolor,
 #   схемы, gdk-pixbuf-лоадеры; затем авто-поиск ISCC + компиляция .iss).
 # GUI relocatable: main.rs сам настраивает XDG_DATA_DIRS/GDK_PIXBUF_MODULE_FILE
 # на соседние share/lib. Инсталлер [Run] пересобирает cache/схемы под путь.
 # Inno Setup: jrsoftware.org/isdl.php (если нет — скрипт подскажет).
+# ВАЖНО: bash тут = MSYS2-оболочка на Windows (тулчейн проекта: GTK, ntldd,
+#   glib-compile-schemas), НЕ Linux. build-setup.cmd — Windows-обёртка над ней.
 
 # Проверка бандла: timeout 8 ./dist/mdwf/mdwf-gui.exe (exit 124 = работает)
 
