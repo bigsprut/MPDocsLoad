@@ -569,6 +569,27 @@ fn month_days(period: Option<&str>) -> Vec<String> {
     days
 }
 
+/// Определяет расширение файла по сигнатуре (magic bytes) скачанного контента.
+/// Для async-отчётов Ozon: сервер отдаёт разные форматы — настоящий xlsx (это
+/// ZIP, сигнатура `PK`), CSV (products/realization_posting), JSON, XML.
+/// Расширение обязано соответствовать реальному формату, иначе файл с `.xlsx`
+/// окажется CSV/JSON внутри — это обман пользователя («такого не должно быть»).
+fn detect_format(bytes: &[u8]) -> &'static str {
+    // ZIP-архив: xlsx/zip/docx — для Ozon async-отчётов это xlsx.
+    if bytes.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
+        return "xlsx";
+    }
+    // Пропускаем UTF-8 BOM (Ozon products отдаёт CSV с BOM).
+    let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    match b.first() {
+        Some(b'{' | b'[') => "json",
+        Some(b'<') => "xml",
+        // Текстовый — скорее всего CSV (Ozon products: «;» с BOM,
+        // realization_posting: «,»).
+        _ => "csv",
+    }
+}
+
 /// Формат тела зависит от type_id — разные эндпоинты Ozon ждут разные схемы
 /// (сверено с docs.ozon.ru):
 /// - `month`+`year` как integer: realization, realization_posting.
@@ -932,12 +953,16 @@ impl Report for OzonAsyncReport {
             }
         };
 
-        // Шаг 3: скачиваем файл по ссылке.
+        // Шаг 3: скачиваем файл по ссылке. Расширение определяем по РЕАЛЬНОМУ
+        // формату серверного файла (magic bytes), а не захардкоженное «xlsx» —
+        // Ozon отдаёт разные форматы: настоящий xlsx (compensation и др.),
+        // CSV (products, realization_posting). Иначе .xlsx с CSV внутри = обман.
         let bytes = self.client.download_file(&file_url).await?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
+        let ext = detect_format(&bytes);
         Ok(vec![DownloadedFile::with_content(
-            format!("{}_{}.xlsx", self.type_id, period),
-            "xlsx",
+            format!("{}_{}.{}", self.type_id, period, ext),
+            ext,
             bytes,
         )])
     }
@@ -1383,6 +1408,26 @@ mod tests {
         let params = ReportParams::default().with("skus", "100, 200,300");
         let body = build_download_body("ozon.analytics_stocks", &params);
         assert_eq!(body["skus"], json!(["100", "200", "300"]));
+    }
+
+    #[test]
+    fn detect_format_by_magic_bytes() {
+        // Настоящий xlsx — ZIP с сигнатурой PK.
+        assert_eq!(detect_format(&[0x50, 0x4B, 0x03, 0x04, 0x00]), "xlsx");
+        // CSV (Ozon realization_posting): текст, запятая.
+        assert_eq!(detect_format(b"row_number,commission_ratio, seller"), "csv");
+        // CSV с BOM (Ozon products): EF BB BF + «"».
+        assert_eq!(
+            detect_format(&[0xEF, 0xBB, 0xBF, b'"', b'A', b'"']),
+            "csv"
+        );
+        // JSON.
+        assert_eq!(detect_format(b"{\"items\":[]}"), "json");
+        assert_eq!(detect_format(b"[1,2,3]"), "json");
+        // JSON с BOM.
+        assert_eq!(detect_format(&[0xEF, 0xBB, 0xBF, b'{']), "json");
+        // XML.
+        assert_eq!(detect_format(b"<?xml version=\"1.0\"?>"), "xml");
     }
 
     #[test]
