@@ -153,6 +153,11 @@ pub enum UiCommand {
     SetAutostart {
         enabled: bool,
     },
+    /// Включить/выключить фоновый планировщик Windows Task Scheduler
+    /// (polling-задача → `mdwf schedule run`). Ответ — UiEvent::WinSchedulerChanged.
+    SetWinScheduler {
+        enabled: bool,
+    },
 }
 
 /// Состояние фильтров экрана «Архив» для автосохранения между запусками.
@@ -258,6 +263,8 @@ pub enum UiEvent {
     SchedulesListed(Result<Vec<ScheduleView>, String>),
     /// Планировщик: изменился автозапуск с ОС (новое состояние или ошибка).
     AutostartChanged(Result<bool, String>),
+    /// Планировщик: изменился фоновый планировщик Windows Task Scheduler.
+    WinSchedulerChanged(Result<bool, String>),
 }
 
 /// Расписание для отображения в Планировщике. Как `ScheduleRecord`, но с

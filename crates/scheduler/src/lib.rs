@@ -23,7 +23,11 @@
 pub mod autostart;
 pub mod cron;
 pub mod runner;
+pub mod wintasks;
 
 pub use autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
 pub use cron::{next_run, parse, DAILY, MONTHLY, QUARTERLY, WEEKLY};
 pub use runner::{run_due_schedules, JobExecutor, JobRequest, JobResult, RunStatus, Runner};
+pub use wintasks::{
+    disable_windows_scheduler, enable_windows_scheduler, is_windows_scheduler_enabled,
+};

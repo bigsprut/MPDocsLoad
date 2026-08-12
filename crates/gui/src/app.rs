@@ -605,6 +605,27 @@ async fn run_command_loop(
                     Err(e) => fwd.forward(UiEvent::AutostartChanged(Err(e.to_string()))),
                 }
             }
+            UiCommand::SetWinScheduler { enabled } => {
+                let outcome = if enabled {
+                    mdwf_scheduler::enable_windows_scheduler()
+                } else {
+                    mdwf_scheduler::disable_windows_scheduler()
+                };
+                match outcome {
+                    Ok(()) => {
+                        log_event(
+                            &fwd,
+                            crate::channels::LogKind::Info,
+                            format!(
+                                "Фоновый планировщик Windows: {}",
+                                if enabled { "включён" } else { "выключен" }
+                            ),
+                        );
+                        fwd.forward(UiEvent::WinSchedulerChanged(Ok(enabled)));
+                    }
+                    Err(e) => fwd.forward(UiEvent::WinSchedulerChanged(Err(e.to_string()))),
+                }
+            }
         }
     }
     warn!("command loop ended");

@@ -218,6 +218,9 @@ fn dispatch_event(
         UiEvent::AutostartChanged(res) => {
             crate::views::scheduler::on_autostart_changed(res);
         }
+        UiEvent::WinSchedulerChanged(res) => {
+            crate::views::scheduler::on_win_scheduler_changed(res);
+        }
         UiEvent::DownloadStateLoaded(state) => {
             crate::views::download::on_download_state_loaded(state.as_ref());
         }

@@ -664,6 +664,24 @@ impl Catalog {
         Ok(())
     }
 
+    /// Атомарно «забирает» расписание в работу: выставляет next_run_at = next_ts,
+    /// ТОЛЬКО если оно ещёDue (next_run_at IS NULL OR next_run_at <= now_rfc).
+    /// Возвращает true, если этот вызывающий забрал задачу (должен выполнить),
+    /// false — если другой процесс (GUI Runner / CLI schedule run) уже забрал.
+    /// Защита от двойного выполнения в гибриде in-process + Windows Task Scheduler.
+    /// RFC3339-строки сравнимы лексикографически = хронологически (оба UTC +00:00).
+    pub fn claim_schedule(&self, id: i64, next_ts: &str, now_rfc: &str) -> CoreResult<bool> {
+        let conn = self.conn.lock();
+        let n = conn
+            .execute(
+                "UPDATE schedules SET next_run_at=?1 \
+                 WHERE id=?2 AND (next_run_at IS NULL OR next_run_at <= ?3)",
+                params![next_ts, id, now_rfc],
+            )
+            .map_err(map_sqlite_err)?;
+        Ok(n > 0)
+    }
+
     /// Обновляет статус последнего запуска и следующий запуск.
     pub fn update_schedule_run(
         &self,

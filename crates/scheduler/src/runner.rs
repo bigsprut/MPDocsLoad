@@ -115,9 +115,10 @@ impl Runner {
                 warn!("max_parallel_jobs reached, skipping {}", s.name);
                 continue;
             }
-            // Запускаем.
-            self.launch(s).await;
-            launched += 1;
+            // Запускаем (claim внутри может отдать расписание другому процессу).
+            if self.launch(s).await {
+                launched += 1;
+            }
         }
         Ok(launched)
     }
@@ -145,11 +146,24 @@ impl Runner {
         now >= next
     }
 
-    async fn launch(&self, s: ScheduleRecord) {
+    /// Запускает расписание. Возвращает false, если другой процесс (CLI
+    /// `schedule run` из Windows Task Scheduler) уже забрал его через claim.
+    async fn launch(&self, s: ScheduleRecord) -> bool {
+        let now = Utc::now();
+        let Ok(next) = cron::next_run(&s.cron_expr, now) else {
+            return false;
+        };
+        // CLAIM: атомарно забираем (защита от двойного выполнения с CLI schedule run).
+        match self
+            .catalog
+            .claim_schedule(s.id, &next.to_rfc3339(), &now.to_rfc3339())
+        {
+            Ok(true) => {}
+            _ => return false,
+        }
         *self.running.lock() += 1;
         let executor = self.executor.clone();
         let catalog = self.catalog.clone();
-        let now = Utc::now();
         // Guard декрементирует running по завершении задачи (нормальном или панике).
         let guard = RunningGuard(self.running.clone());
         let req = JobRequest {
@@ -180,10 +194,13 @@ impl Runner {
                 "schedule run completed"
             );
         });
+        true
     }
 }
 
-/// Разовая проверка: запускает все просроченные расписания синхронно (для CLI `schedule run`).
+/// Разовая проверка: запускает просроченные расписания синхронно (для CLI
+/// `schedule run`, в т.ч. из Windows Task Scheduler). Due-проверка + claim
+/// (защита от двойного выполнения с in-process Runner GUI).
 pub async fn run_due_schedules(
     catalog: &Catalog,
     executor: &dyn JobExecutor,
@@ -193,6 +210,27 @@ pub async fn run_due_schedules(
     let mut launched = 0;
     for s in schedules {
         if !s.enabled {
+            continue;
+        }
+        // Due-проверка: next_run_at <= now. None — вычисляем, пропускаем в этот раз.
+        let Some(ts) = s.next_run_at.as_deref() else {
+            if let Ok(t) = cron::next_run(&s.cron_expr, now) {
+                let _ = catalog.update_schedule_run(s.id, None, "pending", Some(t.to_rfc3339()));
+            }
+            continue;
+        };
+        let due = ts
+            .parse::<chrono::DateTime<Utc>>()
+            .map(|t| now >= t)
+            .unwrap_or(false);
+        if !due {
+            continue;
+        }
+        // CLAIM: атомарно забираем (другой процесс мог забрать между list и здесь).
+        let Ok(next) = cron::next_run(&s.cron_expr, now) else {
+            continue;
+        };
+        if !catalog.claim_schedule(s.id, &next.to_rfc3339(), &now.to_rfc3339())? {
             continue;
         }
         let req = JobRequest {
@@ -206,12 +244,12 @@ pub async fn run_due_schedules(
             Ok(res) => (res.status, res.files_count, res.error),
             Err(e) => (RunStatus::Failed, 0, Some(e.to_string())),
         };
-        let next = cron::next_run(&s.cron_expr, now).ok();
+        // next уже выставлен claim'ом; перезаписываем last + status тем же next.
         catalog.update_schedule_run(
             s.id,
             Some(now.to_rfc3339()),
             status.as_str(),
-            next.map(|t| t.to_rfc3339()),
+            Some(next.to_rfc3339()),
         )?;
         if let Some(e) = err {
             warn!(schedule = %s.name, error = %e, "schedule failed");

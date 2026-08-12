@@ -21,6 +21,7 @@ thread_local! {
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
     static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
     static W_AUTOSTART: Rc<RefCell<Option<Switch>>> = Rc::new(RefCell::new(None));
+    static W_WIN_SCHEDULER: Rc<RefCell<Option<Switch>>> = Rc::new(RefCell::new(None));
     static W_REPORT_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
     static W_NAME: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_CRON: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
@@ -80,6 +81,33 @@ pub fn build(cs: &CommandSender) -> gtk4::Box {
     W_AUTOSTART.with(|w| *w.borrow_mut() = Some(autostart.clone()));
     auto_box.append(&autostart);
     root.append(&auto_box);
+
+    // --- Фоновый планировщик Windows (Task Scheduler) ---
+    // В отличие от autostart (запуск GUI при логине) — это polling-задача ОС,
+    // которая каждые ~5 мин запускает `mdwf schedule run`. Работает без открытого
+    // GUI (пока пользователь залогинен). Гибрид: in-process Runner активен, когда
+    // GUI открыт; Windows-задача подхватывает, когда закрыт. claim_расписания
+    // защищает от двойного выполнения.
+    let win_box = gtk4::Box::new(Orientation::Horizontal, 12);
+    win_box.append(
+        &Label::builder()
+            .label("Фоновый планировщик Windows")
+            .halign(Align::Start)
+            .hexpand(true)
+            .build(),
+    );
+    let win_sw = Switch::builder().halign(Align::End).build();
+    win_sw.set_active(mdwf_scheduler::is_windows_scheduler_enabled());
+    win_sw.connect_active_notify(|sw| {
+        if RESTORING.with(|r| *r.borrow()) {
+            return;
+        }
+        let Some(cs) = CMD.with(|c| c.borrow().clone()) else { return };
+        cs.send(UiCommand::SetWinScheduler { enabled: sw.is_active() });
+    });
+    W_WIN_SCHEDULER.with(|w| *w.borrow_mut() = Some(win_sw.clone()));
+    win_box.append(&win_sw);
+    root.append(&win_box);
 
     // --- Форма добавления ---
     root.append(&build_add_form());
@@ -270,6 +298,18 @@ pub fn on_autostart_changed(result: &Result<bool, String>) {
     let Some(sw) = sw else { return };
     RESTORING.with(|r| *r.borrow_mut() = true);
     sw.set_active(mdwf_scheduler::is_autostart_enabled());
+    RESTORING.with(|r| *r.borrow_mut() = false);
+}
+
+/// Хук: фоновый планировщик Windows изменён. На ошибку — откатываем switch.
+pub fn on_win_scheduler_changed(result: &Result<bool, String>) {
+    if result.is_ok() {
+        return;
+    }
+    let sw = W_WIN_SCHEDULER.with(|w| w.borrow().clone());
+    let Some(sw) = sw else { return };
+    RESTORING.with(|r| *r.borrow_mut() = true);
+    sw.set_active(mdwf_scheduler::is_windows_scheduler_enabled());
     RESTORING.with(|r| *r.borrow_mut() = false);
 }
 
