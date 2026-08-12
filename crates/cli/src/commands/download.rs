@@ -114,7 +114,8 @@ fn persist(
             document_id: f.source_id.as_deref(),
             document_date: f.document_date.as_deref(),
         };
-        let stored = ctx.file_store.save(content, &ctx_file)?;
+        let (stored, dir) = ctx.file_store.save_with_dir(content, &ctx_file)?;
+        let full_path = dir.join(&stored.file_name);
         println!("    → {} ({} байт)", stored.file_name, stored.size);
 
         let new_dl = mdwf_storage::NewDownload {
@@ -122,7 +123,9 @@ fn persist(
             report_type: report_type.to_string(),
             period: params.period.clone(),
             params: Some(serde_json::to_string(params).unwrap_or_default()),
-            file_path: format!("{} ({} байт)", stored.file_name, stored.size),
+            // Реальный полный путь на диске (как в GUI), НЕ отображаемая строка
+            // «filename (size байт)» — иначе вкладка «Архив» не сможет открыть файл.
+            file_path: full_path.display().to_string(),
             file_size: {
                 #[allow(clippy::cast_possible_wrap)]
                 {
