@@ -224,6 +224,8 @@ pub enum UiEvent {
     /// Архив: запись о скачивании удалена (id — для контекста; ошибка, если файл
     /// или БД не удалились). Список архива обновляется по этому событию.
     DownloadDeleted(Result<i64, String>),
+    /// Журнал: новая запись (выгрузки/ошибки/запуски расписаний)._append во вкладку.
+    Log(LogEntry),
 }
 
 /// Результат скачивания: файлы + пути на диске.
@@ -231,6 +233,23 @@ pub enum UiEvent {
 pub struct DownloadResult {
     pub files: Vec<DownloadedFile>,
     pub saved_paths: Vec<String>,
+}
+
+/// Уровень записи журнала (для цветового отличия строк).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogKind {
+    Info,
+    Success,
+    Error,
+}
+
+/// Одна запись журнала приложения. `timestamp` — локальное время «ЧЧ:ММ:СС».
+/// Капается во вкладке «Журнал» (cap 500, вытеснение старых).
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub kind: LogKind,
+    pub message: String,
 }
 
 /// Краткая информация о провайдере для UI.

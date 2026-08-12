@@ -209,6 +209,9 @@ fn dispatch_event(
         UiEvent::Notify(msg) => {
             status.set_text(msg);
         }
+        UiEvent::Log(entry) => {
+            crate::views::logs::append(entry.clone());
+        }
         UiEvent::DownloadStateLoaded(state) => {
             crate::views::download::on_download_state_loaded(state.as_ref());
         }

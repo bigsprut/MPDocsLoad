@@ -772,6 +772,11 @@ async fn do_download(
         fraction: Some(0.0),
         message: "начало выгрузки…".into(),
     });
+    log_event(
+        fwd,
+        crate::channels::LogKind::Info,
+        format!("Выгрузка {report_type} — {profile_name}"),
+    );
     let files = report
         .download(auth.as_ref(), &params, progress, cancel)
         .await
@@ -782,7 +787,17 @@ async fn do_download(
         message: "запись файлов на диск…".into(),
     });
 
-    let files = files?;
+    let files = match files {
+        Ok(f) => f,
+        Err(e) => {
+            log_event(
+                fwd,
+                crate::channels::LogKind::Error,
+                format!("{report_type}: {e}"),
+            );
+            return Err(e);
+        }
+    };
     // Мапа display_name → serviceName (document_id) для записи document_id в каталог.
     // Нужна для значка «уже загружен»: сопоставляем DownloadedFile.source_id
     // (= display name) с DocumentSel.id (= serviceName).
@@ -807,12 +822,40 @@ async fn do_download(
     });
 
     match saved {
-        Ok(paths) => Ok(crate::channels::DownloadResult {
-            files,
-            saved_paths: paths,
-        }),
-        Err(e) => Err(e),
+        Ok(paths) => {
+            log_event(
+                fwd,
+                crate::channels::LogKind::Success,
+                format!("{report_type}: скачано {} файл(ов)", files.len()),
+            );
+            Ok(crate::channels::DownloadResult {
+                files,
+                saved_paths: paths,
+            })
+        }
+        Err(e) => {
+            log_event(
+                fwd,
+                crate::channels::LogKind::Error,
+                format!("{report_type}: запись на диск не удалась: {e}"),
+            );
+            Err(e)
+        }
     }
+}
+
+/// Шлёт запись в журнал (вкладка «Журнал») с локальной меткой времени ЧЧ:ММ:СС.
+fn log_event(
+    fwd: &EventForwarder,
+    kind: crate::channels::LogKind,
+    message: impl Into<String>,
+) {
+    let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+    fwd.forward(crate::channels::UiEvent::Log(crate::channels::LogEntry {
+        timestamp,
+        kind,
+        message: message.into(),
+    }));
 }
 
 /// Карта type_id → человекочитаемое имя по всем провайдерам реестра.
