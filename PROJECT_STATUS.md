@@ -319,13 +319,17 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
   seller-отчёты (products, returns, postings, discounted, warehouse_stock,
   placement_by_products/supplies, marked_products_sales), аналитика (analytics_stocks,
   analytics_turnover).
-- **Все отчёты Ozon сохраняются как Excel (.xlsx)** (раньше часть была JSON):
-  - `realization_posting` → серверный Excel от Ozon через async
-    `/v1/report/realization/posting/create` (готовый xlsx, как в личном кабинете).
-  - buyout, balance, realization, cash_flow, analytics_stocks/turnover, accrual_postings/by_day
-    → конвертация JSON в .xlsx через `rust_xlsxwriter` (модуль `xlsx.rs`) с **русскими
-    заголовками колонок** из docs.ozon.ru. balance — 3 листа (Доходы/расходы, Услуги, Итоги);
-    accrual_by_day — 2 листа (Начисления, Сборы); accrual_postings — денормализация.
+- **Форматы файлов Ozon — по РЕАЛЬНОМУ содержимому (magic bytes), не захардкожено**
+  (фикс `ac06d33`: раньше `OzonAsyncReport` писал всем `.xlsx`, но часть отчётов Ozon
+  отдаёт CSV → файл `.xlsx` с CSV внутри = обман; найдено живым прогоном):
+  - Серверный xlsx (настоящий Excel, ZIP/PK): compensation, decompensation,
+    mutual_settlement, b2b_sales, placement_by_*, marked_products_sales, discounted.
+  - Конвертация JSON→.xlsx через `rust_xlsxwriter` (`xlsx.rs`, русские заголовки):
+    buyout, balance (3 листа), realization, cash_flow, analytics_stocks/turnover,
+    accrual_postings/by_day (2 листа). Расширение честное (контент — настоящий xlsx).
+  - **`.csv` (Ozon отдаёт CSV, расширение по magic bytes):** `products` («;»+BOM),
+    `realization_posting` («,»). Не конвертируются в xlsx — честное `.csv`.
+  - `detect_format(bytes)`: PK→xlsx, `{`/`[`→json, `<`→xml, прочий текст→csv.
 
 ### GUI
 - **Выбор месяца двумя combo** (Январь…Декабрь + год) вместо текстового поля YYYY-MM.
@@ -600,6 +604,15 @@ thread_local! {
     `build_body_marked_products_nested_date` (ассерты ждали ISO datetime), но это
     всплыло только при отдельной проверке в этом чате. Урок: после любой правки
     тела запроса — `cargo test -p <crate>` обязателен, даже если «правка маленькая».
+29. **НИКОГДА не захардкоживать формат/расширение файла.** `OzonAsyncReport`
+    сохранял все async-отчёты как `.xlsx`, но Ozon отдаёт разные форматы: `products`
+    и `realization_posting` — CSV, остальные — настоящий xlsx. Файл `.xlsx` с CSV
+    внутри — обман пользователя (раскрыл живой прогон + проверка magic bytes:
+    `PK`=настоящий xlsx, `EF BB BF 22`=CSV с BOM, `72 6F 77`=CSV «row…»).
+    Правильно: `detect_format(bytes)` по сигнатуре (PK→xlsx, `{`/`[`→json, `<`→xml,
+    текст→csv). Расширение обязано СООТВЕТСТВОВАТЬ реальному содержимому — это
+    инвариант, проверяемый magic bytes, а не предположением о сервере. Урок:
+    расширение ≠ «как мы хотим назвать», расширение = «что реально в файле».
 
 
 
@@ -645,7 +658,7 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **Большой аудит Ozon API** (живой прогон): фикс A/B/C + marked + warehouse auto-fill.
   С 19 FAIL до 16 OK из 21 отчёта.
 
-Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `fab7769`.
+Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `ac06d33`.
 
 **Чат 2026-08-12 (GUI-проверка фиксов Ozon + auto-fill SKU):**
 - **Аудит code-path GUI vs CLI**: все 5 фиксов (A/B/C/marked/warehouse) в shared-коде
@@ -657,6 +670,9 @@ cargo build --release -p mdwf-gui -p mdwf-cli
   через `/v3/product/list` + `PaginationKind::Skus` (батчинг ≤100, pacing 1с,
   batch-level retry). Живой прогон: 2840 SKU → 290 КБ xlsx за ~36с. Теперь отчёт
   работает и в CLI, и в GUI (без поля ввода SKU).
+- **Фикс обмана с расширением** (коммит `ac06d33`): `products`/`realization_posting`
+  сохранялись как `.xlsx`, но Ozon отдаёт CSV. `detect_format(bytes)` по magic bytes
+  → честное расширение (xlsx/csv/json/xml). Юзер заметил «.xlsx, а внутри не Excel».
 - **Клик-тест GUI**: пользователь прогоняет 15 отчётов через GUI вручную (инструкции
   выданы). Результаты ожидаются.
 
