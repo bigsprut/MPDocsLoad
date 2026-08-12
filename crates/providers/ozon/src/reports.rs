@@ -507,6 +507,67 @@ impl Report for OzonReport {
 
 /// Строит тело запроса для download из параметров.
 ///
+/// Конвертирует period `"YYYY-MM"` в диапазон дат `(date_from, date_to)` формата
+/// `YYYY-MM-DD`: первый день месяца .. последний день месяца. Применяется когда
+/// UI/CLI передаёт только period (без явных date_from/date_to в values) — для
+/// отчётов, требующих диапазон дат (balance, buyout, placement_*, returns,
+/// postings, cash_flow, marked_products_sales).
+/// Возвращает (None, None) если period пуст или невалиден.
+fn period_to_date_range(period: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(p) = period else {
+        return (None, None);
+    };
+    let Some((y, m)) = date_format::parse_year_month(p) else {
+        return (None, None);
+    };
+    let Some(first) = chrono::NaiveDate::from_ymd_opt(y, m, 1) else {
+        return (None, None);
+    };
+    let Some(last) = first
+        .checked_add_months(chrono::Months::new(1))
+        .and_then(|d| d.pred_opt())
+    else {
+        return (None, None);
+    };
+    (
+        Some(first.format("%Y-%m-%d").to_string()),
+        Some(last.format("%Y-%m-%d").to_string()),
+    )
+}
+
+/// Возвращает список всех дней месяца в формате `YYYY-MM-DD` для period `"YYYY-MM"`.
+/// Для `accrual_by_day`: дока требует date=YYYY-MM-DD (один конкретный день),
+/// `last_id` пагинирует записи внутри дня. Чтобы получить весь месяц — перебираем
+/// все дни. Дни ранее 2022-01-01 отрезаются (дока: самая ранняя дата начислений).
+fn month_days(period: Option<&str>) -> Vec<String> {
+    let Some(p) = period else {
+        return Vec::new();
+    };
+    let Some((y, m)) = date_format::parse_year_month(p) else {
+        return Vec::new();
+    };
+    let Some(first) = chrono::NaiveDate::from_ymd_opt(y, m, 1) else {
+        return Vec::new();
+    };
+    let Some(last) = first
+        .checked_add_months(chrono::Months::new(1))
+        .and_then(|d| d.pred_opt())
+    else {
+        return Vec::new();
+    };
+    let min_date = chrono::NaiveDate::from_ymd_opt(2022, 1, 1).unwrap_or(first);
+    let mut days = Vec::new();
+    let mut cur = first.max(min_date);
+    while cur <= last {
+        days.push(cur.format("%Y-%m-%d").to_string());
+        cur = match cur.succ_opt() {
+            Some(n) => n,
+            None => break,
+        };
+    }
+    days
+}
+
 /// Формат тела зависит от type_id — разные эндпоинты Ozon ждут разные схемы
 /// (сверено с docs.ozon.ru):
 /// - `month`+`year` как integer: realization, realization_posting.
@@ -522,9 +583,16 @@ impl Report for OzonReport {
 fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Value {
     let mut body = json!({});
     let period = params.period.as_deref();
-    // date_from/date_to из params.values (заполняются UI как YYYY-MM-DD).
-    let date_from = params.get("date_from").map(str::to_string);
-    let date_to = params.get("date_to").map(str::to_string);
+    // date_from/date_to: из params.values (UI с полями дат) ИЛИ из period
+    // (CLI/расписание — period YYYY-MM → первый..последний день месяца). Раньше
+    // при отсутствии values поля дат молча пропускались → тело без дат → 4xx.
+    let (date_from, date_to) = match (
+        params.get("date_from").map(str::to_string),
+        params.get("date_to").map(str::to_string),
+    ) {
+        (Some(df), Some(dt)) => (Some(df), Some(dt)),
+        _ => period_to_date_range(period),
+    };
 
     match type_id {
         // month + year как integer (строка YYYY-MM → числа).
@@ -597,18 +665,15 @@ fn build_download_body(type_id: &str, params: &ReportParams) -> serde_json::Valu
                 body["warehouseId"] = json!(ids);
             }
         }
-        // marked-products-sales/create: date{from,to} — ISO datetime.
+        // marked-products-sales/create: date{from,to} — date-only YYYY-MM-DD
+        // (сервер требует ровно 10 символов; ISO datetime с T..Z — 24 символа, отвергается).
         "ozon.marked_products_sales" => {
             let mut date = serde_json::Map::new();
             if let Some(df) = &date_from {
-                if let Some(iso) = date_format::date_only_to_iso(df, false) {
-                    date.insert("from".into(), json!(iso));
-                }
+                date.insert("from".into(), json!(df));
             }
             if let Some(dt) = &date_to {
-                if let Some(iso) = date_format::date_only_to_iso(dt, true) {
-                    date.insert("to".into(), json!(iso));
-                }
+                date.insert("to".into(), json!(dt));
             }
             body["date"] = json!(date);
         }
@@ -751,6 +816,11 @@ impl Report for OzonAsyncReport {
         _progress: ProgressCallbackRef,
         _cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
+        // Параметры поллинга /v1/report/info (шаг 2): async-отчёты Ozon генерируются
+        // не мгновенно — waiting/processing это нормальные промежуточные статусы.
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+        const POLL_MAX_ATTEMPTS: usize = 120; // ~10 минут максимум.
+
         // Шаг 1: запрос отчёта → получаем code.
         let body = build_download_body(&self.type_id, params);
         let resp = self.client.post(self.endpoint, &body, auth).await?;
@@ -770,51 +840,64 @@ impl Report for OzonAsyncReport {
                 ))
             })?;
 
-        // Шаг 2: запрашиваем статус/ссылку через /v1/report/info.
-        let report_info = self.client.post_report_info(code, auth).await?;
-        let result = report_info
-            .get("result")
-            .ok_or_else(|| CoreError::Internal("report/info: нет result".into()))?;
-
-        let status = result
-            .get("status")
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
-
-        match status {
-            "failed" => {
-                let err = result
-                    .get("error")
-                    .and_then(|e| e.as_str())
-                    .unwrap_or("неизвестная ошибка");
-                return Err(CoreError::Internal(format!(
-                    "Ozon {}: генерация отчёта не удалась: {err}",
-                    self.type_id
-                )));
+        // Шаг 2: поллинг /v1/report/info до терминального статуса (success/failed).
+        // Дока: waiting/processing — нормальные промежуаточные статусы. Раньше код
+        // возвращал ошибку при первом waiting — теперь ждём с интервалом и таймаутом.
+        let mut attempts = 0usize;
+        let file_url = loop {
+            attempts += 1;
+            let report_info = self.client.post_report_info(code, auth).await?;
+            let result = report_info
+                .get("result")
+                .ok_or_else(|| CoreError::Internal("report/info: нет result".into()))?;
+            let status = result
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
+            match status {
+                "failed" => {
+                    let err = result
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("неизвестная ошибка");
+                    return Err(CoreError::Internal(format!(
+                        "Ozon {}: генерация отчёта не удалась: {err}",
+                        self.type_id
+                    )));
+                }
+                "success" => {
+                    let url = result
+                        .get("file")
+                        .and_then(|f| f.as_str())
+                        .ok_or_else(|| {
+                            CoreError::Internal(format!(
+                                "Ozon {}: report/info вернул success, но нет ссылки file",
+                                self.type_id
+                            ))
+                        })?;
+                    break url.to_string();
+                }
+                // waiting | processing | пусто | неизвестное — продолжаем поллинг.
+                _ => {
+                    if attempts >= POLL_MAX_ATTEMPTS {
+                        return Err(CoreError::Internal(format!(
+                            "Ozon {}: отчёт не сгенерировался за {} попыток (статус {status})",
+                            self.type_id, attempts
+                        )));
+                    }
+                    tracing::debug!(
+                        type_id = %self.type_id,
+                        attempt = attempts,
+                        status,
+                        "отчёт ещё генерируется, ждём"
+                    );
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                }
             }
-            "waiting" | "processing" => {
-                return Err(CoreError::Internal(format!(
-                    "Ozon {}: отчёт ещё генерируется (статус {status}). Повторите позже.",
-                    self.type_id
-                )));
-            }
-            // "success" и неизвестные статусы — продолжаем к скачиванию.
-            _ => {}
-        }
-
-        // Извлекаем ссылку на файл.
-        let file_url = result
-            .get("file")
-            .and_then(|f| f.as_str())
-            .ok_or_else(|| {
-                CoreError::Internal(format!(
-                    "Ozon {}: report/info вернул success, но нет ссылки file",
-                    self.type_id
-                ))
-            })?;
+        };
 
         // Шаг 3: скачиваем файл по ссылке.
-        let bytes = self.client.download_file(file_url).await?;
+        let bytes = self.client.download_file(&file_url).await?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
         Ok(vec![DownloadedFile::with_content(
             format!("{}_{}.xlsx", self.type_id, period),
@@ -970,33 +1053,39 @@ impl Report for OzonPaginatedReport {
                 }
             }
             PaginationKind::LastId => {
-                // accrual/by-day: цикл по last_id, пока accruals непустой и last_id меняется.
-                let mut last_id = String::new();
-                let mut iter = 0u32;
-                loop {
-                    let mut body = build_download_body(&self.type_id, params);
-                    body["last_id"] = json!(last_id);
-                    let resp = self.client.post(self.endpoint, &body, auth).await?;
-                    let accruals = resp.get("accruals").and_then(|v| v.as_array());
-                    let n = accruals.map_or(0, Vec::len);
-                    if let Some(rows) = accruals {
-                        if let Some(arr) = collected.as_array_mut() {
-                            arr.extend(rows.iter().cloned());
+                // accrual/by-day: дока требует date=YYYY-MM-DD (один день), last_id
+                // пагинирует записи внутри дня. Перебираем ВСЕ дни выбранного месяца,
+                // по каждому — цикл по last_id.
+                let days = month_days(params.period.as_deref());
+                for day in days {
+                    let mut last_id = String::new();
+                    let mut iter = 0u32;
+                    loop {
+                        let mut body = build_download_body(&self.type_id, params);
+                        body["date"] = json!(day);
+                        body["last_id"] = json!(last_id);
+                        let resp = self.client.post(self.endpoint, &body, auth).await?;
+                        let accruals = resp.get("accruals").and_then(|v| v.as_array());
+                        let n = accruals.map_or(0, Vec::len);
+                        if let Some(rows) = accruals {
+                            if let Some(arr) = collected.as_array_mut() {
+                                arr.extend(rows.iter().cloned());
+                            }
                         }
-                    }
-                    let next_last_id = resp
-                        .get("last_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    // Условия выхода: пустой ответ, last_id не изменился, лимит итераций.
-                    if n == 0 || next_last_id.is_empty() || next_last_id == last_id {
-                        break;
-                    }
-                    last_id = next_last_id;
-                    iter += 1;
-                    if iter >= MAX_PAGES {
-                        break;
+                        let next_last_id = resp
+                            .get("last_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        // Выход: пустой ответ, last_id не изменился, лимит итераций.
+                        if n == 0 || next_last_id.is_empty() || next_last_id == last_id {
+                            break;
+                        }
+                        last_id = next_last_id;
+                        iter += 1;
+                        if iter >= MAX_PAGES {
+                            break;
+                        }
                     }
                 }
             }
