@@ -264,7 +264,8 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
 - ✅ OK (16): realization, realization_posting, buyout, balance, cash_flow,
   accrual_by_day, compensation, decompensation, mutual_settlement, products,
   discounted, placement_by_products, placement_by_supplies, marked_products_sales,
-  analytics_turnover, analytics_stocks (с `--skus`).
+  analytics_turnover, analytics_stocks (**auto-fill SKU через `/v3/product/list`** —
+  работает и в CLI, и в GUI без ручного ввода; см. «auto-fill SKU» ниже).
 - ⚠️ warehouse_stock — `/v2/warehouse/list` вернул `warehouses:[]` → у продавца нет
   FBS/rFBS-складов (FBO-схема); отчёт неприменим.
 - ⚠️ accrual_postings — нужен `--posting-numbers` (флаг добавлен; нужны ID отправлений).
@@ -274,6 +275,23 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
 
 **CLI-флаги** (остаток A): `--posting-numbers`, `--warehouse-ids`, `--skus` (CSV).
 **Живые API-тесты теперь разрешены пользователем** (раньше — нет).
+
+### auto-fill SKU для analytics_stocks (этот чат, коммит fab7769)
+`ozon.analytics_stocks` («Аналитика по остаткам») требует обязательный `skus[]`
+(≤100 за запрос), раньше передавался только через CLI `--skus` → в **GUI отчёт
+был нерабочий** (нет поля ввода → 4xx). По образцу warehouse auto-fill:
+- **`client.fetch_skus()`** — `POST /v3/product/list` (cursor `last_id`, `limit`
+  1000, `filter.visibility:"ALL"`) → собирает числовые SKU всех товаров (поле
+  `sku`, int64 — именно их ждёт `/v1/analytics/stocks`, НЕ `offer_id`-артикул).
+- **`PaginationKind::Skus`** (новый вариант, заменил `Single`) — auto-fill если
+  SKU не переданы + батчинг ≤100 + **pacing 1с между батчами** + batch-level
+  retry (5× с паузой 10с). Pacing нужен: метод имеет жёсткий per-second rate
+  limit, и без него каталог ~2840 SKU = 29 батчей триггерит 429
+  «You have reached request rate limit per second».
+- **Живой прогон** (oz_prof1, 2026-07): auto-fill нашёл 2840 SKU, 29 батчей за
+  ~36с, файл `ozon.analytics_stocks_2026-07.xlsx` (290 КБ). Без `--skus`.
+- Эндпоинт сверен с `docs/ozon-seller-api-reference.md` (урок №22). Серверный
+  retry в клиенте (3 попытки) оказался недостаточен — добавлен batch-level retry.
 
 **Ключевые изменения ПРЕДЫДУЩЕГО чата (контекст сохранён ниже):**
 
@@ -560,6 +578,30 @@ thread_local! {
 25. **Локальная копия `docs/ozon-seller-api-reference.md` — рабочий источник** (свежая,
     от 6 авг 2026). docs.ozon.ru за антиботом (WebFetch не проходит). Если копия
     устареет — попросить пользователя скачать свежую (НЕ придумывать).
+26. **Per-method rate limits могут быть жёстче глобального.** Глобальный лимит Ozon —
+    50 RPS (клиент умеет: `RateLimiter` 20мс интервал), но конкретные эндпоинты
+    имеют свои, часто недокументированные per-second лимиты. `/v1/analytics/stocks`
+    на каталоге 2840 SKU (29 батчей по 100) давал 429 «rate limit per second» при
+    темпе ~48 RPS, хотя глобальный лимит не исчерпан. Решение: **pacing между
+    батчами** (1с) + batch-level retry (поверх per-request retry в клиенте, который
+    даёт лишь 3 попытки 500/500/1000мс — маловато для throttle, снимаемого >3с).
+    Урок: циклы из многих запросов к одному эндпоинту — **явно пейсить**, не
+    полагаться только на глобальный limiter.
+27. **GUI и CLI разделяют code-path провайдера.** Все 5 фиксов аудита Ozon
+    (A/B/C/marked/warehouse) лежат в shared-коде `crates/providers/ozon/`, не в
+    CLI-обвязке → GUI получает их автоматически. Проверка «работает ли фикс в GUI»
+    = аудит code-path (GUI вызывает тот же `Report::download`), а не ручной клик.
+    Единственное, что GUI не получал от CLI — опциональные параметры (`skus`,
+    `posting_numbers`, `warehouse_ids`), у которых не было виджетов ввода.
+    `warehouse_ids` и `skus` теперь auto-fill на стороне провайдера (GUI работает
+    без виджетов); `posting_numbers` — пока CLI-only (нужен отдельный auto-fill).
+28. **Регрессии в тестах незамеченными — проверять `cargo test` после правок.**
+    Фикс `marked_products_sales` (date-only) из прошлого чата сломал тест
+    `build_body_marked_products_nested_date` (ассерты ждали ISO datetime), но это
+    всплыло только при отдельной проверке в этом чате. Урок: после любой правки
+    тела запроса — `cargo test -p <crate>` обязателен, даже если «правка маленькая».
+
+
 
 ---
 
@@ -603,7 +645,20 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **Большой аудит Ozon API** (живой прогон): фикс A/B/C + marked + warehouse auto-fill.
   С 19 FAIL до 16 OK из 21 отчёта.
 
-Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `96b185c`.
+Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `fab7769`.
+
+**Чат 2026-08-12 (GUI-проверка фиксов Ozon + auto-fill SKU):**
+- **Аудит code-path GUI vs CLI**: все 5 фиксов (A/B/C/marked/warehouse) в shared-коде
+  провайдера → GUI получает автоматически. 15 отчётов заведомо работают в GUI.
+- **Починен сломанный тест** `build_body_marked_products_nested_date` (регрессия:
+  фикс date-only применён, ассерты ждали ISO datetime). `cargo test` был красный.
+  Коммит `6225e4a`.
+- **auto-fill SKU для `analytics_stocks`** (коммит `fab7769`): `client.fetch_skus()`
+  через `/v3/product/list` + `PaginationKind::Skus` (батчинг ≤100, pacing 1с,
+  batch-level retry). Живой прогон: 2840 SKU → 290 КБ xlsx за ~36с. Теперь отчёт
+  работает и в CLI, и в GUI (без поля ввода SKU).
+- **Клик-тест GUI**: пользователь прогоняет 15 отчётов через GUI вручную (инструкции
+  выданы). Результаты ожидаются.
 
 **Структура вкладок GUI (sidebar):** Магазин → Отчёты → Загрузка → **Архив** →
 Настройки → Планировщик → Журнал → О программе.
@@ -619,15 +674,16 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 
 **Возможные дальнейшие задачи (на усмотрение пользователя):**
 1. **accrual_postings** — авто-fill номеров отправлений через `/v3/posting/fbs/list`
-   (по аналогии с warehouse auto-fill).
+   (по аналогии с warehouse/skus auto-fill — прецедент уже есть в `fetch_skus`/
+   `fetch_warehouse_ids`). Пока `--posting-numbers` только CLI.
 2. **Серверные ошибки Ozon** (b2b_sales/returns/postings) — попробовать другой период,
    или уточнить через поддержку Ozon.
 3. **Аудит WB API** (по аналогии с Ozon) — живой прогон всех 13 отчётов WB, сверка с
    dev.wildberries.ru / eslazarev/wildberries-sdk.
-4. **GUI-проверка** свежих фиксов Ozon — открыть вкладку «Загрузка», скачать каждый
-   отчёт через GUI (CLI проверен, GUI — нет).
-5. Доработки из известных проблем (секция 11): async-отчёты WB (acceptance_report),
+4. **Доработки из известных проблем** (секция 11): async-отчёты WB (acceptance_report),
    max_parallel_jobs планировщика, и др.
+5. **Журнал (logs.rs)** — сейчас заглушка, не логирует. Можно наполнять событиями
+   выгрузок (заметно при клик-тесте: ошибки видны только в лейбле «Загрузка»).
 
 **⚠️ Перед сборкой:** закрыть запущенный GUI (exe блокирует линковку на Windows).
 
