@@ -485,7 +485,8 @@ thread_local! {
 
 ### Не реализовано
 1. **Async-отчёты WB** (acceptance_report) — create→poll→download паттерн не реализован, только create-фаза
-2. **max_parallel_jobs** планировщика — счётчик running не декрементируется
+2. ~~**max_parallel_jobs** планировщика~~ — **ПОЧИНЕНО** (коммит c42a86b): RunningGuard
+   (Drop) декремментит счётчик; раньше застопоривался после N задач.
 3. **TestProvider в release** — должен быть только dev
 4. **Очистка rate-limiter от ожидания 60с в тестах** — `MDWF_WB_NO_RATELIMIT=1`
 5. **Автосохранение может восстанавливать test.documents** при провайдере WB — stale state (есть частичная защита от гонки).
@@ -695,7 +696,7 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **Большой аудит Ozon API** (живой прогон): фикс A/B/C + marked + warehouse auto-fill.
   С 19 FAIL до 16 OK из 21 отчёта.
 
-Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `881f71a`.
+Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `c42a86b`.
 
 **Чат 2026-08-12 (GUI-проверка фиксов Ozon + auto-fill SKU):**
 - **Аудит code-path GUI vs CLI**: все 5 фиксов (A/B/C/marked/warehouse) в shared-коде
@@ -725,6 +726,13 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **accrual_postings auto-fill** (коммит `881f71a`): `fetch_posting_numbers` через
   `/v2/posting/fbo/list` + `PaginationKind::AccrualPostings` (батчинг ≤200). Живой прогон:
   665 отправлений → 2300 строк начислений. Теперь работает без `--posting-numbers`.
+- **Вкладка «Журнал»** (коммит `0f19b90`): была заглушкой → лента событий (выгрузки/
+  ошибки/запуски расписаний), cap 500, кнопка «Очистить». `UiEvent::Log(LogEntry)`.
+- **Вкладка «Планировщик»** (коммит `c42a86b`): была заглушкой → полный cron-планировщик.
+  CRUD расписаний, вкл/выкл, «выполнить сейчас», автозапуск с ОС. Фоновый `Runner::run_loop`
+  (стартует в `App::new` при `enabled_on_start`) выполняет наступившие расписания, пока GUI
+  открыт. `GuiJobExecutor` переиспользует `do_download` (персистит + каталог + лог), применяет
+  `period_offset` (CLI игнорировал). Фикс `max_parallel_jobs` (RunningGuard). `set_schedule_enabled`.
 - **Клик-тест GUI**: пользователь прогоняет 15 отчётов через GUI вручную (инструкции
   выданы). Результаты ожидаются.
 
@@ -749,9 +757,9 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 3. **FBS-поддержка для auto-fill**: accrual_postings сейчас FBO-only
    (`/v2/posting/fbo/list`). Для FBS-аккаунтов добавить `/v3/posting/fbs/list`.
 4. **Доработки из известных проблем** (секция 11): async-отчёты WB (acceptance_report),
-   max_parallel_jobs планировщика, и др.
-5. **Журнал (logs.rs)** — сейчас заглушка, не логирует. Можно наполнять событиями
-   выгрузок (заметно при клик-тесте: ошибки видны только в лейбле «Загрузка»).
+   и др. (max_parallel_jobs починен, Журнал/Планировщик сделаны).
+5. **GUI-клик-тест Журнала/Планировщика**: добавить расписание с cron «через минуту»,
+   дождаться фоновой автозагрузки, проверить запись в Журнале.
 
 **⚠️ Перед сборкой:** закрыть запущенный GUI (exe блокирует линковку на Windows).
 
