@@ -696,7 +696,7 @@ cargo build --release -p mdwf-gui -p mdwf-cli
 - **Большой аудит Ozon API** (живой прогон): фикс A/B/C + marked + warehouse auto-fill.
   С 19 FAIL до 16 OK из 21 отчёта.
 
-Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `c42a86b`.
+Все 6 пунктов исходного бэклога закрыты + 4 доп. + аудит Ozon. Последний коммит `3122a1c`.
 
 **Чат 2026-08-12 (GUI-проверка фиксов Ozon + auto-fill SKU):**
 - **Аудит code-path GUI vs CLI**: все 5 фиксов (A/B/C/marked/warehouse) в shared-коде
@@ -728,11 +728,16 @@ cargo build --release -p mdwf-gui -p mdwf-cli
   665 отправлений → 2300 строк начислений. Теперь работает без `--posting-numbers`.
 - **Вкладка «Журнал»** (коммит `0f19b90`): была заглушкой → лента событий (выгрузки/
   ошибки/запуски расписаний), cap 500, кнопка «Очистить». `UiEvent::Log(LogEntry)`.
-- **Вкладка «Планировщик»** (коммит `c42a86b`): была заглушкой → полный cron-планировщик.
-  CRUD расписаний, вкл/выкл, «выполнить сейчас», автозапуск с ОС. Фоновый `Runner::run_loop`
-  (стартует в `App::new` при `enabled_on_start`) выполняет наступившие расписания, пока GUI
-  открыт. `GuiJobExecutor` переиспользует `do_download` (персистит + каталог + лог), применяет
-  `period_offset` (CLI игнорировал). Фикс `max_parallel_jobs` (RunningGuard). `set_schedule_enabled`.
+- **Вкладка «Планировщик»** (коммиты `c42a86b`, `3122a1c`): была заглушкой → полный cron-планировщик.
+  CRUD расписаний, вкл/выкл, «выполнить сейчас», автозапуск с ОС + **Windows Task Scheduler**.
+  Фоновый `Runner::run_loop` (в `App::new` при `enabled_on_start`) — когда GUI открыт.
+  **Windows Task Scheduler** (гибрид): один системный таск `MDWF_Scheduler` каждые 5 мин
+  запускает CLI `mdwf schedule run` → работает без GUI, переживает логаут. `GuiJobExecutor`
+  переиспользует `do_download` (персистит + каталог + лог), применяет `period_offset`.
+  **Защита от двойного** (in-process ∩ Windows-таск): `Catalog::claim_schedule` — атомарный
+  bump `next_run_at`; кто первый забрал, тот выполняет. `run_due_schedules` теперь due-check
+  (раньше гонял все включённые). Фикс `max_parallel_jobs` (RunningGuard). `wintasks.rs`
+  (schtasks.exe, disable через Query pre-check — cp866-вывод не парсится).
 - **Клик-тест GUI**: пользователь прогоняет 15 отчётов через GUI вручную (инструкции
   выданы). Результаты ожидаются.
 
