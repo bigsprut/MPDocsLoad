@@ -30,11 +30,13 @@ thread_local! {
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
     static W_PROFILE_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
     static W_REPORT_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
-    /// Диапазон дат фильтра архива [from, to] ("YYYY-MM-DD") из виджета интервала.
+    /// Диапазон дат фильтра архива [from, to] ("YYYY-MM-DD"). Источник — поля
+    /// «С:…По:» (их заполняет виджет интервала или пользователь вручную/календарём).
     /// None = без фильтра по дате (все записи). Заменяет бывшие month/year combos.
     static DATE_RANGE: Rc<RefCell<Option<(String, String)>>> = Rc::new(RefCell::new(None));
-    /// Лейбл отображения текущего интервала (или «(все даты)»).
-    static W_DATE_LABEL: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
+    /// Поля произвольного интервала дат (source of truth для DATE_RANGE).
+    static W_DATE_FROM: Rc<RefCell<Option<gtk4::Entry>>> = Rc::new(RefCell::new(None));
+    static W_DATE_TO: Rc<RefCell<Option<gtk4::Entry>>> = Rc::new(RefCell::new(None));
     static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     /// Карта: отображаемое имя профиля → имя (уникальный ключ в БД).
@@ -108,43 +110,67 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     filters.append(&Label::new(Some("Отчёт:")));
     filters.append(&report_combo);
 
-    // Виджет интервала дат (неделя/месяц/квартал/год) — заменяет бывшие month/year
-    // combos. Фильтр архива: отчёт попадает, если дата его НАЧАЛА или КОНЦА внутри
-    // выбранного интервала (см. Catalog::list_downloads_filtered).
+    // Фильтр по дате — ДВА способа задать интервал (единый источник правды —
+    // поля «С:…—…По:» + DATE_RANGE):
+    //   1) «📅 Интервал» — стандартный интервал (неделя/месяц/квартал/год);
+    //   2) произвольный интервал: поля date_from/date_to + календари.
+    // Выбор стандартного интервала заполняет поля; правка полей обновляет фильтр.
+    // Совпадение: дата НАЧАЛА или КОНЦА отчёта внутри интервала
+    // (см. Catalog::list_downloads_filtered).
+    let date_from = gtk4::Entry::builder()
+        .placeholder_text("с YYYY-MM-DD")
+        .width_chars(11)
+        .tooltip_text("Начало интервала отбора (дата начала/конца отчёта попадает сюда)")
+        .build();
+    let date_to = gtk4::Entry::builder()
+        .placeholder_text("по YYYY-MM-DD")
+        .width_chars(11)
+        .tooltip_text("Конец интервала отбора")
+        .build();
+
     let interval_btn = gtk4::MenuButton::builder()
         .label("📅 Интервал")
-        .tooltip_text("Фильтр по дате: неделя / месяц / квартал / год")
+        .tooltip_text("Стандартный интервал: неделя / месяц / квартал / год (заполнит поля ниже)")
         .build();
     let interval_popover = gtk4::Popover::new();
     {
         let pop = interval_popover.clone();
+        let df = date_from.clone();
+        let dt = date_to.clone();
         let picker = crate::widgets::interval_picker::make_interval_picker(move |f: &str, t: &str| {
-            DATE_RANGE.with(|d| *d.borrow_mut() = Some((f.to_string(), t.to_string())));
-            update_date_label();
+            // Пишем в поля — их connect_changed обновит DATE_RANGE/лейбл/автосейв.
+            df.set_text(f);
+            dt.set_text(t);
             pop.popdown();
-            schedule_save();
+            // Автоприменение при выборе стандартного интервала.
             send_list_archive(selected_profile(), selected_report());
         });
         interval_popover.set_child(Some(&picker));
     }
     interval_btn.set_popover(Some(&interval_popover));
 
-    let date_label = Label::builder()
-        .label("(все даты)")
-        .tooltip_text("Отчёт попадает в фильтр, если дата его начала ИЛИ конца входит в интервал")
-        .build();
     let reset_btn = Button::builder()
         .label("✕ Дата")
         .tooltip_text("Сбросить фильтр даты (показать все)")
         .build();
     reset_btn.connect_clicked(move |_| {
-        DATE_RANGE.with(|d| *d.borrow_mut() = None);
-        update_date_label();
-        schedule_save();
+        // Очистка полей → connect_changed выставит DATE_RANGE=None.
+        if let Some(e) = W_DATE_FROM.with(|w| w.borrow().clone()) {
+            e.set_text("");
+        }
+        if let Some(e) = W_DATE_TO.with(|w| w.borrow().clone()) {
+            e.set_text("");
+        }
         send_list_archive(selected_profile(), selected_report());
     });
+
     filters.append(&interval_btn);
-    filters.append(&date_label);
+    filters.append(&Label::new(Some("С:")));
+    filters.append(&date_from);
+    filters.append(&super::make_date_picker(&date_from, "%Y-%m-%d"));
+    filters.append(&Label::new(Some("—")));
+    filters.append(&date_to);
+    filters.append(&super::make_date_picker(&date_to, "%Y-%m-%d"));
     filters.append(&reset_btn);
 
     let apply_btn = Button::builder()
@@ -178,9 +204,22 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
     W_PROFILE_COMBO.with(|w| *w.borrow_mut() = Some(profile_combo.clone()));
     W_REPORT_COMBO.with(|w| *w.borrow_mut() = Some(report_combo.clone()));
-    W_DATE_LABEL.with(|w| *w.borrow_mut() = Some(date_label));
+    W_DATE_FROM.with(|w| *w.borrow_mut() = Some(date_from.clone()));
+    W_DATE_TO.with(|w| *w.borrow_mut() = Some(date_to.clone()));
     W_LIST.with(|w| *w.borrow_mut() = Some(list_box));
     W_RESULT.with(|w| *w.borrow_mut() = Some(result_label));
+
+    // Правка полей дат (вручную или календарём) → пересобираем DATE_RANGE.
+    // Валидная пара [from ≤ to] → Some; иначе (пусто/невалидно) → None (все даты).
+    // Запрос НЕ шлём — пользователь жмёт «🔍 Применить» (или сбрасывает «✕ Дата»).
+    {
+        let update = |e: &gtk4::Entry| {
+            let _ = e;
+            sync_date_range_from_entries();
+        };
+        date_from.connect_changed(move |e| update(e));
+        date_to.connect_changed(move |e| update(e));
+    }
 
     // «Применить»: собираем фильтры и шлём запрос каталога.
     {
@@ -299,10 +338,15 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
                     }
                 }
             }
-            // Диапазон дат (интервальный фильтр) — восстанавливаем из сохранённого.
-            if let Some(dr) = &st.date_range {
-                DATE_RANGE.with(|d| *d.borrow_mut() = Some(dr.clone()));
-                update_date_label();
+            // Диапазон дат (интервальный фильтр) — восстанавливаем в ПОЛЯ «С:…По:»;
+            // их connect_changed пересоберёт DATE_RANGE (автосейв блокирован RESTORING).
+            if let Some((f, t)) = &st.date_range {
+                if let Some(e) = W_DATE_FROM.with(|w| w.borrow().clone()) {
+                    e.set_text(f);
+                }
+                if let Some(e) = W_DATE_TO.with(|w| w.borrow().clone()) {
+                    e.set_text(t);
+                }
             }
             // Применяем восстановленный фильтр к списку.
             send_list_archive(st.profile_name.clone(), st.report_type.clone());
@@ -519,25 +563,29 @@ fn selected_report() -> Option<String> {
 }
 
 /// Возвращает выбранный диапазон дат фильтра `[from, to]` (None = без фильтра по
-/// дате). Берётся из виджета интервала (DATE_RANGE).
+/// дате). Берётся из DATE_RANGE (синхронизируется с полями «С:…По:»).
 fn selected_date_range() -> Option<(String, String)> {
     DATE_RANGE.with(|d| d.borrow().clone())
 }
 
-/// Обновляет лейбл текущего интервала: «YYYY-MM-DD…YYYY-MM-DD» или «(все даты)».
-fn update_date_label() {
-    W_DATE_LABEL.with(|w| {
-        if let Some(l) = w.borrow().as_ref() {
-            let text = DATE_RANGE.with(|d| {
-                d.borrow()
-                    .as_ref()
-                    .map_or("(все даты)".to_string(), |(f, t)| {
-                        if f == t { f.clone() } else { format!("{f}…{t}") }
-                    })
-            });
-            l.set_text(&text);
-        }
-    });
+/// Пересобирает DATE_RANGE из текущих значений полей «С:…По:».
+/// Валидная пара дат (from ≤ to) → Some; пусто/невалидно → None (все даты).
+/// Также автосохраняет состояние фильтров.
+fn sync_date_range_from_entries() {
+    let from = W_DATE_FROM.with(|w| w.borrow().as_ref().map(|e| e.text().to_string()));
+    let to = W_DATE_TO.with(|w| w.borrow().as_ref().map(|e| e.text().to_string()));
+    let range = match (from, to) {
+        (Some(f), Some(t)) => match (
+            chrono::NaiveDate::parse_from_str(&f, "%Y-%m-%d"),
+            chrono::NaiveDate::parse_from_str(&t, "%Y-%m-%d"),
+        ) {
+            (Ok(fd), Ok(td)) if fd <= td => Some((f, t)),
+            _ => None,
+        },
+        _ => None,
+    };
+    DATE_RANGE.with(|d| *d.borrow_mut() = range);
+    schedule_save();
 }
 
 /// Локальный статус вкладки (пишет в W_RESULT лейбл).
