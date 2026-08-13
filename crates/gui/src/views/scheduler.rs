@@ -152,8 +152,8 @@ fn build_add_form() -> gtk4::Box {
     for step in [
         "1) Во вкладке «Магазин» выберите магазин и профиль — новое расписание создаётся для активного магазина.",
         "2) Задайте имя (любое, по нему расписание будет в списке) и выберите отчёт.",
-        "3) Укажите период: 0 — текущий месяц, −1 — прошлый (обычно нужно: отчёты готовы через несколько дней после конца месяца).",
-        "4) Задайте расписание: нажмите один из пресетов (Ежемесячно/Ежедневно/Еженедельно) или впишите cron вручную.",
+        "3) Нажмите кнопку «Когда…» и в понятном диалоге выберите частоту, день и время (там же — за какой месяц выгружать).",
+        "4) Проверьте, что на кнопке написано то, что нужно (например «1-го числа каждого месяца, 02:00»).",
         "5) Нажмите «Добавить расписание». Готово — в срок оно выполнится само (пока программа запущена или включён фоновый планировщик ниже).",
     ] {
         frame.append(&Label::builder()
@@ -181,33 +181,49 @@ fn build_add_form() -> gtk4::Box {
         .build();
     W_NAME.with(|w| *w.borrow_mut() = Some(name.clone()));
 
-    let cron = Entry::builder()
-        .placeholder_text("cron: мин час день мес день_недели")
-        .text("0 2 1 * *")
-        .tooltip_text("Когда выполнять. 5 полей: минута час день_месяца месяц день_недели (0=вс, 1=пн). Звёздочка «*» = «каждый»")
-        .build();
+    // --- «Когда выполнять» — понятный диалог вместо ввода cron-цифр вручную ---
+    // W_CRON остаётся источником значения для add_schedule(), но поле скрыто:
+    // значение задаётся диалогом (частота + день + время) и показывается
+    // человеческим текстом на кнопке.
+    let cron = Entry::builder().text("0 2 1 * *").build();
+    cron.set_visible(false);
     W_CRON.with(|w| *w.borrow_mut() = Some(cron.clone()));
 
-    let presets = gtk4::Box::new(Orientation::Horizontal, 6);
-    presets.set_tooltip_text(Some("Готовые варианты — нажми, и cron заполнится сам"));
-    for (label, expr) in [
-        ("Ежемесячно (1-го, 02:00)", "0 2 1 * *"),
-        ("Ежедневно (09:00)", "0 9 * * *"),
-        ("Еженедельно (пн, 09:00)", "0 9 * * 1"),
-    ] {
-        let b = Button::with_label(label);
-        let expr_owned = expr.to_string();
-        b.connect_clicked(clone!(@weak cron => move |_| cron.set_text(&expr_owned)));
-        presets.append(&b);
+    let when_btn = Button::with_label(&describe_cron("0 2 1 * *"));
+    when_btn.set_tooltip_text(Some(
+        "Нажмите, чтобы настроить расписание: частота, день и время — без ввода cron вручную",
+    ));
+    {
+        let btn = when_btn.clone();
+        cron.connect_changed(move |e| btn.set_label(&describe_cron(&e.text())));
     }
+    when_btn.connect_clicked(|_| show_when_dialog());
 
-    let period = Entry::builder()
-        .placeholder_text("Смещение периода в месяцах (-1 = прошлый месяц)")
-        .text("-1")
-        .width_chars(6)
-        .tooltip_text("За какой месяц выгружать отчёт: 0 — текущий, −1 — прошлый, −2 — позапрошлый")
-        .build();
+    // --- Период — combo с понятными названиями (вместо ввода «-1») ---
+    let period = Entry::builder().text("-1").build();
+    period.set_visible(false);
     W_PERIOD.with(|w| *w.borrow_mut() = Some(period.clone()));
+
+    let period_combo = ComboBoxText::new();
+    period_combo.set_tooltip_text(Some(
+        "За какой месяц выгружать отчёт. Обычно нужен «Прошлый месяц» — отчёты за месяц готовы в первых числах следующего",
+    ));
+    for (label, val) in [
+        ("Прошлый месяц (обычно)", "-1"),
+        ("Текущий месяц", "0"),
+        ("Позапрошлый месяц", "-2"),
+    ] {
+        period_combo.append(Some(val), label);
+    }
+    period_combo.set_active_id(Some("-1"));
+    {
+        let p = period.clone();
+        period_combo.connect_changed(move |c| {
+            if let Some(id) = c.active_id() {
+                p.set_text(&id);
+            }
+        });
+    }
 
     let add_btn = Button::with_label("Добавить расписание");
     add_btn.add_css_class("suggested-action");
@@ -216,11 +232,9 @@ fn build_add_form() -> gtk4::Box {
 
     frame.append(&field_row("Имя:", &name));
     frame.append(&field_row("Отчёт:", &report));
-    frame.append(&field_row("Cron:", &cron));
-    frame.append(&presets);
-    // Расшифровка полей cron + примеры.
+    frame.append(&field_row("Когда:", &when_btn));
     frame.append(&Label::builder()
-        .label("Cron — 5 полей через пробел:  минута  час  день_месяца  месяц  день_недели (0=вс).  «*» = каждый.\nПримеры:  «0 2 1 * *» — 1-го числа в 02:00;  «0 9 * * 1» — по понедельникам в 09:00;  «0 9 15 * *» — 15-го числа в 09:00;  «30 5 * * *» — ежедневно в 05:30")
+        .label("Нажмите «Когда…» и выберите частоту, день и время — расписание соберётся само.")
         .wrap(true)
         .xalign(0.0)
         .halign(Align::Start)
@@ -228,10 +242,9 @@ fn build_add_form() -> gtk4::Box {
         .margin_start(8)
         .css_classes(["dim-label"])
         .build());
-    frame.append(&field_row("Период:", &period));
-    // Пояснение смещения периода.
+    frame.append(&field_row("Период:", &period_combo));
     frame.append(&Label::builder()
-        .label("Период — за какой месяц выгружать отчёт (в месяцах относительно текущего):  0 — текущий;  −1 — прошлый (обычно так: отчёты за месяц готовы в первых числах следующего);  −2 — позапрошлый")
+        .label("Период — за какой месяц выгружать отчёт. «Прошлый месяц» — стандартный выбор: отчёты за месяц готовы в начале следующего.")
         .wrap(true)
         .xalign(0.0)
         .halign(Align::Start)
@@ -241,6 +254,197 @@ fn build_add_form() -> gtk4::Box {
         .build());
     frame.append(&add_btn);
     frame
+}
+
+/// Человекочитаемое описание cron-выражения (для кнопки «Когда…»).
+fn describe_cron(cron: &str) -> String {
+    let f: Vec<&str> = cron.split_whitespace().collect();
+    if f.len() == 5 {
+        let (min, hour, dom, _mon, dow) = (f[0], f[1], f[2], f[3], f[4]);
+        let time = format!("{hour:0>2}:{min:0>2}");
+        if dom != "*" && dow == "*" {
+            return format!("{dom}-го числа каждого месяца, {time}");
+        }
+        if dom == "*" && dow != "*" {
+            let day = match dow {
+                "0" | "7" => "воскресеньям",
+                "1" => "понедельникам",
+                "2" => "вторникам",
+                "3" => "средам",
+                "4" => "четвергам",
+                "5" => "пятницам",
+                "6" => "субботам",
+                _ => return format!("по cron «{cron}»"),
+            };
+            return format!("по {day}, {time}");
+        }
+        if dom == "*" && dow == "*" {
+            return format!("ежедневно, {time}");
+        }
+    }
+    format!("по cron «{cron}»")
+}
+
+/// Диалог настройки расписания с понятными названиями вместо ввода cron-цифр.
+/// Частота (ежемесячно/еженедельно/ежедневно) + день + время → собирает cron
+/// и записывает в скрытые W_CRON (и период — в W_PERIOD).
+fn show_when_dialog() {
+    let cur_cron = W_CRON
+        .with(|w| w.borrow().as_ref().map(|e| e.text().to_string()))
+        .unwrap_or_else(|| "0 2 1 * *".into());
+    let cur_period = W_PERIOD
+        .with(|w| w.borrow().as_ref().map(|e| e.text().to_string()))
+        .unwrap_or_else(|| "-1".into());
+
+    let dlg = gtk4::Dialog::builder()
+        .title("Когда выполнять расписание")
+        .modal(true)
+        .default_width(420)
+        .build();
+    let content = dlg.content_area();
+    let col = gtk4::Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(10)
+        .margin_top(16)
+        .margin_bottom(8)
+        .margin_start(16)
+        .margin_end(16)
+        .build();
+
+    // Разбор текущего cron → начальное состояние контролов (best-effort).
+    let f: Vec<&str> = cur_cron.split_whitespace().collect();
+    let (mut min, mut hour, mut dom, mut dow) = (0u32, 2u32, 1u32, 1u32);
+    let mut freq_idx = 0usize; // 0 ежемесячно, 1 еженедельно, 2 ежедневно
+    if f.len() == 5 {
+        min = f[0].parse().unwrap_or(0);
+        hour = f[1].parse().unwrap_or(2);
+        if f[2] != "*" && f[4] == "*" {
+            freq_idx = 0;
+            dom = f[2].parse().unwrap_or(1);
+        } else if f[2] == "*" && f[4] != "*" {
+            freq_idx = 1;
+            dow = f[4].parse().unwrap_or(1);
+        } else {
+            freq_idx = 2;
+        }
+    }
+
+    // Частота.
+    let freq = ComboBoxText::new();
+    for t in ["Ежемесячно", "Еженедельно", "Ежедневно"] {
+        freq.append_text(t);
+    }
+    freq.set_active(Some(freq_idx as u32));
+    freq.set_tooltip_text(Some("Как часто выполнять выгрузку"));
+    col.append(&field_row("Как часто:", &freq));
+
+    // День месяца (для «Ежемесячно»).
+    let dom_spin = gtk4::SpinButton::with_range(1.0, 28.0, 1.0);
+    dom_spin.set_value(f64::from(dom));
+    dom_spin.set_tooltip_text(Some("Число месяца (1–28, одинаково для всех месяцев)"));
+    let dom_row = field_row("Какого числа:", &dom_spin);
+
+    // День недели (для «Еженедельно»).
+    let dow_combo = ComboBoxText::new();
+    let days = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
+    for (i, t) in days.iter().enumerate()
+    {
+        dow_combo.append(Some(&(i + 1).to_string()), t);
+    }
+    dow_combo.set_active_id(Some(&dow.clamp(1, 7).to_string()));
+    let dow_row = field_row("В какой день:", &dow_combo);
+
+    // Время.
+    let time_box = gtk4::Box::new(Orientation::Horizontal, 6);
+    let hour_spin = gtk4::SpinButton::with_range(0.0, 23.0, 1.0);
+    hour_spin.set_value(f64::from(hour));
+    hour_spin.set_tooltip_text(Some("Час (0–23)"));
+    let min_spin = gtk4::SpinButton::with_range(0.0, 59.0, 1.0);
+    min_spin.set_value(f64::from(min));
+    min_spin.set_tooltip_text(Some("Минуты (0–59)"));
+    time_box.append(&Label::new(Some("в")));
+    time_box.append(&hour_spin);
+    time_box.append(&Label::new(Some(":")));
+    time_box.append(&min_spin);
+    let time_row = field_row("Во сколько:", &time_box);
+
+    // Период (тоже переносим в диалог — всё расписание в одном месте).
+    let period_combo = ComboBoxText::new();
+    for (id, t) in [
+        ("-1", "за прошлый месяц (обычно)"),
+        ("0", "за текущий месяц"),
+        ("-2", "за позапрошлый месяц"),
+    ] {
+        period_combo.append(Some(id), t);
+    }
+    period_combo.set_active_id(Some(if cur_period == "0" {
+        "0"
+    } else if cur_period == "-2" {
+        "-2"
+    } else {
+        "-1"
+    }));
+    period_combo.set_tooltip_text(Some("За какой месяц выгружать отчёт"));
+    let period_row = field_row("Выгружать:", &period_combo);
+
+    col.append(&dom_row);
+    col.append(&dow_row);
+    col.append(&time_row);
+    col.append(&period_row);
+
+    // Видимость день-строк — по частоте.
+    {
+        let dom_r = dom_row.clone();
+        let dow_r = dow_row.clone();
+        let apply = move |idx: Option<u32>| match idx {
+            Some(0) => {
+                dom_r.set_visible(true);
+                dow_r.set_visible(false);
+            }
+            Some(1) => {
+                dom_r.set_visible(false);
+                dow_r.set_visible(true);
+            }
+            _ => {
+                dom_r.set_visible(false);
+                dow_r.set_visible(false);
+            }
+        };
+        apply(Some(freq_idx as u32)); // начальное состояние
+        freq.connect_changed(move |c| apply(c.active()));
+    }
+
+    content.append(&col);
+    dlg.add_button("Отмена", gtk4::ResponseType::Cancel);
+    dlg.add_button("Применить", gtk4::ResponseType::Accept);
+
+    dlg.connect_response(move |d, resp| {
+        if resp == gtk4::ResponseType::Accept {
+            let (h, m) = (hour_spin.value() as i32, min_spin.value() as i32);
+            let cron_text = match freq.active() {
+                Some(0) => format!("{m} {h} {} * *", dom_spin.value() as i32),
+                Some(1) => {
+                    let dow_id = dow_combo.active_id().unwrap_or_else(|| "1".into());
+                    format!("{m} {h} * * {dow_id}")
+                }
+                _ => format!("{m} {h} * * *"),
+            };
+            W_CRON.with(|w| {
+                if let Some(e) = w.borrow().as_ref() {
+                    e.set_text(&cron_text);
+                }
+            });
+            if let Some(pid) = period_combo.active_id() {
+                W_PERIOD.with(|w| {
+                    if let Some(e) = w.borrow().as_ref() {
+                        e.set_text(&pid);
+                    }
+                });
+            }
+        }
+        d.destroy();
+    });
+    dlg.show();
 }
 
 fn field_row(label: &str, widget: &impl IsA<gtk4::Widget>) -> gtk4::Box {
@@ -470,7 +674,7 @@ const SCHEDULER_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::B(&[
         "Имя — произвольное, чтобы отличать в списке.",
         "Отчёт — что выгружать (берётся из активного магазина).",
-        "Cron — когда: «мин час день месяц день_недели», «*» = каждый. Пресеты заполняют сами.",
+        "Когда — кнопка «Когда…»: частота (ежемесячно/еженедельно/ежедневно), день и время; техническое cron-выражение собирается само.",
         "Период — за какой месяц: 0 — текущий, −1 — прошлый (обычно так), −2 — позапрошлый.",
     ]),
     crate::widgets::tab_help::HelpBlock::H("Управление"),
