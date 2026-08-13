@@ -860,7 +860,7 @@ async fn list_documents(
     report
         .list(auth.as_ref(), &filter, progress, cancel)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| friendly_error(&e))
 }
 
 /// Сериализуемая мета выбранного документа: передаётся в провайдер через
@@ -875,6 +875,35 @@ struct DocMetaItem {
     extension: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     date: Option<String>,
+}
+
+/// Перевод ошибки API (`CoreError` от вызовов провайдера — list/download) в
+/// человекочитаемое сообщение с подсказкой, что делать. Вместо «HTTP 401»
+/// пользователь видит причину и путь восстановления. Применяется в `do_list_*`
+/// и `do_download` — покрывает и UI (notify), и Журнал (текст ошибки идёт туда же).
+fn friendly_error(e: &mdwf_core::CoreError) -> String {
+    if e.is_auth_failure() {
+        return format!(
+            "{e}\n\nПричина: ключ или токен недействителен (истёк или отозван). \
+             Перевыпустите его в личном кабинете маркетплейса и обновите профиль \
+             во вкладке «Магазин»."
+        );
+    }
+    if e.is_rate_limited() {
+        return format!(
+            "{e}\n\nПричина: превышен лимит запросов маркетплейса. Подождите 1–2 минуты и повторите."
+        );
+    }
+    if matches!(e, mdwf_core::CoreError::Network(_)) {
+        return format!(
+            "{e}\n\nПричина: нет связи с маркетплейсом. Проверьте подключение к интернету и повторите."
+        );
+    }
+    if e.is_transient() {
+        // 5xx — сбой на стороне маркетплейса (Network уже обработан выше).
+        return format!("{e}\n\nПричина: временный сбой на стороне маркетплейса. Попробуйте позже.");
+    }
+    e.to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -939,7 +968,7 @@ async fn do_download(
     let files = report
         .download(auth.as_ref(), &params, progress, cancel)
         .await
-        .map_err(|e| e.to_string());
+        .map_err(|e| friendly_error(&e));
 
     fwd.forward(UiEvent::Progress {
         fraction: Some(0.9),
