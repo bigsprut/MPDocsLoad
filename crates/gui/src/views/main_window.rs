@@ -42,6 +42,7 @@ pub fn build_and_present(
     let settings_view = crate::views::settings::build(cs);
     let scheduler_view = crate::views::scheduler::build(cs);
     let logs_view = crate::views::logs::build(cs);
+    let help_view = crate::views::help::build();
     let about_view = crate::views::about::build();
 
     stack.add_titled(&shop_view, Some(ViewId::Shop.as_str()), "Магазин");
@@ -51,6 +52,7 @@ pub fn build_and_present(
     stack.add_titled(&settings_view, Some(ViewId::Settings.as_str()), "Настройки");
     stack.add_titled(&scheduler_view, Some(ViewId::Scheduler.as_str()), "Планировщик");
     stack.add_titled(&logs_view, Some(ViewId::Logs.as_str()), "Журнал");
+    stack.add_titled(&help_view, Some(ViewId::Help.as_str()), "Справка");
     stack.add_titled(&about_view, Some(ViewId::About.as_str()), "О программе");
 
     // Боковая навигация через StackSidebar.
@@ -104,8 +106,9 @@ pub fn build_and_present(
     title_box.append(&title_label);
     header.set_title_widget(Some(&title_box));
 
-    // Меню «Приложение»: пункты «О программе» + «Выход».
+    // Меню «Приложение»: пункты «Справка» + «О программе» + «Выход».
     let menu = gtk4::gio::Menu::new();
+    menu.append(Some("Справка"), Some("app.help"));
     menu.append(Some("О программе"), Some("app.about"));
     menu.append(Some("Выход"), Some("app.quit"));
     let menu_btn = gtk4::MenuButton::builder()
@@ -167,17 +170,33 @@ fn setup_app_actions(app: &adw::Application, window: &adw::ApplicationWindow) {
         }
     });
     app.add_action(&about_action);
+
+    // Действие «help»: показываем вкладку «Справка». Горячая клавиша F1.
+    let help_action = gtk4::gio::SimpleAction::new("help", None);
+    help_action.connect_activate({
+        let win = window.clone();
+        move |_, _| {
+            show_view_in_window(&win, ViewId::Help);
+        }
+    });
+    app.add_action(&help_action);
+    app.set_accels_for_action("app.help", &["F1"]);
 }
 
 /// Находит стек в окне и переключает на вкладку «О программе».
 fn show_about_in_window(win: &adw::ApplicationWindow) {
+    show_view_in_window(win, ViewId::About);
+}
+
+/// Находит стек в окне и переключает на указанную вкладку (для app-действий).
+fn show_view_in_window(win: &adw::ApplicationWindow, view: ViewId) {
     // Идём от content (ToolbarView) -> content (GtkBox) -> stack.
     let Some(content) = win.content() else {
         return;
     };
     // Рекурсивный поиск Stack среди детей.
     if let Some(stack) = find_stack(&content) {
-        stack.set_visible_child_name(ViewId::About.as_str());
+        stack.set_visible_child_name(view.as_str());
     }
 }
 

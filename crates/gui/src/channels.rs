@@ -25,6 +25,8 @@ pub enum ViewId {
     Settings,
     Scheduler,
     Logs,
+    /// Справка/помощь для пользователя (инструкции по работе с программой).
+    Help,
     About,
 }
 
@@ -39,6 +41,7 @@ impl ViewId {
             Self::Settings => "settings",
             Self::Scheduler => "scheduler",
             Self::Logs => "logs",
+            Self::Help => "help",
             Self::About => "about",
         }
     }

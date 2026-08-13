@@ -3,6 +3,7 @@
 pub mod about;
 pub mod archive;
 pub mod download;
+pub mod help;
 pub mod logs;
 pub mod main_window;
 pub mod reports;
