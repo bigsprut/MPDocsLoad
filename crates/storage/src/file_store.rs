@@ -121,11 +121,11 @@ impl FileStore {
             FolderStructure::Flat => base,
             FolderStructure::ByProviderPeriod => base
                 .join(ctx.provider_id)
-                .join(ctx.period.unwrap_or("nop")),
+                .join(year_folder(ctx.period)),
             FolderStructure::ByProviderProfilePeriod => base
                 .join(ctx.provider_id)
                 .join(ctx.profile_name)
-                .join(ctx.period.unwrap_or("nop")),
+                .join(year_folder(ctx.period)),
         }
     }
 
@@ -138,6 +138,17 @@ impl FileStore {
     #[must_use]
     pub fn default_db_path(data_dir: &Path) -> PathBuf {
         data_dir.join("mdwf.db")
+    }
+}
+
+/// Подпапка-период для структуры каталогов: ГОД («2026»), а не месяц.
+/// Извлекается из периода/даты («2026-07» / «2026-07-15» → «2026»);
+/// не-датная строка используется как есть; отсутствие периода → «nop».
+fn year_folder(period: Option<&str>) -> &str {
+    match period {
+        Some(p) if p.len() >= 4 && p.as_bytes()[..4].iter().all(u8::is_ascii_digit) => &p[..4],
+        Some(p) => p,
+        None => "nop",
     }
 }
 
@@ -187,9 +198,20 @@ mod tests {
         let file = store.save(data, &ctx).unwrap();
         assert_eq!(file.extension, "csv");
         assert!(file.sha256.is_some());
-        // Структура ByProviderPeriod по умолчанию
-        let expected_path = dir.join("ozon").join("2026-06").join("ozon_Ozon-1_realization_2026-06.csv");
+        // Структура ByProviderPeriod по умолчанию; подпапка — ГОД периода
+        // («2026-06» → «2026»), файл содержит полный период в имени.
+        let expected_path = dir.join("ozon").join("2026").join("ozon_Ozon-1_realization_2026-06.csv");
         assert!(expected_path.exists(), "expected file at {expected_path:?}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn year_folder_extracts_year() {
+        assert_eq!(year_folder(Some("2026-06")), "2026");
+        assert_eq!(year_folder(Some("2026-07-15")), "2026");
+        assert_eq!(year_folder(Some("2026")), "2026");
+        // Не-датная строка — как есть (явный подпаталог из конфига).
+        assert_eq!(year_folder(Some("custom")), "custom");
+        assert_eq!(year_folder(None), "nop");
     }
 }

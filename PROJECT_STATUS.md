@@ -49,7 +49,7 @@ crates/
 
 **Данные приложения (общие для GUI и CLI):**
 - Конфиг/БД: `C:\Users\MAN-MADE\AppData\Roaming\mdwf\` (config.toml, mdwf.db)
-- Файлы: `C:\Users\MAN-MADE\Documents\MDWF\downloads\{provider}\{period}\` (в config.toml — `D:\work\Learn\ZCode\MPDocsLoad\MDWF\downloads`)
+- Файлы: `C:\Users\MAN-MADE\Documents\MDWF\downloads\{provider}\{год}\` — подпапка **год** периода («2026-07»/«2026-07-15» → «2026»; file_store.rs::year_folder). Полный период остаётся в имени файла (`{period}` в шаблоне). Старые файлы в месячных папках НЕ переносятся — пути в БД указывают туда и продолжают работать. (в config.toml — `D:\work\Learn\ZCode\MPDocsLoad\MDWF\downloads`)
 
 ---
 
