@@ -285,6 +285,34 @@ fn describe_cron(cron: &str) -> String {
     format!("по cron «{cron}»")
 }
 
+/// Человекочитаемое описание периода выгрузки (period_offset → текст).
+/// offset = смещение относительно текущего месяца: 0 — текущий, −1 — прошлый и т.д.
+/// (значения задаёт диалог «Когда…»; здесь — только отображение).
+fn describe_period(offset: i32) -> String {
+    match offset {
+        0 => "за текущий месяц".into(),
+        -1 => "за прошлый месяц".into(),
+        -2 => "за позапрошлый месяц".into(),
+        n if n < 0 => format!("за {} мес. назад", -n),
+        n => format!("со смещением периода +{n}"),
+    }
+}
+
+/// Человекочитаемое описание расписания целиком для строки списка:
+/// ЧТО выгружать (отчёт), ЗА КАКОЙ ПЕРИОД (смещение месяца) и КОГДА (cron → текст).
+fn describe_schedule(s: &ScheduleView) -> String {
+    let what = if s.report_names.is_empty() {
+        "(отчёт не задан)".to_string()
+    } else if s.report_names.len() == 1 {
+        format!("«{}»", s.report_names[0])
+    } else {
+        s.report_names.join(", ")
+    };
+    let how = describe_period(s.period_offset);
+    let when = describe_cron(&s.cron_expr);
+    format!("Выгружать {what} ({how}), {when}")
+}
+
 /// Диалог настройки расписания с понятными названиями вместо ввода cron-цифр.
 /// Частота (ежемесячно/еженедельно/ежедневно) + день + время → собирает cron
 /// и записывает в скрытые W_CRON (и период — в W_PERIOD).
@@ -571,53 +599,28 @@ pub fn on_win_scheduler_changed(result: &Result<bool, String>) {
     RESTORING.with(|r| *r.borrow_mut() = false);
 }
 
-/// Строка расписания.
+/// Строка расписания — карточка с человекочитаемым описанием
+/// (что выгружать / за какой период / когда). Сырое cron-выражение и прочие
+/// технические детали вынесены в отдельную приглушённую строку для справки.
 fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     let row = gtk4::ListBoxRow::builder().selectable(false).activatable(false).build();
-    let box_ = gtk4::Box::new(Orientation::Horizontal, 12);
-    box_.set_margin_start(8);
-    box_.set_margin_end(8);
-    box_.set_margin_top(6);
-    box_.set_margin_bottom(6);
+    let card = gtk4::Box::new(Orientation::Vertical, 5);
+    card.set_margin_start(10);
+    card.set_margin_end(10);
+    card.set_margin_top(8);
+    card.set_margin_bottom(8);
 
+    // --- Верх: имя расписания + действия (вкл / выполнить / удалить) ---
+    let top = gtk4::Box::new(Orientation::Horizontal, 10);
     let name = Label::builder()
         .label(&s.name)
         .css_classes(["heading"])
-        .width_chars(14)
         .xalign(0.0)
-        .build();
-    let prof = Label::builder()
-        .label(&s.profile_name)
-        .width_chars(12)
-        .xalign(0.0)
+        .hexpand(true)
+        .halign(Align::Start)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
-    let reports = Label::builder()
-        .label(s.report_names.join(", "))
-        .width_chars(20)
-        .xalign(0.0)
-        .ellipsize(gtk4::pango::EllipsizeMode::End)
-        .tooltip_text(s.reports.join(", "))
-        .build();
-    let cron = Label::builder()
-        .label(&s.cron_expr)
-        .css_classes(["monospace"])
-        .width_chars(13)
-        .xalign(0.0)
-        .build();
-    let next = Label::builder()
-        .label(s.next_run_at.as_deref().unwrap_or("—"))
-        .css_classes(["dim-label"])
-        .width_chars(20)
-        .xalign(0.0)
-        .ellipsize(gtk4::pango::EllipsizeMode::End)
-        .build();
-    let status = Label::builder()
-        .label(s.last_run_status.as_deref().unwrap_or("—"))
-        .css_classes(["dim-label"])
-        .width_chars(8)
-        .xalign(0.0)
-        .build();
+    top.append(&name);
 
     let name_for_toggle = s.name.clone();
     let enabled = CheckButton::with_label("вкл");
@@ -632,6 +635,7 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
             enabled: cb.is_active(),
         });
     });
+    top.append(&enabled);
 
     let run_btn = Button::with_label("▶");
     run_btn.set_tooltip_text(Some(
@@ -643,6 +647,8 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
             cs.send(UiCommand::RunScheduleNow { name: name_for_run.clone() });
         }
     });
+    top.append(&run_btn);
+
     let del_btn = Button::with_label("🗑");
     del_btn.set_tooltip_text(Some("Удалить расписание"));
     del_btn.add_css_class("destructive-action");
@@ -652,17 +658,44 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
             cs.send(UiCommand::DeleteSchedule { name: name_for_del.clone() });
         }
     });
+    top.append(&del_btn);
+    card.append(&top);
 
-    box_.append(&name);
-    box_.append(&prof);
-    box_.append(&reports);
-    box_.append(&cron);
-    box_.append(&enabled);
-    box_.append(&next);
-    box_.append(&status);
-    box_.append(&run_btn);
-    box_.append(&del_btn);
-    row.set_child(Some(&box_));
+    // --- Главное: человекочитаемое описание (ЧТО / ЗА КАКОЙ ПЕРИОД / КОГДА) ---
+    let summary = describe_schedule(s);
+    let desc = Label::builder()
+        .label(&summary)
+        .wrap(true)
+        .xalign(0.0)
+        .halign(Align::Start)
+        .tooltip_text(format!(
+            "cron: {} | смещение периода (месяцев): {}",
+            s.cron_expr, s.period_offset
+        ))
+        .build();
+    card.append(&desc);
+
+    // --- Технические детали (приглушённые): профиль, след. запуск, статус, cron ---
+    let mut meta: Vec<String> = Vec::new();
+    meta.push(format!("Профиль: {}", s.profile_name));
+    meta.push(format!(
+        "След. запуск: {}",
+        s.next_run_at.as_deref().unwrap_or("—")
+    ));
+    if let Some(st) = s.last_run_status.as_deref() {
+        meta.push(format!("Статус: {st}"));
+    }
+    meta.push(format!("cron: {}", s.cron_expr));
+    let meta_lbl = Label::builder()
+        .label(meta.join("   •   "))
+        .css_classes(["dim-label"])
+        .wrap(true)
+        .xalign(0.0)
+        .halign(Align::Start)
+        .build();
+    card.append(&meta_lbl);
+
+    row.set_child(Some(&card));
     row
 }
 
@@ -684,3 +717,68 @@ const SCHEDULER_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::H("Автозапуск"),
     crate::widgets::tab_help::HelpBlock::T("Опции ниже («Автозапуск с Windows», «Фоновый планировщик») позволяют расписаниям выполняться без открытого окна программы."),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(name: &str, reports: &[&str], cron: &str, offset: i32) -> ScheduleView {
+        ScheduleView {
+            id: 1,
+            name: name.into(),
+            profile_id: 1,
+            profile_name: "oz_prof1".into(),
+            reports: reports.iter().map(|s| (*s).to_string()).collect(),
+            report_names: reports.iter().map(|s| (*s).to_string()).collect(),
+            cron_expr: cron.into(),
+            period_offset: offset,
+            enabled: true,
+            next_run_at: None,
+            last_run_at: None,
+            last_run_status: None,
+        }
+    }
+
+    #[test]
+    fn period_describes_common_offsets() {
+        assert_eq!(describe_period(0), "за текущий месяц");
+        assert_eq!(describe_period(-1), "за прошлый месяц");
+        assert_eq!(describe_period(-2), "за позапрошлый месяц");
+        assert_eq!(describe_period(-5), "за 5 мес. назад");
+        assert_eq!(describe_period(2), "со смещением периода +2");
+    }
+
+    #[test]
+    fn schedule_combines_what_period_when() {
+        let s = sample("Реализации", &["Отчёт по реализации"], "0 2 1 * *", -1);
+        let d = describe_schedule(&s);
+        assert!(d.contains("«Отчёт по реализации»"), "got: {d}");
+        assert!(d.contains("за прошлый месяц"), "got: {d}");
+        assert!(d.contains("1-го числа каждого месяца"), "got: {d}");
+        assert!(d.contains("02:00"), "got: {d}");
+    }
+
+    #[test]
+    fn schedule_weekly_and_daily() {
+        let s = sample("Еженед.", &["Баланс"], "30 9 * * 1", 0);
+        assert!(describe_schedule(&s).contains("по понедельникам"));
+        let s2 = sample("Ежедн.", &["Баланс"], "0 6 * * *", -2);
+        let d2 = describe_schedule(&s2);
+        assert!(d2.contains("ежедневно"), "got: {d2}");
+        assert!(d2.contains("за позапрошлый месяц"), "got: {d2}");
+    }
+
+    #[test]
+    fn schedule_multiple_reports_unquoted() {
+        let s = sample("Два", &["Отчёт A", "Отчёт B"], "0 2 1 * *", -1);
+        let d = describe_schedule(&s);
+        assert!(d.contains("Отчёт A, Отчёт B"), "got: {d}");
+        assert!(!d.contains('«'), "несколько отчётов — без кавычек: {d}");
+    }
+
+    #[test]
+    fn schedule_empty_report() {
+        let s = sample("Пусто", &[], "0 2 1 * *", -1);
+        assert!(describe_schedule(&s).contains("(отчёт не задан)"));
+    }
+}
