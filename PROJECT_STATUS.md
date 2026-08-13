@@ -758,6 +758,21 @@ thread_local! {
     (BITMAPINFOHEADER + BGRA bottom-up + AND-mask) для 16/24/32/48/64/128, 256 — PNG.
     Проверка: .NET `Icon(ico,48)` OK + брендовый фиолетовый в пикселях; .NET на all-PNG
     версии падал. См. также #43 (иконка должна ещё и влинковаться в exe).
+45. **`period_kind` в ReportDescriptor — источник правды о периоде отчёта.** Параметры
+    `param_period_month`/`param_date_range` в дескрипторе ненадёжны: 5 Ozon-отчётов
+    заявляли `param_date_range`, но тело запроса (`build_download_body`) шлёт только
+    `period` (один месяц) — UI показывал диапазон, а уходил один месяц. Решение: явный
+    `PeriodKind { Month, Range, Day, None }` в дескрипторе (`#[serde(default)]` = Range),
+    заполняемый по сверке с API. Он ведёт UI («Скачать по периоду»: Month → цикл по
+    месяцам, Range → один запрос) и инфо-панель. Урок: дескриптор-параметры описывают
+    форму ввода, но НЕ семантику периода — для логики нужен отдельный явный enum.
+46. **Месячные API-отчёты + multi-month интервал → цикл по месяцам в UI.** API месячных
+    отчётов (Ozon realization/compensation/…, 6 шт.) принимает строго один месяц. Если
+    пользователь выбрал квартал/год, нельзя просто взять стартовый месяц (потеряется
+    `date_to`). Правильно: «Скачать по периоду» итерирует все месяцы `[date_from..date_to]`
+    и шлёт N отдельных `UiCommand::Download` (по `period` на каждый). Период для
+    Range/Day/None — один запрос за весь диапазон. Хелпер `months_in_current_range()`
+    (chrono `checked_add_months`). Считается и для инфо-ноты («соберём по месяцам: N мес.»).
 
 
 
@@ -871,6 +886,29 @@ cargo clippy --workspace --tests -- -D warnings
 - **Иконка приложения** (коммит `7b009a0`): SVG (градиент Ozon→WB + знак download) →
   `app-icon.ico` (7 размеров, PNG-in-ICO, ручная сборка — нет ImageMagick/Pillow/icotool,
   `convert` это Windows-утилита). `build.rs` через `winres` встраивает в `mdwf-gui.exe`.
+
+**Чат 2026-08-13 (виджет стандартного интервала + метаданные отчётов):**
+- **Просьба юзера**: заменить отдельный выбор месяца/года кнопкой выбора стандартного
+  интервала (неделя/месяц/квартал/год) — виджетом с годом-спиннером сверху и вкладками
+  с ярлычками; список выбора (не combo), один клик = выбор.
+- **Core**: `PeriodKind { Month, Range, Day, None }` + `period_kind`/`description` в
+  `ReportDescriptor` (serde-default, обратная совместимость). Чинит прошлый баг: 5
+  Ozon-дескрипторов заявляли param_date_range, но тело шлёт только `period` — теперь
+  `period_kind` источник правды. Заполнено для всех 21 Ozon + 13 WB + test-provider
+  (по сверке с API: 6 Ozon строго месячные, accrual_by_day — цикл по дням, диапазонные,
+  без даты).
+- **DTO**: `ReportInfo` += period_kind/description; проброс в app-loop.
+- **Виджет** `widgets/interval_picker.rs`: SpinButton года + StackSwitcher(Неделя/
+  Месяц/Квартал/Год) + Stack из FlowBox-сеток (один клик → chrono-расчёт [from,to]).
+  Кнопка «📅 Интервал» в download.rs открывает его в popover, проставляет date_from/date_to.
+- **download.rs**: month/year combos УБРАНЫ; период выводится из `date_from`.
+  «Скачать по периоду»: для `Month` — **цикл по всем месяцам [date_from..date_to]**
+  (квартал=3, год=12), date_to не теряется; для Range/Day/None — один запрос. Инфо-панель
+  (бывшая mode_hint) показывает описание отчёта + период-ноту с числом месяцев.
+- **Проверено**: workspace build + `cargo test` (0 failed) + sanity-launch (рендерится,
+  avg=43, black_fraction=0%). Известный край: 4 диапазонных Ozon-отчёта с капом ≤31 дня
+  (balance/buyout/placement_*) — интервал >31д одним запросом упадёт 4xx (не оконную в
+  этом шаге). Уроки #45-46.
 
 **Структура вкладок GUI (sidebar):** Магазин → Отчёты → Загрузка → Архив →
 Настройки → Планировщик → Журнал → О программе.

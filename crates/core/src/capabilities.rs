@@ -51,6 +51,37 @@ pub struct ReportDescriptor {
     pub acquisition_mode: AcquisitionMode,
     pub downloader_kind: DownloaderKind,
     pub parameters: Vec<ReportParameter>,
+    /// Какой период принимает отчёт по API — источник правды для GUI («Скачать по
+    /// периоду»: Month → цикл по месяцам интервала; Range → один запрос за весь
+    /// [from..to]; Day → цикл по дням; None → без привязки к дате). `#[serde(default)]`
+    /// для обратной совместимости сохранённых Capabilities. Чинит прошлый баг, когда
+    /// 5 Ozon-дескрипторов заявляли param_date_range, но тело шлёт только `period`.
+    #[serde(default)]
+    pub period_kind: PeriodKind,
+    /// Человекочитаемое описание отчёта (одно-два предложения) для инфо-панели GUI.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Какой период принимает отчёт по API (для UI и логики «Скачать по периоду»).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PeriodKind {
+    /// Строго один месяц (Ozon realization/compensation/…). Multi-month интервал
+    /// разбивается на месяцы — по выгрузке на каждый.
+    Month,
+    /// Произвольный диапазон `date_from`..`date_to` одним запросом.
+    Range,
+    /// Один день, но код циклит по всем дням месяца (Ozon accrual_by_day).
+    Day,
+    /// Без привязки к периоду (складские остатки, справочники, авто-fill параметров).
+    None,
+}
+
+impl Default for PeriodKind {
+    /// По умолчанию — диапазонный отчёт (большинство WB + часть Ozon).
+    fn default() -> Self {
+        Self::Range
+    }
 }
 
 /// Полное самоописание провайдера (спец. §2.3.2 — `Capabilities`).

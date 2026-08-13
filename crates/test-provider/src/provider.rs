@@ -189,6 +189,8 @@ impl TestProvider {
                 acquisition_mode: r.mode,
                 downloader_kind: DownloaderKind::Api,
                 parameters: Vec::new(),
+                period_kind: mdwf_core::PeriodKind::Range,
+                description: Some(format!("Тестовый отчёт «{}» (mock).", r.display_name)),
             })
             .collect();
         let capabilities = Capabilities {

@@ -17,8 +17,8 @@ use serde_json::json;
 use mdwf_core::{
     capabilities::{AuthField, AuthFieldKind, AuthType},
     AcquisitionMode, Capabilities, CoreError, CoreResult, CancelToken, DocumentEntry,
-    DocumentFilter, DownloadedFile, DownloaderKind, ProgressCallbackRef, Report, ReportCategory,
-    ReportDescriptor, ReportParameter, ReportParameterKind, ReportParams, ReportRef,
+    DocumentFilter, DownloadedFile, DownloaderKind, PeriodKind, ProgressCallbackRef, Report,
+    ReportCategory, ReportDescriptor, ReportParameter, ReportParameterKind, ReportParams, ReportRef,
 };
 
 use crate::client::{WbDomain, WbHttpClient};
@@ -53,64 +53,102 @@ pub fn capabilities() -> Capabilities {
 pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
     vec![
         // --- Баланс (finance-api, GET) ---
-        desc_period("wb.balance", "Баланс продавца", ReportCategory::Finance),
+        desc_period(
+            "wb.balance",
+            "Баланс продавца",
+            ReportCategory::Finance,
+            PeriodKind::None,
+            "Текущий баланс продавца (срез на момент запроса, без периода).",
+        ),
         // --- Финансы (finance-api, POST) ---
         desc_period(
             "wb.sales_reports_list",
             "Реестр реализации (список)",
             ReportCategory::Finance,
+            PeriodKind::Range,
+            "Реестр отчётов реализации за период.",
         ),
         desc_period(
             "wb.sales_reports_detailed",
             "Детализация реализации (за период)",
             ReportCategory::Finance,
+            PeriodKind::Range,
+            "Детализация реализации за период.",
         ),
         desc_period(
             "wb.acquiring_list",
             "Эквайринг (список)",
             ReportCategory::Finance,
+            PeriodKind::Range,
+            "Эквайринг — список операций за период.",
         ),
         desc_period(
             "wb.acquiring_detailed",
             "Эквайринг (детализация)",
             ReportCategory::Finance,
+            PeriodKind::Range,
+            "Эквайринг — детализация операций за период.",
         ),
         // --- Документы (documents-api, GET) ---
         desc_browsable(
             "wb.documents",
             "Документы (УПД/УКД/акты) — по категории",
             ReportCategory::Documents,
+            PeriodKind::Range,
+            "Документы (УПД/УКД/акты) по категории за период.",
         ),
         // --- Статистика (statistics-api, GET) ---
-        desc_browsable("wb.orders", "Заказы", ReportCategory::Operational),
-        desc_browsable("wb.sales", "Продажи", ReportCategory::Operational),
+        desc_browsable(
+            "wb.orders",
+            "Заказы",
+            ReportCategory::Operational,
+            PeriodKind::Range,
+            "Заказы за период.",
+        ),
+        desc_browsable(
+            "wb.sales",
+            "Продажи",
+            ReportCategory::Operational,
+            PeriodKind::Range,
+            "Продажи за период.",
+        ),
         // --- Удержания (seller-analytics-api, GET) ---
         desc_browsable(
             "wb.deductions",
             "Штрафы за подмены",
             ReportCategory::Penalties,
+            PeriodKind::Range,
+            "Штрафы за подмены за период.",
         ),
         desc_browsable(
             "wb.measurement_penalties",
             "Штрафы за габариты",
             ReportCategory::Penalties,
+            PeriodKind::Range,
+            "Штрафы за габариты за период.",
         ),
         desc_browsable(
             "wb.antifraud",
             "Самовыкупы (антифрод)",
             ReportCategory::Penalties,
+            PeriodKind::Range,
+            "Самовыкупы и антифрод за период.",
         ),
         // --- Возвраты (claims) — спека §2.2.2 ---
         desc_browsable(
             "wb.claims",
             "Возвраты (claims)",
             ReportCategory::Returns,
+            PeriodKind::Range,
+            "Возвраты (claims) за период.",
         ),
         // --- Async-отчёт приёмки (спека §2.2.2) ---
         desc_period(
             "wb.acceptance_report",
             "Аналитический отчёт приёмки (async)",
             ReportCategory::Finance,
+            PeriodKind::Range,
+            "Аналитический отчёт приёмки за период (async).",
         ),
     ]
 }
@@ -122,6 +160,8 @@ fn desc_period(
     type_id: &str,
     display_name: &str,
     category: ReportCategory,
+    period_kind: PeriodKind,
+    description: &str,
 ) -> ReportDescriptor {
     ReportDescriptor {
         type_id: type_id.into(),
@@ -130,6 +170,8 @@ fn desc_period(
         acquisition_mode: AcquisitionMode::Period,
         downloader_kind: DownloaderKind::Api,
         parameters: vec![param_date_range()],
+        period_kind,
+        description: Some(description.into()),
     }
 }
 
@@ -138,6 +180,8 @@ fn desc_browsable(
     type_id: &str,
     display_name: &str,
     category: ReportCategory,
+    period_kind: PeriodKind,
+    description: &str,
 ) -> ReportDescriptor {
     ReportDescriptor {
         type_id: type_id.into(),
@@ -146,6 +190,8 @@ fn desc_browsable(
         acquisition_mode: AcquisitionMode::Browsable,
         downloader_kind: DownloaderKind::Api,
         parameters: vec![param_date_range()],
+        period_kind,
+        description: Some(description.into()),
     }
 }
 

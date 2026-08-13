@@ -346,6 +346,10 @@ pub struct ReportInfo {
     pub is_browsable: bool,
     /// Какому провайдеру принадлежит отчёт (чтобы не угадывать из префикса type_id).
     pub provider_id: String,
+    /// Какой период принимает отчёт (для «Скачать по периоду» и инфо-панели).
+    pub period_kind: mdwf_core::PeriodKind,
+    /// Человекочитаемое описание отчёта (для инфо-панели GUI).
+    pub description: Option<String>,
 }
 
 /// Пара type_id → человекочитаемое имя для combo «Отчёт» в Архиве.

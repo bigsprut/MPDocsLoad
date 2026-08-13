@@ -50,10 +50,6 @@ thread_local! {
     static W_CATEGORY_LABEL: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     static W_DATE_FROM: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_DATE_TO: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
-    /// Combo выбора месяца (1..12) и года для period-отчётов. Заменяет бывший
-    /// текстовый W_MONTH: выбор месяца «без чисел», названия по-русски.
-    static W_MONTH_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
-    static W_YEAR_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
     static W_LIMIT: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     /// Карта: отображаемое имя категории → технический идентификатор (для WB API).
     /// Заполняется при загрузке категорий, используется в build_filter.
@@ -283,18 +279,6 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let year_ago = today - chrono::Duration::days(365);
     let default_from = year_ago.format("%Y-%m-%d").to_string();
     let default_to = today.format("%Y-%m-%d").to_string();
-    // Месяц по умолчанию — прошлый (для period-отчётов). Учитываем переход через январь.
-    let default_year = if today.month() == 1 {
-        today.year() - 1
-    } else {
-        today.year()
-    };
-    let default_month0 = if today.month() == 1 {
-        11 // декабрь прошлого года (индекс 0-based)
-    } else {
-        today.month0() as usize - 1 // прошлый месяц, индекс 0-based
-    };
-
     let row2 = GtkBox::new(Orientation::Horizontal, 8);
     let category_combo = ComboBoxText::new();
     category_combo.append_text("(все)");
@@ -304,23 +288,27 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let date_to = Entry::builder().placeholder_text("по YYYY-MM-DD").width_chars(12).text(&default_to).build();
     let limit_entry = Entry::builder().placeholder_text("лимит").width_chars(6).build();
 
-    // Combo выбора месяца (названия по-русски) и года. Заменяют бывшее
-    // текстовое поле YYYY-MM: выбор «без чисел», названия по-русски.
-    let month_combo = ComboBoxText::new();
-    for name in MONTH_NAMES {
-        month_combo.append_text(name);
+    // Кнопка «📅 Интервал» — выбор стандартного интервала (неделя/месяц/квартал/год)
+    // через виджет widgets::interval_picker. Проставляет date_from/date_to.
+    let interval_btn = gtk4::MenuButton::builder()
+        .label("📅 Интервал")
+        .tooltip_text("Выбрать стандартный интервал: неделя / месяц / квартал / год")
+        .build();
+    let interval_popover = gtk4::Popover::new();
+    {
+        let df = date_from.clone();
+        let dt = date_to.clone();
+        let pop = interval_popover.clone();
+        let picker = crate::widgets::interval_picker::make_interval_picker(move |f: &str, t: &str| {
+            df.set_text(f);
+            dt.set_text(t);
+            pop.popdown();
+            update_mode_hint();
+            schedule_save();
+        });
+        interval_popover.set_child(Some(&picker));
     }
-    month_combo.set_active(Some(default_month0 as u32));
-    month_combo.set_tooltip_text(Some("Месяц для period-отчётов"));
-    let year_combo = ComboBoxText::new();
-    // Диапазон лет: 5 лет назад .. текущий+1 (с запасом на отчёты будущего периода).
-    for y in (today.year() - 5)..=(today.year() + 1) {
-        year_combo.append_text(&y.to_string());
-    }
-    // Индекс выбранного года в combo (0 = самый старый).
-    let default_year_idx = (default_year - (today.year() - 5)) as u32;
-    year_combo.set_active(Some(default_year_idx));
-    year_combo.set_tooltip_text(Some("Год для period-отчётов"));
+    interval_btn.set_popover(Some(&interval_popover));
 
     let category_label = Label::new(Some("Категория:"));
     row2.append(&category_label);
@@ -333,9 +321,8 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     row2.append(&date_to);
     // Кнопка-календарь для date_to
     row2.append(&make_date_picker(&date_to, "%Y-%m-%d"));
-    row2.append(&Label::new(Some("Месяц:")));
-    row2.append(&month_combo);
-    row2.append(&year_combo);
+    // Кнопка выбора стандартного интервала
+    row2.append(&interval_btn);
     row2.append(&Label::new(Some("Лимит:")));
     row2.append(&limit_entry);
     root.append(&row2);
@@ -387,8 +374,6 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_CATEGORY_LABEL.with(|w| *w.borrow_mut() = Some(category_label.clone()));
     W_DATE_FROM.with(|w| *w.borrow_mut() = Some(date_from.clone()));
     W_DATE_TO.with(|w| *w.borrow_mut() = Some(date_to.clone()));
-    W_MONTH_COMBO.with(|w| *w.borrow_mut() = Some(month_combo.clone()));
-    W_YEAR_COMBO.with(|w| *w.borrow_mut() = Some(year_combo.clone()));
     W_LIMIT.with(|w| *w.borrow_mut() = Some(limit_entry.clone()));
 
     // Смена отчёта → обновить подсказку режима + доступность кнопок + автосохранение.
@@ -403,34 +388,13 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     }
     update_mode_hint();
 
-    // Автосохранение при изменении полей ввода.
+    // Автосохранение при изменении полей ввода + обновление инфо-панели (число
+    // месяцев в интервале зависит от date_from/date_to).
     for entry in [&date_from, &date_to, &limit_entry] {
         let e = entry.clone();
         entry.connect_changed(move |_| {
             let _ = &e;
-            schedule_save();
-        });
-    }
-    // Автосохранение + автообновление диапазона при смене месяца/года.
-    // При выборе месяца: date_from = 1-е число месяца, date_to = сегодня
-    // (если месяц текущий) или последнее число месяца.
-    {
-        let df = date_from.clone();
-        let dt = date_to.clone();
-        let mc = month_combo.clone();
-        let yc = year_combo.clone();
-        month_combo.connect_changed(move |_| {
-            apply_month_to_range(&mc, &yc, &df, &dt);
-            schedule_save();
-        });
-    }
-    {
-        let df = date_from.clone();
-        let dt = date_to.clone();
-        let mc = month_combo.clone();
-        let yc = year_combo.clone();
-        year_combo.connect_changed(move |_| {
-            apply_month_to_range(&mc, &yc, &df, &dt);
+            update_mode_hint();
             schedule_save();
         });
     }
@@ -503,34 +467,64 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         notify(&format!("Скачивание {n} документов…"));
     });
 
-    // «Скачать по периоду».
+    // «Скачать по периоду». Поведение зависит от PeriodKind отчёта:
+    //   Month  → цикл по всем месяцам [date_from..date_to], по выгрузке на каждый
+    //            (чтобы date_to не терялась; квартал=3, год=12);
+    //   иначе  → один запрос за весь [date_from..date_to].
     let cs_per = cs.clone();
     period_btn.connect_clicked(move |_| {
         let Some((pid, pname, rtype)) = current_target() else {
             notify("Выберите профиль и отчёт.");
             return;
         };
-        // Месяц собираем из combo (YYYY-MM, напр. «2026-07»).
-        let Some(period) = current_month_value() else {
-            notify("Выберите месяц и год.");
-            return;
-        };
-        let mut params = ReportParams {
-            period: Some(period.clone()),
-            ..Default::default()
-        };
-        // Диапазон дат — на случай, если отчёт требует date_from/date_to.
-        params = params
-            .with("date_from", df_per.text().to_string())
-            .with("date_to", dt_per.text().to_string());
-        cs_per.send(crate::channels::UiCommand::Download {
-            provider_id: pid,
-            profile_name: pname,
-            report_type: rtype,
-            documents: Vec::new(),
-            params,
-        });
-        notify(&format!("Генерация отчёта за период {period}…"));
+        let df = df_per.text().to_string();
+        let dt = dt_per.text().to_string();
+        if current_period_kind() == mdwf_core::PeriodKind::Month {
+            let months = months_in_current_range();
+            if months.is_empty() {
+                notify("Задайте корректный диапазон дат (date_from ≤ date_to).");
+                return;
+            }
+            let n = months.len();
+            for period in &months {
+                let params = ReportParams {
+                    period: Some(period.clone()),
+                    ..Default::default()
+                }
+                .with("date_from", df.clone())
+                .with("date_to", dt.clone());
+                cs_per.send(crate::channels::UiCommand::Download {
+                    provider_id: pid.clone(),
+                    profile_name: pname.clone(),
+                    report_type: rtype.clone(),
+                    documents: Vec::new(),
+                    params,
+                });
+            }
+            notify(&format!(
+                "Генерация за {n} мес. ({}…{})…",
+                months.first().map(String::as_str).unwrap_or("?"),
+                months.last().map(String::as_str).unwrap_or("?")
+            ));
+        } else {
+            // Range/Day/None — один запрос за весь диапазон (период = стартовый
+            // месяц для отчётов, которым он нужен).
+            let period = current_month_value();
+            let params = ReportParams {
+                period,
+                ..Default::default()
+            }
+            .with("date_from", df)
+            .with("date_to", dt);
+            cs_per.send(crate::channels::UiCommand::Download {
+                provider_id: pid,
+                profile_name: pname,
+                report_type: rtype,
+                documents: Vec::new(),
+                params,
+            });
+            notify("Генерация отчёта за период…");
+        }
     });
 
     root
@@ -554,88 +548,57 @@ fn current_report_type() -> Option<String> {
     text.split(" — ").next().map(str::to_string)
 }
 
-/// Возвращает выбранный месяц в формате `YYYY-MM` (напр. «2026-07») из combo
-/// месяца и года. `None`, если какой-то из combo не выбран.
+/// `PeriodKind` выбранного отчёта (по метаданным). По умолчанию `Range`.
+fn current_period_kind() -> mdwf_core::PeriodKind {
+    let rtype = current_report_type();
+    rtype
+        .and_then(|t| REPORTS.with(|r| r.borrow().iter().find(|x| x.type_id == t).cloned()))
+        .map(|ri| ri.period_kind)
+        .unwrap_or(mdwf_core::PeriodKind::Range)
+}
+
+/// Период `YYYY-MM` из текущего `date_from` (месяц начала диапазона). Источник
+/// правды для period-отчётов после удаления month/year combos. `None`, если
+/// `date_from` не парсится как дата.
 fn current_month_value() -> Option<String> {
-    let month0 = W_MONTH_COMBO.with(|w| {
-        w.borrow().as_ref().and_then(gtk4::prelude::ComboBoxExtManual::active).map(|i| i as usize)
-    })?;
-    let year_text = W_YEAR_COMBO.with(|w| {
+    let s = W_DATE_FROM.with(|w| w.borrow().as_ref().map(|e| e.text().to_string()))?;
+    let d = NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()?;
+    Some(d.format("%Y-%m").to_string())
+}
+
+/// Список периодов `YYYY-MM` всех месяцев, попадающих в `[date_from, date_to]`
+/// (включительно). Пусто, если даты некорректны или `date_from > date_to`.
+/// Для месячных отчётов «Скачать по периоду» идёт циклом по каждому из этих
+/// месяцев отдельной выгрузкой (чтобы `date_to` не терялась). Также число
+/// элементов используется в инфо-панели («соберём по месяцам: N мес.»).
+fn months_in_current_range() -> Vec<String> {
+    let from = W_DATE_FROM.with(|w| {
         w.borrow()
             .as_ref()
-            .and_then(gtk4::ComboBoxText::active_text)
-            .map(|s| s.to_string())
-    })?;
-    let year: i32 = year_text.parse().ok()?;
-    // month0 — индекс 0-based (0=Январь). Месяц для формата — 1-based.
-    Some(format!("{year}-{:02}", month0 + 1))
-}
-
-/// Парсит значение `YYYY-MM` → (год, индекс месяца 0-based). `None` при ошибке.
-fn parse_month_value(v: &str) -> Option<(i32, u32)> {
-    let (y, m) = v.split_once('-')?;
-    let year: i32 = y.parse().ok()?;
-    let month: u32 = m.parse::<u32>().ok()?.checked_sub(1)?; // 1..12 → 0..11
-    if month > 11 {
-        return None;
+            .and_then(|e| NaiveDate::parse_from_str(&e.text(), "%Y-%m-%d").ok())
+    });
+    let to = W_DATE_TO.with(|w| {
+        w.borrow()
+            .as_ref()
+            .and_then(|e| NaiveDate::parse_from_str(&e.text(), "%Y-%m-%d").ok())
+    });
+    let (Some(from), Some(to)) = (from, to) else {
+        return Vec::new();
+    };
+    if from > to {
+        return Vec::new();
     }
-    Some((year, month))
-}
-
-/// Выбирает в combo года ближайший к `year` (если точного нет — ближайший
-/// из доступных). Используется при восстановлении сохранённого состояния.
-fn set_year_combo(combo: &ComboBoxText, year: i32) {
-    let n = combo.model().map_or(0, |m| m.iter_n_children(None));
-    let mut best_i = 0u32;
-    let mut best_diff = i32::MAX;
-    for i in 0..n {
-        combo.set_active(Some(i as u32));
-        if let Some(text) = combo.active_text() {
-            if let Ok(y) = text.to_string().parse::<i32>() {
-                let diff = (y - year).abs();
-                if diff < best_diff {
-                    best_diff = diff;
-                    best_i = i as u32;
-                }
-            }
-        }
+    let mut out = Vec::new();
+    let mut cur = NaiveDate::from_ymd_opt(from.year(), from.month(), 1).unwrap_or(from);
+    let end_month = NaiveDate::from_ymd_opt(to.year(), to.month(), 1).unwrap_or(to);
+    while cur <= end_month {
+        out.push(cur.format("%Y-%m").to_string());
+        cur = match cur.checked_add_months(chrono::Months::new(1)) {
+            Some(d) => d,
+            None => break,
+        };
     }
-    combo.set_active(Some(best_i));
-}
-
-/// При смене месяца/года обновляет диапазон дат:
-/// `date_from` = 1-е число выбранного месяца,
-/// `date_to` = сегодня (если месяц текущий) или последнее число месяца.
-fn apply_month_to_range(
-    month_combo: &ComboBoxText,
-    year_combo: &ComboBoxText,
-    date_from: &Entry,
-    date_to: &Entry,
-) {
-    let Some(month0) = month_combo.active() else {
-        return;
-    };
-    let Some(year_text) = year_combo.active_text() else {
-        return;
-    };
-    let Ok(year) = year_text.to_string().parse::<i32>() else {
-        return;
-    };
-    let month = month0 + 1; // 1-based
-    let Some(first) = chrono::NaiveDate::from_ymd_opt(year, month, 1) else {
-        return;
-    };
-    // Последний день месяца = 1-й день следующего месяца минус 1 день.
-    let last = chrono::NaiveDate::from_ymd_opt(year, month, 1)
-        .and_then(|d| d.checked_add_months(chrono::Months::new(1)))
-        .and_then(|d| d.pred_opt())
-        .unwrap_or(first);
-    let today = chrono::Local::now().date_naive();
-    // date_to: последний день месяца, но не в будущем (для текущего/будущего
-    // месяца — сегодня, для прошлого — последний день месяца).
-    let to = if last > today { today } else { last };
-    date_from.set_text(&first.format("%Y-%m-%d").to_string());
-    date_to.set_text(&to.format("%Y-%m-%d").to_string());
+    out
 }
 
 /// Запрашивает категории WB только если активный магазин = wildberries и выбран
@@ -677,17 +640,42 @@ fn update_mode_hint() {
 
     W_MODE_HINT.with(|w| {
         if let Some(l) = w.borrow().as_ref() {
-            if name.is_empty() {
-                l.set_text("");
-            } else if is_browsable {
-                l.set_text(&format!(
-                    "«{name}»: режим списка. Задайте диапазон дат и категорию (если нужно), нажмите «Список документов», отметьте нужные, затем «Скачать выбранные»."
-                ));
+            let text = if name.is_empty() {
+                String::new()
             } else {
-                l.set_text(&format!(
-                    "«{name}»: режим периода. Укажите месяц (по умолчанию — прошлый) и нажмите «Скачать по периоду»."
-                ));
-            }
+                // Описание отчёта (из метаданных провайдера).
+                let head = match info.as_ref().and_then(|r| r.description.as_deref()) {
+                    Some(d) => format!("«{name}». {d}"),
+                    None => format!("«{name}»."),
+                };
+                // Период-нота: как «Скачать по периоду» трактовать интервал.
+                let kind = info
+                    .as_ref()
+                    .map(|r| r.period_kind)
+                    .unwrap_or(mdwf_core::PeriodKind::Range);
+                let note = match kind {
+                    mdwf_core::PeriodKind::Month => {
+                        let n = months_in_current_range().len();
+                        format!(
+                            "📅 Месячный отчёт. За выбранный интервал соберём по месяцам: {n} мес. (кнопка «Скачать по периоду»)."
+                        )
+                    }
+                    mdwf_core::PeriodKind::Range if is_browsable => {
+                        "📊 Задайте диапазон дат и категорию → «Список документов» → отметьте → «Скачать выбранные».".to_string()
+                    }
+                    mdwf_core::PeriodKind::Range => {
+                        "📊 Диапазонный отчёт — выгрузка за весь выбранный период (кнопка «Скачать по периоду»).".to_string()
+                    }
+                    mdwf_core::PeriodKind::Day => {
+                        "📅 Цикл по дням выбранного месяца.".to_string()
+                    }
+                    mdwf_core::PeriodKind::None => {
+                        "🔹 Без привязки к периоду (срез/справочник).".to_string()
+                    }
+                };
+                format!("{head} {note}")
+            };
+            l.set_text(&text);
         }
     });
 
@@ -809,24 +797,8 @@ pub fn on_download_state_loaded(state: Option<&DownloadState>) {
     if let Some(v) = &state.date_to {
         W_DATE_TO.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
     }
-    if let Some(v) = &state.month {
-        // Сохранённый месяц имеет формат YYYY-MM: выставляем combo месяца и года.
-        // "YYYY-MM" → индекс месяца (0-based) и год. При успехе НЕ обновляем
-        // диапазон здесь — это сделает connect_changed, но он блокирован на
-        // время восстановления (см. PENDING_REPORT). Диапазон восстановим явно ниже.
-        if let Some((year, month0)) = parse_month_value(v) {
-            W_MONTH_COMBO.with(|w| {
-                if let Some(combo) = w.borrow().as_ref() {
-                    combo.set_active(Some(month0));
-                }
-            });
-            W_YEAR_COMBO.with(|w| {
-                if let Some(combo) = w.borrow().as_ref() {
-                    set_year_combo(combo, year);
-                }
-            });
-        }
-    }
+    // Поле month НЕ восстанавливаем: combos месяца/года удалены, период теперь
+    // выводится из date_from (восстановленного выше) — current_month_value().
     if let Some(v) = &state.limit {
         W_LIMIT.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
     }

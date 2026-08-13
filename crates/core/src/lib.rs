@@ -39,7 +39,7 @@ pub use auth::{
     EXPIRY_DEGRADED_DAYS, EXPIRY_WARN_DAYS,
 };
 pub use capabilities::{
-    AuthField, AuthFieldKind, AuthType, Capabilities, ReportDescriptor,
+    AuthField, AuthFieldKind, AuthType, Capabilities, PeriodKind, ReportDescriptor,
 };
 pub use downloader::{DownloadedFile, Downloader, DownloaderKind};
 pub use error::{CoreError, CoreResult};

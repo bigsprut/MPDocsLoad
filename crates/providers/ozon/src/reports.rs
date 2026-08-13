@@ -7,7 +7,7 @@ use serde_json::json;
 
 use mdwf_core::{
     AcquisitionMode, Capabilities, CoreError, CoreResult, CancelToken, DownloadedFile,
-    DownloaderKind, ProgressCallbackRef, Report, ReportCategory, ReportDescriptor,
+    DownloaderKind, PeriodKind, ProgressCallbackRef, Report, ReportCategory, ReportDescriptor,
     ReportParameter, ReportParameterKind, ReportParams, ReportRef,
 };
 use mdwf_core::capabilities::{AuthField, AuthFieldKind, AuthType};
@@ -68,30 +68,40 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "ozon.realization",
             "Отчёт о реализации (месячный)",
             ReportCategory::Finance,
+            PeriodKind::Month,
+            "Финансовый отчёт о реализации за месяц. Строго месячный — за интервал соберём по месяцам.",
             &[param_period_month("period", "Месяц (YYYY-MM)", true)],
         ),
         desc_period(
             "ozon.realization_posting",
             "Отчёт о реализации (позаказный)",
             ReportCategory::Finance,
+            PeriodKind::Month,
+            "Позаказный отчёт о реализации за месяц (async). Строго месячный.",
             &[param_date_range(true)],
         ),
         desc_period(
             "ozon.buyout",
             "Выкупы маркетплейсом (ЕАЭС)",
             ReportCategory::Finance,
+            PeriodKind::Range,
+            "Выкупы маркетплейсом в ЕАЭС за период (диапазон ≤31 дня).",
             &[param_date_range(true)],
         ),
         desc_period(
             "ozon.balance",
             "Баланс",
             ReportCategory::Finance,
+            PeriodKind::Range,
+            "Баланс кошелька за период (диапазон ≤30 дней).",
             &[],
         ),
         desc_period(
             "ozon.cash_flow",
             "Финансовый отчёт (движение средств)",
             ReportCategory::Finance,
+            PeriodKind::Range,
+            "Движение средств по датам за период (диапазон, без жёсткого лимита дней).",
             &[param_date_range(true)],
         ),
         // accrual — новые бета-методы начислений (замена deprecated transaction-list).
@@ -99,12 +109,16 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "ozon.accrual_by_day",
             "Начисления за день",
             ReportCategory::Finance,
+            PeriodKind::Day,
+            "Начисления по дням выбранного месяца (цикл по всем дням месяца).",
             &[param_period_month("period", "День (YYYY-MM)", true)],
         ),
         desc_period(
             "ozon.accrual_postings",
             "Начисления по отправлениям",
             ReportCategory::Finance,
+            PeriodKind::None,
+            "Начисления по отправлениям (номера подставляются автоматически за период).",
             &[param_text(
                 "posting_numbers",
                 "Номера отправлений (через запятую, 1–200)",
@@ -116,12 +130,16 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "ozon.compensation",
             "Компенсации",
             ReportCategory::Finance,
+            PeriodKind::Month,
+            "Компенсации за месяц (async). Строго месячный.",
             &[param_date_range(true)],
         ),
         desc_period(
             "ozon.decompensation",
             "Декомпенсации (штрафы/антифрод)",
             ReportCategory::Penalties,
+            PeriodKind::Month,
+            "Декомпенсации и штрафы за месяц (async). Строго месячный.",
             &[param_date_range(true)],
         ),
         // --- Реестры/документы (async) ---
@@ -129,12 +147,16 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "ozon.b2b_sales",
             "Продажи юрлицам (PDF)",
             ReportCategory::Documents,
+            PeriodKind::Month,
+            "Реестр продаж юрлицам за месяц, PDF (async). Строго месячный.",
             &[param_date_range(true)],
         ),
         desc_period(
             "ozon.mutual_settlement",
             "Отчёт о взаиморасчётах",
             ReportCategory::Finance,
+            PeriodKind::Month,
+            "Отчёт о взаиморасчётах за месяц (async). Строго месячный.",
             &[param_date_range(true)],
         ),
         // --- Отчёты seller (async: create→code→/v1/report/info→файл) ---
@@ -142,30 +164,40 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "ozon.products",
             "Отчёт по товарам",
             ReportCategory::Documents,
+            PeriodKind::None,
+            "Отчёт по товарам (без привязки к периоду, async).",
             &[],
         ),
         desc_period(
             "ozon.returns",
             "Отчёт о возвратах",
             ReportCategory::Documents,
+            PeriodKind::Range,
+            "Отчёт о возвратах за период (диапазон дат).",
             &[param_date_range(true)],
         ),
         desc_period(
             "ozon.postings",
             "Отчёт об отправлениях",
             ReportCategory::Documents,
+            PeriodKind::Range,
+            "Отчёт об отправлениях за период (диапазон дат, async).",
             &[param_date_range(true)],
         ),
         desc_period(
             "ozon.discounted",
             "Отчёт об уценённых товарах",
             ReportCategory::Documents,
+            PeriodKind::None,
+            "Отчёт об уценённых товарах (без привязки к периоду, async).",
             &[],
         ),
         desc_period(
             "ozon.warehouse_stock",
             "Остатки на FBS-складе",
             ReportCategory::Documents,
+            PeriodKind::None,
+            "Остатки на FBS-складе (ID складов подставляются автоматически).",
             &[param_text(
                 "warehouse_ids",
                 "ID складов (через запятую)",
@@ -176,18 +208,24 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "ozon.placement_by_products",
             "Стоимость размещения по товарам",
             ReportCategory::Documents,
+            PeriodKind::Range,
+            "Стоимость размещения по товарам за период (диапазон ≤31 дня, async).",
             &[param_date_range(true)],
         ),
         desc_period(
             "ozon.placement_by_supplies",
             "Стоимость размещения по поставкам",
             ReportCategory::Documents,
+            PeriodKind::Range,
+            "Стоимость размещения по поставкам за период (диапазон ≤31 дня, async).",
             &[param_date_range(true)],
         ),
         desc_period(
             "ozon.marked_products_sales",
             "Продажи товаров с маркировкой",
             ReportCategory::Documents,
+            PeriodKind::Range,
+            "Продажи маркированных товаров за период (диапазон дат, async).",
             &[param_date_range(true)],
         ),
         // --- Аналитика остатков ---
@@ -195,12 +233,16 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "ozon.analytics_stocks",
             "Аналитика по остаткам",
             ReportCategory::Finance,
+            PeriodKind::None,
+            "Аналитика по остаткам (SKU подставляются автоматически, без даты — срез).",
             &[param_text("skus", "SKU (через запятую, ≤100)", true)],
         ),
         desc_period(
             "ozon.analytics_turnover",
             "Оборачиваемость товара",
             ReportCategory::Finance,
+            PeriodKind::None,
+            "Оборачиваемость товара (без привязки к периоду — срез).",
             &[],
         ),
     ]
@@ -213,6 +255,8 @@ fn desc_period(
     type_id: &str,
     display_name: &str,
     category: ReportCategory,
+    period_kind: PeriodKind,
+    description: &str,
     parameters: &[ReportParameter],
 ) -> ReportDescriptor {
     ReportDescriptor {
@@ -222,6 +266,8 @@ fn desc_period(
         acquisition_mode: AcquisitionMode::Period,
         downloader_kind: DownloaderKind::Api,
         parameters: parameters.to_vec(),
+        period_kind,
+        description: Some(description.into()),
     }
 }
 
