@@ -32,6 +32,21 @@ pub enum ReportCategory {
     Analytics,
 }
 
+impl ReportCategory {
+    /// Человекочитаемое русское название категории (для UI).
+    #[must_use]
+    pub fn display_ru(&self) -> &'static str {
+        match self {
+            Self::Finance => "Финансы",
+            Self::Documents => "Документы",
+            Self::Operational => "Операции",
+            Self::Penalties => "Штрафы",
+            Self::Returns => "Возвраты",
+            Self::Analytics => "Аналитика",
+        }
+    }
+}
+
 /// Режим получения данных — ключевое расширение против спеки.
 ///
 /// * `Period` — отчёт генерируется по периоду (тип + период → скачать).

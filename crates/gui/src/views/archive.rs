@@ -436,7 +436,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
             );
             row.append(
                 &Label::builder()
-                    .label(&e.file_format)
+                    .label(&super::ext_label(&e.file_format))
                     .width_chars(8)
                     .xalign(0.0)
                     .build(),

@@ -54,6 +54,22 @@ pub(crate) fn open_folder(path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Человекочитаемое название типа файла по расширению (для списков UI):
+/// `xlsx`→«Excel», `pdf`→«PDF», прочие — в верхнем регистре. Обычному пользователю
+/// «Excel/PDF» понятнее сырых расширений.
+pub(crate) fn ext_label(ext: &str) -> String {
+    match ext.to_ascii_lowercase().as_str() {
+        "xlsx" | "xls" | "xlsm" => "Excel".to_string(),
+        "csv" => "CSV".into(),
+        "pdf" => "PDF".into(),
+        "xml" => "XML".into(),
+        "zip" => "ZIP".into(),
+        "json" => "JSON".into(),
+        "txt" => "TXT".into(),
+        other => other.to_uppercase(),
+    }
+}
+
 // ===== Кнопка-календарь для выбора дат (общая для «Загрузка» и «Архив») =====
 
 /// Создаёт кнопку с иконкой календаря (MenuButton + Calendar в Popover).

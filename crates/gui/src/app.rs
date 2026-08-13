@@ -758,7 +758,7 @@ async fn load_reports(domain: &Domain, provider_id: &str) -> Result<Vec<ReportIn
         .map(|r| ReportInfo {
             type_id: r.type_id.clone(),
             display_name: r.display_name.clone(),
-            category: format!("{:?}", r.category),
+            category: r.category.display_ru().to_string(),
             is_browsable: r.acquisition_mode.is_browsable(),
             provider_id: provider_id.to_string(),
             period_kind: r.period_kind,

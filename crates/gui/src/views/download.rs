@@ -185,7 +185,8 @@ pub fn on_reports_loaded(reports: &[ReportInfo]) {
         combo.append_text("(нет отчётов)");
     } else {
         for r in reports {
-            combo.append_text(&format!("{} — {}", r.type_id, r.display_name));
+            // Только человекочитаемое имя; type_id хранится в REPORTS (по индексу).
+            combo.append_text(&r.display_name);
         }
     }
 
@@ -980,7 +981,12 @@ fn render_list(docs: &[DocumentEntry]) {
             row.append(&name_box);
             let date_str = doc.date.map(|d| d.to_string()).unwrap_or_default();
             row.append(&Label::builder().label(&date_str).width_chars(12).xalign(0.0).build());
-            let exts = doc.extensions.join(", ");
+            let exts = doc
+                .extensions
+                .iter()
+                .map(|e| super::ext_label(e))
+                .collect::<Vec<_>>()
+                .join(", ");
             row.append(&Label::builder().label(&exts).width_chars(16).xalign(0.0).build());
             let size = doc.size_hint.map(human_size).unwrap_or_default();
             row.append(&Label::builder().label(&size).width_chars(10).xalign(0.0).build());

@@ -145,12 +145,20 @@ pub fn on_reports_loaded(res: &Result<Vec<ReportInfo>, String>) {
                 return;
             }
             for r in reports {
-                let text = format!("{} — {}", r.type_id, r.display_name);
-                let label = Label::builder().label(&text).halign(gtk4::Align::Start).build();
-                let mode = if r.is_browsable { "список" } else { "период" };
+                // Показываем только человекочитаемое имя; технический type_id —
+                // в tooltip для справки (не в основном тексте).
+                let label = Label::builder()
+                    .label(&r.display_name)
+                    .halign(gtk4::Align::Start)
+                    .build();
+                let mode = if r.is_browsable {
+                    "список документов"
+                } else {
+                    "по периоду"
+                };
                 label.set_tooltip_text(Some(&format!(
-                    "{}\nРежим: {}\nКатегория: {}",
-                    r.type_id, mode, r.category
+                    "{}\nКатегория: {}\nРежим: {}\nИдентификатор: {}",
+                    r.display_name, r.category, mode, r.type_id
                 )));
                 list_box.append(&label);
             }

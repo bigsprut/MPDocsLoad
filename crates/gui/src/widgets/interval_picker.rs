@@ -144,7 +144,7 @@ fn grid_of_months(on_select: &Rc<dyn Fn(&str, &str)>, spin: &SpinButton) -> Flow
 }
 
 fn grid_of_quarters(on_select: &Rc<dyn Fn(&str, &str)>, spin: &SpinButton) -> FlowBox {
-    let items: Vec<(String, u32)> = (1..=4).map(|q| (format!("Q{q}"), q)).collect();
+    let items: Vec<(String, u32)> = (1..=4).map(|q| (format!("{q} кв."), q)).collect();
     let spin = spin.clone();
     let on_select = Rc::clone(on_select);
     grid_of(
@@ -190,14 +190,19 @@ fn rebuild_weeks(
     }
     let n = iso_weeks_in_year(year);
     for w in 1..=n {
+        // Диапазон дат недели — в tooltip, чтобы «Н37» было понятно без гадания.
+        let (wf, wt) = week_range(year, w);
         let btn = Button::builder()
             .label(format!("Н{w}"))
-            .tooltip_text(format!("Неделя {w}"))
+            .tooltip_text(format!(
+                "Неделя {w} ({}–{})",
+                wf.format("%d.%m"),
+                wt.format("%d.%m")
+            ))
             .build();
         let on_select = Rc::clone(on_select);
         btn.connect_clicked(move |_| {
-            let (f, t) = week_range(year, w);
-            on_select(&fmt(f), &fmt(t));
+            on_select(&fmt(wf), &fmt(wt));
         });
         fb.insert(&btn, -1);
     }
