@@ -35,12 +35,7 @@ pub fn build(_cs: &crate::channels::CommandSender) -> GtkBox {
     // Заголовок + кнопка «Очистить».
     let header = GtkBox::new(Orientation::Horizontal, 12);
     header.append(
-        &Label::builder()
-            .label("Журнал")
-            .css_classes(["title-2"])
-            .halign(gtk4::Align::Start)
-            .hexpand(true)
-            .build(),
+        &crate::widgets::tab_help::title_row_with_help("Журнал", "title-2", &LOGS_HELP),
     );
     let clear_btn = Button::with_label("Очистить");
     clear_btn.add_css_class("destructive-action");
@@ -152,3 +147,14 @@ fn make_row(entry: &LogEntry) -> ListBoxRow {
     row.set_child(Some(&box_));
     row
 }
+
+/// Контекстная помощь вкладки «Журнал» (кнопка «?» в заголовке).
+const LOGS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
+    crate::widgets::tab_help::HelpBlock::H("Что здесь"),
+    crate::widgets::tab_help::HelpBlock::T("Лента событий: выгрузки (успех/ошибка), запуски расписаний, сбои."),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "Хранятся последние 500 записей.",
+        "«Очистить» — очищает экран (не трогает историю в БД).",
+        "Подробные логи-файлы: %APPDATA%\\mdwf\\logs.",
+    ]),
+];

@@ -28,12 +28,11 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.set_margin_top(16);
     root.set_margin_bottom(16);
 
-    let title = Label::builder()
-        .label("Доступные отчёты")
-        .css_classes(["title-2"])
-        .halign(gtk4::Align::Start)
-        .build();
-    root.append(&title);
+    root.append(&crate::widgets::tab_help::title_row_with_help(
+        "Доступные отчёты",
+        "title-2",
+        &REPORTS_HELP,
+    ));
 
     root.append(&Label::builder()
         .label("Магазин выбирается во вкладке «Магазин». Здесь — список отчётов активного маркетплейса. Клик по отчёту переносит его во вкладку «Загрузка».")
@@ -158,3 +157,20 @@ pub fn on_reports_loaded(res: &Result<Vec<ReportInfo>, String>) {
         }
     }
 }
+
+/// Контекстная помощь вкладки «Отчёты» (кнопка «?» в заголовке).
+const REPORTS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
+    crate::widgets::tab_help::HelpBlock::H("Что здесь"),
+    crate::widgets::tab_help::HelpBlock::T("Каталог отчётов активного магазина: описание, режим выгрузки и тип периода. Клик по отчёту переносит его во вкладку «Загрузка»."),
+    crate::widgets::tab_help::HelpBlock::H("Режимы выгрузки"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "«Список» — выгрузка через вкладку «Загрузка»: «Список документов» → отметьте галочками → «Скачать выбранные».",
+        "«Период» — кнопка «Скачать по периоду» во вкладке «Загрузка».",
+    ]),
+    crate::widgets::tab_help::HelpBlock::H("Тип периода (в описании отчёта)"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "Месячный — выгружается по одному месяцу; за квартал/год программа пройдёт по месяцам автоматически.",
+        "Диапазонный — один запрос за весь выбранный интервал дат.",
+        "Без периода — остатки/справочники: дата не нужна.",
+    ]),
+];

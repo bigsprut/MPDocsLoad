@@ -44,13 +44,11 @@ pub fn build(cs: &CommandSender) -> gtk4::Box {
     root.set_margin_top(16);
     root.set_margin_bottom(16);
 
-    root.append(
-        &Label::builder()
-            .label("Планировщик (cron)")
-            .css_classes(["title-2"])
-            .halign(Align::Start)
-            .build(),
-    );
+    root.append(&crate::widgets::tab_help::title_row_with_help(
+        "Планировщик (cron)",
+        "title-2",
+        &SCHEDULER_HELP,
+    ));
     root.append(
         &Label::builder()
             .label("Новые расписания создаются для активного магазина (вкладка «Магазин»).")
@@ -463,3 +461,22 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     row.set_child(Some(&box_));
     row
 }
+
+/// Контекстная помощь вкладки «Планировщик» (кнопка «?» в заголовке).
+const SCHEDULER_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
+    crate::widgets::tab_help::HelpBlock::H("Что здесь"),
+    crate::widgets::tab_help::HelpBlock::T("Автоматическая выгрузка отчётов по расписанию. Пошаговая инструкция — в форме добавления выше."),
+    crate::widgets::tab_help::HelpBlock::H("Поля расписания"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "Имя — произвольное, чтобы отличать в списке.",
+        "Отчёт — что выгружать (берётся из активного магазина).",
+        "Cron — когда: «мин час день месяц день_недели», «*» = каждый. Пресеты заполняют сами.",
+        "Период — за какой месяц: 0 — текущий, −1 — прошлый (обычно так), −2 — позапрошлый.",
+    ]),
+    crate::widgets::tab_help::HelpBlock::H("Управление"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "«вкл» — включено/пауза; «▶» — выполнить сейчас (проверка настройки); «🗑» — удалить.",
+    ]),
+    crate::widgets::tab_help::HelpBlock::H("Автозапуск"),
+    crate::widgets::tab_help::HelpBlock::T("Опции ниже («Автозапуск с Windows», «Фоновый планировщик») позволяют расписаниям выполняться без открытого окна программы."),
+];

@@ -179,11 +179,11 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.set_margin_top(16);
     root.set_margin_bottom(16);
 
-    root.append(&Label::builder()
-        .label("Магазин")
-        .css_classes(["title-2"])
-        .halign(gtk4::Align::Start)
-        .build());
+    root.append(&crate::widgets::tab_help::title_row_with_help(
+        "Магазин",
+        "title-2",
+        &SHOP_HELP,
+    ));
 
     root.append(&Label::builder()
         .label("Выберите маркетплейс и профиль — это активный магазин для всех вкладок (Загрузка, Отчёты). Профили ниже можно создавать, проверять и удалять.")
@@ -661,3 +661,27 @@ fn render_dialog_fields(state: &Rc<AddDialogState>, fields: &[AuthFieldInfo]) {
     }
     state.grid.show();
 }
+
+/// Контекстная помощь вкладки «Магазин» (кнопка «?» в заголовке).
+const SHOP_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
+    crate::widgets::tab_help::HelpBlock::H("Что здесь"),
+    crate::widgets::tab_help::HelpBlock::T("Выбор маркетплейса и профиля — это <b>активный магазин</b> для всех вкладок (Отчёты, Загрузка, Планировщик)."),
+    crate::widgets::tab_help::HelpBlock::H("Как добавить профиль"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "Выберите маркетплейс (Ozon / Wildberries).",
+        "Нажмите «Добавить профиль» и введите имя.",
+        "Впишите API-ключ (см. ниже) и сохраните.",
+        "Нажмите «Проверить» — статус должен стать OK: ключ верный.",
+    ]),
+    crate::widgets::tab_help::HelpBlock::H("Где взять API-ключ"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "Ozon: кабинет → Настройки → API-ключи (Seller API). Нужны Client-Id и Api-Key; ключ живёт 6 месяцев.",
+        "Wildberries: кабинет → Профиль → Доступ к API → «Создать токен» (одно значение).",
+    ]),
+    crate::widgets::tab_help::HelpBlock::H("Частые вопросы"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "«401/403» при проверке — ключ неверный или истёк: перевыпустите в кабинете и обновите профиль.",
+        "Ключи хранятся в Диспетчере учётных данных Windows, не в файлах программы.",
+        "Профили пропали? Запускайте программу под тем же пользователем Windows.",
+    ]),
+];

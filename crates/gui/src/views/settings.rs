@@ -23,11 +23,11 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.set_margin_top(16);
     root.set_margin_bottom(16);
 
-    root.append(&Label::builder()
-        .label("Настройки")
-        .css_classes(["title-2"])
-        .halign(gtk4::Align::Start)
-        .build());
+    root.append(&crate::widgets::tab_help::title_row_with_help(
+        "Настройки",
+        "title-2",
+        &SETTINGS_HELP,
+    ));
 
     // Загружаем текущий конфиг (по стандартному пути).
     let prov = mdwf_config::ProvisionedConfig::load_standard();
@@ -249,3 +249,17 @@ fn labeled_spin(label: &str, value: f64) -> LabeledSpin {
     row.append(&spin);
     LabeledSpin { row, spin }
 }
+
+/// Контекстная помощь вкладки «Настройки» (кнопка «?» в заголовке).
+const SETTINGS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
+    crate::widgets::tab_help::HelpBlock::H("Что здесь"),
+    crate::widgets::tab_help::HelpBlock::T("Основные параметры сохранения выгрузок. Применяются к <b>новым</b> выгрузкам после кнопки «Сохранить»."),
+    crate::widgets::tab_help::HelpBlock::H("Поля"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "Папка выгрузки — куда сохранять файлы; кнопка 📁 выбирает папку в диалоге.",
+        "Шаблон имени файла — плейсхолдеры {provider} {profile} {report} {period} {doc_id} {doc_date}.",
+        "Структура папок — например, по маркетплейсу и году.",
+        "SHA-256 — дедупликация повторных выгрузок.",
+    ]),
+    crate::widgets::tab_help::HelpBlock::T("Файлы складываются в <папку>\\{маркетплейс}\\{год}\\. Полный конфиг: %APPDATA%\\mdwf\\config.toml."),
+];

@@ -80,13 +80,11 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.set_margin_top(16);
     root.set_margin_bottom(16);
 
-    root.append(
-        &Label::builder()
-            .label("Архив скачанных документов")
-            .css_classes(["title-2"])
-            .halign(gtk4::Align::Start)
-            .build(),
-    );
+    root.append(&crate::widgets::tab_help::title_row_with_help(
+        "Архив скачанных документов",
+        "title-2",
+        &ARCHIVE_HELP,
+    ));
     root.append(
         &Label::builder()
             .label("Все выгруженные файлы из локального каталога. Данные только на этом компьютере — сетевых запросов нет. Задайте фильтры и нажмите «Применить».")
@@ -735,3 +733,22 @@ pub fn on_download_deleted(res: &Result<i64, String>) {
         Err(e) => notify(&format!("Ошибка удаления: {e}")),
     }
 }
+
+/// Контекстная помощь вкладки «Архив» (кнопка «?» в заголовке).
+const ARCHIVE_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
+    crate::widgets::tab_help::HelpBlock::H("Что здесь"),
+    crate::widgets::tab_help::HelpBlock::T("Все скачанные файлы из локального каталога. Работает офлайн — без сети и ключей."),
+    crate::widgets::tab_help::HelpBlock::H("Фильтры"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "Профиль и отчёт — точный выбор или «(все)».",
+        "Интервал дат: кнопка «📅 Интервал» (неделя/месяц/квартал/год) или поля «С:/По:» с календарями.",
+        "«✕ Дата» — сбросить фильтр даты; «🔍 Применить» — обновить список.",
+    ]),
+    crate::widgets::tab_help::HelpBlock::H("Правило отбора по дате"),
+    crate::widgets::tab_help::HelpBlock::T("Отчёт попадает в выборку, если дата его <b>начала или конца</b> входит в выбранный интервал."),
+    crate::widgets::tab_help::HelpBlock::H("Действия"),
+    crate::widgets::tab_help::HelpBlock::B(&[
+        "📂 — открыть файл; 📁 — показать папку; 📋 — копировать путь.",
+        "🗑 — удалить запись и файл с диска (с подтверждением).",
+    ]),
+];
