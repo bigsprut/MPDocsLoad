@@ -1097,11 +1097,14 @@ pub fn on_download_finished(result: &crate::channels::DownloadResult) {
     // Добавляем кнопку «Открыть папку» рядом с результатом.
     let result_box = W_RESULT_BOX.with(|w| w.borrow().clone());
     if let Some(rbox) = result_box {
-        // Удаляем старую кнопку, если была.
+        // Удаляем старую кнопку, если была. Кнопка — gtk4::Button (НЕ LinkButton:
+        // у LinkButton открывалось 2 проводника — URI + clicked). Раньше тут
+        // искали LinkButton, поэтому старые кнопки НЕ удалялись и размножались
+        // после каждой загрузки, растягивая окно.
         let mut child = rbox.last_child();
         while let Some(c) = child {
             let next = c.prev_sibling();
-            let is_btn = c.downcast_ref::<gtk4::LinkButton>().is_some();
+            let is_btn = c.downcast_ref::<gtk4::Button>().is_some();
             if is_btn {
                 rbox.remove(&c);
             }
