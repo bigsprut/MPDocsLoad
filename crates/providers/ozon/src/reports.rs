@@ -23,7 +23,7 @@ pub fn capabilities() -> Capabilities {
         auth_fields: vec![
             AuthField {
                 id: "client_id".into(),
-                label: "Client-Id".into(),
+                label: "Номер кабинета (Client-Id)".into(),
                 kind: AuthFieldKind::Number,
                 required: true,
                 placeholder: Some("1234567".into()),
@@ -32,7 +32,7 @@ pub fn capabilities() -> Capabilities {
             },
             AuthField {
                 id: "api_key".into(),
-                label: "Api-Key".into(),
+                label: "API-ключ".into(),
                 kind: AuthFieldKind::Password,
                 required: true,
                 placeholder: None,

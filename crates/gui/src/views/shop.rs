@@ -494,11 +494,12 @@ fn show_add_dialog(cs: &CommandSender) {
     // Наполняем из реестра (динамически), fallback — если ещё не загружен.
     let providers = DIALOG_PROVIDERS.with(|d| d.borrow().clone());
     if providers.is_empty() {
-        provider_combo.append_text("ozon");
-        provider_combo.append_text("wildberries");
+        provider_combo.append(Some("ozon"), "Ozon");
+        provider_combo.append(Some("wildberries"), "Wildberries");
     } else {
         for pr in &providers {
-            provider_combo.append_text(&pr.id);
+            // Показываем человекочитаемое имя; id (=значение) получаем через active_id().
+            provider_combo.append(Some(&pr.id), &pr.display_name);
         }
     }
     provider_combo.set_active(Some(0));
@@ -535,12 +536,12 @@ fn show_add_dialog(cs: &CommandSender) {
     // При смене провайдера — запрашиваем его поля авторизации.
     let cs_fields = cs.clone();
     provider_combo.connect_changed(move |combo| {
-        if let Some(pid) = combo.active_text() {
+        if let Some(pid) = combo.active_id() {
             cs_fields.send(UiCommand::LoadAuthFields(pid.to_string()));
         }
     });
     // Запрос для изначально выбранного провайдера.
-    if let Some(pid) = provider_combo.active_text() {
+    if let Some(pid) = provider_combo.active_id() {
         cs.send(UiCommand::LoadAuthFields(pid.to_string()));
     }
 
@@ -571,8 +572,9 @@ fn save_profile_from_dialog(state: &Rc<AddDialogState>) {
     let name = state.name_entry.text().to_string();
     let provider_id = state
         .provider_combo
-        .active_text()
-        .map_or_else(|| "test".into(), |s| s.to_string());
+        .active_id()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "test".into());
 
     if name.is_empty() {
         return;
