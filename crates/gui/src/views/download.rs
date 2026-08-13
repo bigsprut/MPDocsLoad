@@ -1111,7 +1111,30 @@ pub fn on_download_finished(result: &crate::channels::DownloadResult) {
             child = next;
         }
 
-        // Определяем папку из первого пути.
+        // Кнопка «📄 Открыть файл» — открывает первый скачанный файл
+        // ассоциированным приложением (Excel/PDF/…). При нескольких файлах —
+        // tooltip перечисляет все пути, открывается первый.
+        if let Some(first_path) = result.saved_paths.first() {
+            let multi = result.saved_paths.len() > 1;
+            let file = first_path.clone();
+            let label = if multi {
+                format!("📄 Открыть файл (первый из {})", result.saved_paths.len())
+            } else {
+                "📄 Открыть файл".to_string()
+            };
+            let tooltip = result.saved_paths.join("\n");
+            let file_btn = gtk4::Button::builder()
+                .label(&label)
+                .has_tooltip(true)
+                .tooltip_text(&tooltip)
+                .build();
+            file_btn.connect_clicked(move |_| {
+                let _ = open_file(&file);
+            });
+            rbox.append(&file_btn);
+        }
+
+        // Кнопка «📁 Открыть папку» — папка первого скачанного файла.
         if let Some(first_path) = result.saved_paths.first() {
             if let Some(parent) = std::path::Path::new(first_path).parent() {
                 let folder = parent.display().to_string();
