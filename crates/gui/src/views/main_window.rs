@@ -50,7 +50,7 @@ pub fn build_and_present(
     stack.add_titled(&download_view, Some(ViewId::Download.as_str()), "Загрузка");
     stack.add_titled(&archive_view, Some(ViewId::Archive.as_str()), "Архив");
     stack.add_titled(&settings_view, Some(ViewId::Settings.as_str()), "Настройки");
-    stack.add_titled(&scheduler_view, Some(ViewId::Scheduler.as_str()), "Планировщик");
+    stack.add_titled(&scheduler_view, Some(ViewId::Scheduler.as_str()), "Расписания");
     stack.add_titled(&logs_view, Some(ViewId::Logs.as_str()), "Журнал");
     stack.add_titled(&help_view, Some(ViewId::Help.as_str()), "Справка");
     stack.add_titled(&about_view, Some(ViewId::About.as_str()), "О программе");

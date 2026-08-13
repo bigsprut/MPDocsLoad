@@ -23,7 +23,7 @@ pub async fn run(ctx: &Context, action: ScheduleCmd) -> Result<ExitCode> {
             if schedules.is_empty() {
                 println!("Расписаний нет.");
             } else {
-                println!("{:<20} {:<20} {:<15} {:<10} {}", "Имя", "Профиль(id)", "Cron", "Вкл", "Следующий запуск");
+                println!("{:<20} {:<20} {:<15} {:<10} {}", "Имя", "Профиль(id)", "Расписание", "Вкл", "Следующий запуск");
                 println!("{}", "-".repeat(85));
                 for s in schedules {
                     println!(

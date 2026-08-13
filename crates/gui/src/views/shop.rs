@@ -665,7 +665,7 @@ fn render_dialog_fields(state: &Rc<AddDialogState>, fields: &[AuthFieldInfo]) {
 /// Контекстная помощь вкладки «Магазин» (кнопка «?» в заголовке).
 const SHOP_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::H("Что здесь"),
-    crate::widgets::tab_help::HelpBlock::T("Выбор маркетплейса и профиля — это <b>активный магазин</b> для всех вкладок (Отчёты, Загрузка, Планировщик)."),
+    crate::widgets::tab_help::HelpBlock::T("Выбор маркетплейса и профиля — это <b>активный магазин</b> для всех вкладок (Отчёты, Загрузка, Расписания)."),
     crate::widgets::tab_help::HelpBlock::H("Как добавить профиль"),
     crate::widgets::tab_help::HelpBlock::B(&[
         "Выберите маркетплейс (Ozon / Wildberries).",

@@ -532,7 +532,7 @@ async fn run_command_loop(
                     let cat = domain.catalog.read();
                     let cat = cat.as_ref().ok_or("каталог недоступен")?;
                     let next = mdwf_scheduler::next_run(&cron_expr, chrono::Utc::now())
-                        .map_err(|_| "неверное cron-выражение".to_string())?;
+                        .map_err(|_| "неверное выражение расписания".to_string())?;
                     let profile = cat
                         .get_profile_by_name(&profile_name)
                         .map_err(|e| e.to_string())?

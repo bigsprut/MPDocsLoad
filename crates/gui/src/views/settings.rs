@@ -125,7 +125,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&concurrency.row);
 
     // --- Секция Scheduler ---
-    root.append(&section_header("Планировщик"));
+    root.append(&section_header("Расписания"));
 
     let parallel_jobs = labeled_spin(
         "Макс. параллельных задач:",

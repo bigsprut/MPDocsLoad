@@ -45,7 +45,7 @@ pub fn build(cs: &CommandSender) -> gtk4::Box {
     root.set_margin_bottom(16);
 
     root.append(&crate::widgets::tab_help::title_row_with_help(
-        "Планировщик (cron)",
+        "Расписания",
         "title-2",
         &SCHEDULER_HELP,
     ));
@@ -191,7 +191,7 @@ fn build_add_form() -> gtk4::Box {
 
     let when_btn = Button::with_label(&describe_cron("0 2 1 * *"));
     when_btn.set_tooltip_text(Some(
-        "Нажмите, чтобы настроить расписание: частота, день и время — без ввода cron вручную",
+        "Нажмите, чтобы настроить расписание: частота, день и время — без ручного ввода выражения",
     ));
     {
         let btn = when_btn.clone();
@@ -274,7 +274,7 @@ fn describe_cron(cron: &str) -> String {
                 "4" => "четвергам",
                 "5" => "пятницам",
                 "6" => "субботам",
-                _ => return format!("по cron «{cron}»"),
+                _ => return format!("по выражению «{cron}»"),
             };
             return format!("по {day}, {time}");
         }
@@ -282,7 +282,7 @@ fn describe_cron(cron: &str) -> String {
             return format!("ежедневно, {time}");
         }
     }
-    format!("по cron «{cron}»")
+    format!("по выражению «{cron}»")
 }
 
 /// Человекочитаемое описание периода выгрузки (period_offset → текст).
@@ -669,7 +669,7 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
         .xalign(0.0)
         .halign(Align::Start)
         .tooltip_text(format!(
-            "cron: {} | смещение периода (месяцев): {}",
+            "выражение: {} | смещение периода (месяцев): {}",
             s.cron_expr, s.period_offset
         ))
         .build();
@@ -688,7 +688,7 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     if let Some(st) = s.last_run_status.as_deref() {
         meta.push(format!("Статус: {st}"));
     }
-    meta.push(format!("cron: {}", s.cron_expr));
+    meta.push(format!("выражение: {}", s.cron_expr));
     let meta_lbl = Label::builder()
         .label(meta.join("   •   "))
         .css_classes(["dim-label"])
@@ -710,7 +710,7 @@ const SCHEDULER_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::B(&[
         "Имя — произвольное, чтобы отличать в списке.",
         "Отчёт — что выгружать (берётся из активного магазина).",
-        "Когда — кнопка «Когда…»: частота (ежемесячно/еженедельно/ежедневно), день и время; техническое cron-выражение собирается само.",
+        "Когда — кнопка «Когда…»: частота (ежемесячно/еженедельно/ежедневно), день и время; выражение расписания собирается автоматически.",
         "Период — за какой месяц: 0 — текущий, −1 — прошлый (обычно так), −2 — позапрошлый.",
     ]),
     crate::widgets::tab_help::HelpBlock::H("Управление"),
