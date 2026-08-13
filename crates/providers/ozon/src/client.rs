@@ -161,30 +161,39 @@ impl RateLimiter {
         }
     }
 
-    /// Ждёт, если запрос был слишком недавно.
+    /// Резервирует слот и засыпает, чтобы выдержать `min_interval` между
+    /// запросами. Корректно при конкурентных вызовах (лимитер за `Arc`):
+    /// каждый acquire бронирует слот `last + min_interval`, поэтому N
+    /// одновременных acquire разносятся во времени. Бронь НЕ сокращается —
+    /// это защищает штраф `backoff` от затирания (прежний баг: насыщение
+    /// `duration_since(future)` → 0 → штраф 30с становился 20мс).
     pub async fn acquire(&self) {
         let wait = {
             let mut last = self.last_request.lock();
             let now = std::time::Instant::now();
-            let wait = match *last {
-                Some(t) if now.duration_since(t) < self.min_interval => {
-                    self.min_interval - now.duration_since(t)
-                }
-                _ => Duration::ZERO,
+            // Следующий слот = прошлый + интервал; если брони не было — сейчас.
+            let earliest = match *last {
+                Some(t) => t.checked_add(self.min_interval).unwrap_or(t),
+                None => now,
             };
-            *last = Some(now + wait);
-            wait
+            // Слот не раньше текущего момента.
+            let slot = earliest.max(now);
+            *last = Some(slot);
+            slot.saturating_duration_since(now)
         };
         if !wait.is_zero() {
             sleep(wait).await;
         }
     }
 
-    /// Увеличивает интервал после 429: следующий запрос не уйдёт раньше `penalty`.
+    /// Продлевает бронь на `penalty` после 429: следующий запрос не уйдёт
+    /// раньше `now + penalty`. Использует `max`, а не присваивание, — повторный
+    /// 429 или конкурентный acquire не должны сократить уже установленную паузу.
     pub async fn backoff(&self, penalty: Duration) {
         let mut last = self.last_request.lock();
         let now = std::time::Instant::now();
-        *last = Some(now + penalty);
+        let penalized = now.checked_add(penalty).unwrap_or(now);
+        *last = Some((*last).map_or(penalized, |t| t.max(penalized)));
     }
 }
 
@@ -242,6 +251,9 @@ impl OzonHttpClient {
         self.limiter.acquire().await;
         let mut attempt = 0u32;
         loop {
+            // Circuit breaker: если открыт (много отказов подряд) — быстро падаем,
+            // не нагружая API. После cooldown переходит в half-open (одна попытка).
+            self.breaker.check()?;
             attempt += 1;
             debug!(%url, attempt, "POST");
             let req = self.http.post(url).json(body);
@@ -623,6 +635,37 @@ mod tests {
         assert!(cb.check().is_ok());
         cb.on_failure();
         assert!(cb.check().is_ok()); // счётчик сброшен успехом
+    }
+
+    #[tokio::test]
+    async fn limiter_spaces_consecutive_requests() {
+        // Два acquire подряд разносятся минимум на min_interval (первый — сразу,
+        // второй ждёт). Защита от регрессии reservation-алгоритма.
+        let limiter = RateLimiter::new(Duration::from_millis(80));
+        let start = std::time::Instant::now();
+        limiter.acquire().await;
+        limiter.acquire().await;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(50),
+            "два acquire должны разнестись на ~min_interval, прошло {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn backoff_penalty_extends_wait() {
+        // backoff(penalty) продлевает следующий acquire на >= penalty
+        // (регрессия: прежде штраф терялся — насыщение duration_since → 0).
+        let limiter = RateLimiter::new(Duration::from_millis(10));
+        limiter.acquire().await;
+        limiter.backoff(Duration::from_millis(120)).await;
+        let start = std::time::Instant::now();
+        limiter.acquire().await;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(90),
+            "acquire после backoff должен ждать >= penalty, прошло {elapsed:?}"
+        );
     }
 
     #[test]

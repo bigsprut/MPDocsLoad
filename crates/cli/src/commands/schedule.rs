@@ -32,7 +32,10 @@ pub async fn run(ctx: &Context, action: ScheduleCmd) -> Result<ExitCode> {
                         s.profile_id,
                         s.cron_expr,
                         if s.enabled { "да" } else { "нет" },
-                        s.next_run_at.as_deref().unwrap_or("-")
+                        s.next_run_at
+                            .as_deref()
+                            .map(mdwf_scheduler::fmt_local)
+                            .unwrap_or_else(|| "-".into())
                     );
                 }
             }

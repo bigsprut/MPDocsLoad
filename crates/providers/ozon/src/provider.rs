@@ -41,6 +41,16 @@ impl OzonProvider {
             capabilities: reports::capabilities(),
         })
     }
+
+    /// Создаёт провайдера с кастомным базовым URL и retry policy (для тестов:
+    /// крошечные задержки, чтобы breaker-сценарии не спали по экспоненте).
+    pub fn with_base_url_and_retry(base_url: &str, retry: RetryPolicy) -> CoreResult<Self> {
+        let client = OzonHttpClient::new(Some(base_url), retry)?;
+        Ok(Self {
+            client,
+            capabilities: reports::capabilities(),
+        })
+    }
 }
 
 impl Default for OzonProvider {

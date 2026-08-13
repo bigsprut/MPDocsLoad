@@ -680,7 +680,10 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     meta.push(format!("Профиль: {}", s.profile_name));
     meta.push(format!(
         "След. запуск: {}",
-        s.next_run_at.as_deref().unwrap_or("—")
+        s.next_run_at
+            .as_deref()
+            .map(mdwf_scheduler::fmt_local)
+            .unwrap_or_else(|| "—".to_string())
     ));
     if let Some(st) = s.last_run_status.as_deref() {
         meta.push(format!("Статус: {st}"));

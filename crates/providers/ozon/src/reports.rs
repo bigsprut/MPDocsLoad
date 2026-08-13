@@ -622,13 +622,18 @@ fn month_days(period: Option<&str>) -> Vec<String> {
 
 /// Определяет расширение файла по сигнатуре (magic bytes) скачанного контента.
 /// Для async-отчётов Ozon: сервер отдаёт разные форматы — настоящий xlsx (это
-/// ZIP, сигнатура `PK`), CSV (products/realization_posting), JSON, XML.
-/// Расширение обязано соответствовать реальному формату, иначе файл с `.xlsx`
-/// окажется CSV/JSON внутри — это обман пользователя («такого не должно быть»).
+/// ZIP, сигнатура `PK`), CSV (products/realization_posting), PDF (b2b_sales),
+/// JSON, XML. Расширение обязано соответствовать реальному формату, иначе файл
+/// с `.xlsx` окажется CSV/JSON/PDF внутри — это обман пользователя («такого не
+/// должно быть»).
 fn detect_format(bytes: &[u8]) -> &'static str {
     // ZIP-архив: xlsx/zip/docx — для Ozon async-отчётов это xlsx.
     if bytes.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
         return "xlsx";
+    }
+    // PDF (b2b_sales): сигнатура `%PDF`.
+    if bytes.starts_with(b"%PDF") {
+        return "pdf";
     }
     // Пропускаем UTF-8 BOM (Ozon products отдаёт CSV с BOM).
     let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
@@ -1011,7 +1016,8 @@ impl Report for OzonAsyncReport {
         // Шаг 3: скачиваем файл по ссылке. Расширение определяем по РЕАЛЬНОМУ
         // формату серверного файла (magic bytes), а не захардкоженное «xlsx» —
         // Ozon отдаёт разные форматы: настоящий xlsx (compensation и др.),
-        // CSV (products, realization_posting). Иначе .xlsx с CSV внутри = обман.
+        // CSV (products, realization_posting), PDF (b2b_sales). Иначе .xlsx с
+        // CSV/PDF внутри = обман.
         let bytes = self.client.download_file(&file_url).await?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
         let ext = detect_format(&bytes);
@@ -1574,6 +1580,8 @@ mod tests {
     fn detect_format_by_magic_bytes() {
         // Настоящий xlsx — ZIP с сигнатурой PK.
         assert_eq!(detect_format(&[0x50, 0x4B, 0x03, 0x04, 0x00]), "xlsx");
+        // PDF (b2b_sales): сигнатура %PDF.
+        assert_eq!(detect_format(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3"), "pdf");
         // CSV (Ozon realization_posting): текст, запятая.
         assert_eq!(detect_format(b"row_number,commission_ratio, seller"), "csv");
         // CSV с BOM (Ozon products): EF BB BF + «"».
