@@ -59,6 +59,44 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&section_header("Хранилище"));
 
     let output_dir = labeled_entry("Папка выгрузки:", &cfg.storage.output_dir);
+    // Кнопка выбора папки через системный диалог (FileChooser).
+    {
+        let entry = output_dir.entry.clone();
+        let browse_btn = Button::builder()
+            .icon_name("folder-open-symbolic")
+            .tooltip_text("Выбрать папку в диалоге")
+            .build();
+        browse_btn.connect_clicked(move |_| {
+            let dlg = gtk4::FileChooserDialog::builder()
+                .title("Выберите папку выгрузки")
+                .action(gtk4::FileChooserAction::SelectFolder)
+                .modal(true)
+                .build();
+            dlg.add_button("Отмена", gtk4::ResponseType::Cancel);
+            dlg.add_button("Выбрать", gtk4::ResponseType::Accept);
+            // Стартовая папка — текущее значение поля (если существует).
+            if let Some(cur) = std::path::Path::new(&entry.text()).parent() {
+                let _ = dlg.set_current_folder(Some(&gtk4::gio::File::for_path(cur)));
+            } else if let Some(doc) = std::env::var_os("USERPROFILE") {
+                let doc = std::path::Path::new(&doc).join("Documents");
+                let _ = dlg.set_current_folder(Some(&gtk4::gio::File::for_path(doc)));
+            }
+            let entry_for_dlg = entry.clone();
+            dlg.connect_response(move |d, resp| {
+                if resp == gtk4::ResponseType::Accept {
+                    if let Some(file) = d.file() {
+                        if let Some(path) = file.path() {
+                            entry_for_dlg.set_text(&path.display().to_string());
+                        }
+                    }
+                }
+                d.destroy();
+            });
+            dlg.show();
+        });
+        // Вставляем кнопку после поля (в конец строки).
+        output_dir.row.append(&browse_btn);
+    }
     root.append(&output_dir.row);
 
     let template = labeled_entry("Шаблон имени файла:", &cfg.storage.file_name_template);
