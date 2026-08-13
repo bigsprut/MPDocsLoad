@@ -108,8 +108,10 @@ pub enum UiCommand {
     ListArchive {
         profile_name: Option<String>,
         report_type: Option<String>,
-        /// Период отчёта в формате YYYY-MM.
-        period: Option<String>,
+        /// Диапазон дат фильтра архива [from, to] ("YYYY-MM-DD") из виджета
+        /// интервала. None = без фильтра по дате. Совпадение — дата начала ИЛИ
+        /// конца отчёта попадает в интервал (см. Catalog::list_downloads_filtered).
+        date_range: Option<(String, String)>,
     },
     /// Архив (П.6): список уникальных report_type среди скачанных файлов
     /// (для combo «Отчёт»). Ответ — UiEvent::ArchiveReportTypesLoaded.
@@ -166,8 +168,11 @@ pub enum UiCommand {
 pub struct ArchiveState {
     pub profile_name: Option<String>,
     pub report_type: Option<String>,
-    /// Период в формате YYYY-MM (combo Месяц+Год).
-    pub period: Option<String>,
+    /// Диапазон дат фильтра [from, to] ("YYYY-MM-DD") из виджета интервала.
+    /// None = без фильтра по дате (все записи). (Прежнее поле `period` YYYY-MM
+    /// удалено — архив теперь фильтруется стандартным интервалом, а совпадение —
+    /// по дате начала/конца отчёта, попадающей в интервал.)
+    pub date_range: Option<(String, String)>,
 }
 
 /// Соостояние экрана «Загрузка» для автосохранения между запусками.

@@ -30,8 +30,11 @@ thread_local! {
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
     static W_PROFILE_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
     static W_REPORT_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
-    static W_MONTH_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
-    static W_YEAR_COMBO: Rc<RefCell<Option<ComboBoxText>>> = Rc::new(RefCell::new(None));
+    /// Диапазон дат фильтра архива [from, to] ("YYYY-MM-DD") из виджета интервала.
+    /// None = без фильтра по дате (все записи). Заменяет бывшие month/year combos.
+    static DATE_RANGE: Rc<RefCell<Option<(String, String)>>> = Rc::new(RefCell::new(None));
+    /// Лейбл отображения текущего интервала (или «(все даты)»).
+    static W_DATE_LABEL: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     /// Карта: отображаемое имя профиля → имя (уникальный ключ в БД).
@@ -105,27 +108,44 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     filters.append(&Label::new(Some("Отчёт:")));
     filters.append(&report_combo);
 
-    // Combo месяца: первый пункт «(все)», затем Январь…Декабрь.
-    let month_combo = ComboBoxText::new();
-    month_combo.set_tooltip_text(Some("Период отчёта (месяц)"));
-    month_combo.append_text("(все)");
-    for name in MONTH_NAMES {
-        month_combo.append_text(name);
+    // Виджет интервала дат (неделя/месяц/квартал/год) — заменяет бывшие month/year
+    // combos. Фильтр архива: отчёт попадает, если дата его НАЧАЛА или КОНЦА внутри
+    // выбранного интервала (см. Catalog::list_downloads_filtered).
+    let interval_btn = gtk4::MenuButton::builder()
+        .label("📅 Интервал")
+        .tooltip_text("Фильтр по дате: неделя / месяц / квартал / год")
+        .build();
+    let interval_popover = gtk4::Popover::new();
+    {
+        let pop = interval_popover.clone();
+        let picker = crate::widgets::interval_picker::make_interval_picker(move |f: &str, t: &str| {
+            DATE_RANGE.with(|d| *d.borrow_mut() = Some((f.to_string(), t.to_string())));
+            update_date_label();
+            pop.popdown();
+            schedule_save();
+            send_list_archive(selected_profile(), selected_report());
+        });
+        interval_popover.set_child(Some(&picker));
     }
-    month_combo.set_active(Some(0));
-    filters.append(&Label::new(Some("Месяц:")));
-    filters.append(&month_combo);
+    interval_btn.set_popover(Some(&interval_popover));
 
-    // Combo года.
-    let today = chrono::Local::now().date_naive();
-    let year_combo = ComboBoxText::new();
-    year_combo.set_tooltip_text(Some("Период отчёта (год)"));
-    for y in (today.year() - 5)..=(today.year() + 1) {
-        year_combo.append_text(&y.to_string());
-    }
-    year_combo.set_active(Some(0));
-    filters.append(&Label::new(Some("Год:")));
-    filters.append(&year_combo);
+    let date_label = Label::builder()
+        .label("(все даты)")
+        .tooltip_text("Отчёт попадает в фильтр, если дата его начала ИЛИ конца входит в интервал")
+        .build();
+    let reset_btn = Button::builder()
+        .label("✕ Дата")
+        .tooltip_text("Сбросить фильтр даты (показать все)")
+        .build();
+    reset_btn.connect_clicked(move |_| {
+        DATE_RANGE.with(|d| *d.borrow_mut() = None);
+        update_date_label();
+        schedule_save();
+        send_list_archive(selected_profile(), selected_report());
+    });
+    filters.append(&interval_btn);
+    filters.append(&date_label);
+    filters.append(&reset_btn);
 
     let apply_btn = Button::builder()
         .label("🔍 Применить")
@@ -158,8 +178,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
     W_PROFILE_COMBO.with(|w| *w.borrow_mut() = Some(profile_combo.clone()));
     W_REPORT_COMBO.with(|w| *w.borrow_mut() = Some(report_combo.clone()));
-    W_MONTH_COMBO.with(|w| *w.borrow_mut() = Some(month_combo.clone()));
-    W_YEAR_COMBO.with(|w| *w.borrow_mut() = Some(year_combo.clone()));
+    W_DATE_LABEL.with(|w| *w.borrow_mut() = Some(date_label));
     W_LIST.with(|w| *w.borrow_mut() = Some(list_box));
     W_RESULT.with(|w| *w.borrow_mut() = Some(result_label));
 
@@ -169,23 +188,20 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         apply_btn.connect_clicked(move |_| {
             let profile = selected_profile();
             let report = selected_report();
-            let period = selected_period();
+            let date_range = selected_date_range();
             notify("Запрос архива…");
             cs.send(crate::channels::UiCommand::ListArchive {
                 profile_name: profile,
                 report_type: report,
-                period,
+                date_range,
             });
         });
     }
 
-    // Автосохранение фильтров при смене combo (как DownloadState во вкладке
-    // «Загрузка»). RESTORING защищает от сохранения во время программного
-    // set_active при restore сохранённого состояния.
+    // Автосохранение фильтров при смене combo. RESTORING защищает от сохранения
+    // во время программного set_active при restore сохранённого состояния.
     profile_combo.connect_changed(|_| schedule_save());
     report_combo.connect_changed(|_| schedule_save());
-    month_combo.connect_changed(|_| schedule_save());
-    year_combo.connect_changed(|_| schedule_save());
 
     root
 }
@@ -260,7 +276,7 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
     match state {
         None => {
             // Сохранённого состояния нет — показать все записи.
-            send_list_archive(None, None, None);
+            send_list_archive(None, None);
         }
         Some(st) => {
             // Профиль: combo может быть уже заполнен (ProfilesLoaded приходит
@@ -283,16 +299,13 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
                     }
                 }
             }
-            // Период — combos месяц/год статичны (заполнены в build), restore сразу.
-            if let Some(period) = &st.period {
-                restore_period(period);
+            // Диапазон дат (интервальный фильтр) — восстанавливаем из сохранённого.
+            if let Some(dr) = &st.date_range {
+                DATE_RANGE.with(|d| *d.borrow_mut() = Some(dr.clone()));
+                update_date_label();
             }
             // Применяем восстановленный фильтр к списку.
-            send_list_archive(
-                st.profile_name.clone(),
-                st.report_type.clone(),
-                st.period.clone(),
-            );
+            send_list_archive(st.profile_name.clone(), st.report_type.clone());
         }
     }
 
@@ -505,29 +518,26 @@ fn selected_report() -> Option<String> {
     })
 }
 
-/// Возвращает выбранный период в формате YYYY-MM (None = «(все)»).
-/// Берётся из combo Месяц (индекс 0 = «(все)») + combo Год.
-fn selected_period() -> Option<String> {
-    let month_idx = W_MONTH_COMBO.with(|w| {
-        w.borrow()
-            .as_ref()
-            .and_then(gtk4::prelude::ComboBoxExtManual::active)
-            .map(|i| i as usize)
-    })?;
-    // Индекс 0 = «(все)» → период не выбран.
-    if month_idx == 0 {
-        return None;
-    }
-    let year_text = W_YEAR_COMBO.with(|w| {
-        w.borrow()
-            .as_ref()
-            .and_then(gtk4::ComboBoxText::active_text)
-            .map(|s| s.to_string())
-    })?;
-    let year: i32 = year_text.parse().ok()?;
-    // month_idx 1..12 → MONTH_NAMES[month_idx-1] → месяц 1..12.
-    let month = month_idx; // combo[1]=Январь=месяц1
-    Some(format!("{year}-{month:02}"))
+/// Возвращает выбранный диапазон дат фильтра `[from, to]` (None = без фильтра по
+/// дате). Берётся из виджета интервала (DATE_RANGE).
+fn selected_date_range() -> Option<(String, String)> {
+    DATE_RANGE.with(|d| d.borrow().clone())
+}
+
+/// Обновляет лейбл текущего интервала: «YYYY-MM-DD…YYYY-MM-DD» или «(все даты)».
+fn update_date_label() {
+    W_DATE_LABEL.with(|w| {
+        if let Some(l) = w.borrow().as_ref() {
+            let text = DATE_RANGE.with(|d| {
+                d.borrow()
+                    .as_ref()
+                    .map_or("(все даты)".to_string(), |(f, t)| {
+                        if f == t { f.clone() } else { format!("{f}…{t}") }
+                    })
+            });
+            l.set_text(&text);
+        }
+    });
 }
 
 /// Локальный статус вкладки (пишет в W_RESULT лейбл).
@@ -580,50 +590,27 @@ fn schedule_save() {
     cs.send(crate::channels::UiCommand::SaveArchiveState(ArchiveState {
         profile_name: selected_profile(),
         report_type: selected_report(),
-        period: selected_period(),
+        date_range: selected_date_range(),
     }));
 }
 
-/// Шлёт ListArchive с заданными значениями фильтров.
-fn send_list_archive(profile: Option<String>, report: Option<String>, period: Option<String>) {
+/// Шлёт ListArchive с заданными профилем/отчётом + текущим диапазоном дат из
+/// виджета интервала (DATE_RANGE).
+fn send_list_archive(profile: Option<String>, report: Option<String>) {
     let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
         return;
     };
     cs.send(crate::channels::UiCommand::ListArchive {
         profile_name: profile,
         report_type: report,
-        period,
+        date_range: selected_date_range(),
     });
 }
 
-/// Восстанавливает combo периода из строки YYYY-MM: месяц → combo Месяц
-/// (индекс 1..12), год → combo Год (поиск по тексту, т.к. годы динамические).
-fn restore_period(period: &str) {
-    let Some((year_s, month_s)) = period.split_once('-') else {
-        return;
-    };
-    let Ok(month) = month_s.parse::<u32>() else {
-        return;
-    };
-    let Ok(year) = year_s.parse::<i32>() else {
-        return;
-    };
-    if !(1..=12).contains(&month) {
-        return;
-    }
-    // combo[0]="(все)", combo[month]=месяц. set_active синхронно эмиссирует changed,
-    // но RESTORING=true блокирует автосохранение.
-    W_MONTH_COMBO.with(|w| {
-        if let Some(combo) = w.borrow().as_ref() {
-            combo.set_active(Some(month));
-        }
-    });
-    W_YEAR_COMBO.with(|w| {
-        if let Some(combo) = w.borrow().as_ref() {
-            set_combo_active_by_text(combo, &year.to_string());
-        }
-    });
-}
+/// Восстанавливать combo периода больше не нужно: month/year combos удалены,
+/// фильтр архива теперь — интервал дат (DATE_RANGE), восстанавливаемый в
+/// on_archive_state_loaded напрямую из st.date_range.
+
 
 /// Ищет текст в combo и делает его активным. Возвращает true если найден.
 fn set_combo_active_by_text(combo: &ComboBoxText, text: &str) -> bool {
@@ -694,8 +681,8 @@ pub fn on_download_deleted(res: &Result<i64, String>) {
     match res {
         Ok(_id) => {
             notify("Запись удалена.");
-            // Refresh списка с текущими фильтрами combos.
-            send_list_archive(selected_profile(), selected_report(), selected_period());
+            // Refresh списка с текущими фильтрами.
+            send_list_archive(selected_profile(), selected_report());
         }
         Err(e) => notify(&format!("Ошибка удаления: {e}")),
     }

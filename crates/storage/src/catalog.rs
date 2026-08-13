@@ -400,42 +400,28 @@ impl Catalog {
             params_vec.push(Box::new(rt.to_string()));
         }
         if let Some((from, to)) = date_range {
-            // Вычисляем границы интервала файла в SQL (CASE WHEN), затем проверяем
-            // пересечение: file_start <= filter_to AND file_end >= filter_from.
-            // period длины 7 ("YYYY-MM") → месяц целиком; длины 10 ("YYYY-MM-DD")
-            // → точка; иначе fallback на document_date; иначе NULL (не попадает).
-            where_clauses.push(
-                "(CASE \
-                    WHEN d.period IS NOT NULL AND length(d.period) = 7 \
-                        THEN substr(d.period,1,7)||'-01' \
-                    WHEN d.period IS NOT NULL AND length(d.period) = 10 \
-                        THEN d.period \
-                    WHEN d.document_date IS NOT NULL \
-                        THEN d.document_date \
-                    ELSE NULL \
-                  END) IS NOT NULL \
-                 AND (CASE \
-                    WHEN d.period IS NOT NULL AND length(d.period) = 7 \
-                        THEN substr(d.period,1,7)||'-01' \
-                    WHEN d.period IS NOT NULL AND length(d.period) = 10 \
-                        THEN d.period \
-                    WHEN d.document_date IS NOT NULL \
-                        THEN d.document_date \
-                    ELSE NULL \
-                  END) <= ? \
-                 AND (CASE \
-                    WHEN d.period IS NOT NULL AND length(d.period) = 7 \
-                        THEN date(substr(d.period,1,7)||'-01','+1 month','-1 day') \
-                    WHEN d.period IS NOT NULL AND length(d.period) = 10 \
-                        THEN d.period \
-                    WHEN d.document_date IS NOT NULL \
-                        THEN d.document_date \
-                    ELSE NULL \
-                  END) >= ?"
-                    .to_string(),
-            );
-            params_vec.push(Box::new(to));
+            // Матч: дата НАЧАЛА отчёта ИЛИ дата КОНЦА попадает в интервал [from,to]
+            // (не пересечение диапазонов, а «хотя бы одна граничная дата внутри»).
+            // start = period(YYYY-MM)→1-е число месяца; period(YYYY-MM-DD)→точка;
+            //         иначе document_date; иначе NULL.
+            // end   = period(YYYY-MM)→последнее число месяца; period(YYYY-MM-DD)→точка;
+            //         иначе document_date; иначе NULL.
+            let start_expr = "(CASE WHEN d.period IS NOT NULL AND length(d.period)=7 \
+                THEN substr(d.period,1,7)||'-01' \
+                WHEN d.period IS NOT NULL AND length(d.period)=10 THEN d.period \
+                WHEN d.document_date IS NOT NULL THEN d.document_date ELSE NULL END)";
+            let end_expr = "(CASE WHEN d.period IS NOT NULL AND length(d.period)=7 \
+                THEN date(substr(d.period,1,7)||'-01','+1 month','-1 day') \
+                WHEN d.period IS NOT NULL AND length(d.period)=10 THEN d.period \
+                WHEN d.document_date IS NOT NULL THEN d.document_date ELSE NULL END)";
+            where_clauses.push(format!(
+                "(({start_expr} IS NOT NULL AND {start_expr} BETWEEN ? AND ?) \
+                 OR ({end_expr} IS NOT NULL AND {end_expr} BETWEEN ? AND ?))"
+            ));
+            params_vec.push(Box::new(from.clone()));
+            params_vec.push(Box::new(to.clone()));
             params_vec.push(Box::new(from));
+            params_vec.push(Box::new(to));
         }
         let where_sql = if where_clauses.is_empty() {
             String::new()

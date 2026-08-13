@@ -426,11 +426,11 @@ async fn run_command_loop(
             UiCommand::ListArchive {
                 profile_name,
                 report_type,
-                period,
+                date_range,
             } => {
-                // Архив (П.6): опциональный фильтр по профилю резолвим в profile_id.
-                // period (YYYY-MM) → диапазон дат для пересечения (inclusion-фильтр).
-                let date_range = period.as_deref().and_then(period_to_range);
+                // Архив: опциональный фильтр по профилю резолвим в profile_id.
+                // date_range [from,to] из виджета интервала передаётся каталогу как есть;
+                // совпадение — дата начала/конца отчёта попадает в интервал (catalog).
                 let outcome = (|| {
                     let cat = domain.catalog.read();
                     let cat = cat.as_ref()?;
