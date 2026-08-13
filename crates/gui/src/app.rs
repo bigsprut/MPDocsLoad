@@ -958,12 +958,12 @@ async fn do_download(
 
     fwd.forward(UiEvent::Progress {
         fraction: Some(0.0),
-        message: "начало выгрузки…".into(),
+        message: "начало скачивания…".into(),
     });
     log_event(
         fwd,
         crate::channels::LogKind::Info,
-        format!("Выгрузка {report_type} — {profile_name}"),
+        format!("Скачивание {report_type} — {profile_name}"),
     );
     let files = report
         .download(auth.as_ref(), &params, progress, cancel)
@@ -1006,7 +1006,7 @@ async fn do_download(
 
     fwd.forward(UiEvent::Progress {
         fraction: Some(1.0),
-        message: "выгрузка завершена".into(),
+        message: "скачивание завершено".into(),
     });
 
     match saved {

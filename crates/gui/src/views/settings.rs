@@ -253,7 +253,7 @@ fn labeled_spin(label: &str, value: f64) -> LabeledSpin {
 /// Контекстная помощь вкладки «Настройки» (кнопка «?» в заголовке).
 const SETTINGS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::H("Что здесь"),
-    crate::widgets::tab_help::HelpBlock::T("Основные параметры сохранения выгрузок. Применяются к <b>новым</b> выгрузкам после кнопки «Сохранить»."),
+    crate::widgets::tab_help::HelpBlock::T("Основные параметры сохранения скачанных файлов. Применяются к <b>новым</b> скачиваниям после кнопки «Сохранить»."),
     crate::widgets::tab_help::HelpBlock::H("Поля"),
     crate::widgets::tab_help::HelpBlock::B(&[
         "Папка выгрузки — куда сохранять файлы; кнопка 📁 выбирает папку в диалоге.",

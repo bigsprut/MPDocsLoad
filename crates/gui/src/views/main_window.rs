@@ -353,7 +353,7 @@ fn dispatch_event(
                 crate::views::download::on_download_finished(result);
             }
             Err(e) => {
-                status.set_text(&format!("Ошибка выгрузки: {e}"));
+                status.set_text(&format!("Ошибка скачивания: {e}"));
                 crate::views::download::on_download_error(e);
             }
         },

@@ -151,7 +151,7 @@ fn make_row(entry: &LogEntry) -> ListBoxRow {
 /// Контекстная помощь вкладки «Журнал» (кнопка «?» в заголовке).
 const LOGS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::H("Что здесь"),
-    crate::widgets::tab_help::HelpBlock::T("Лента событий: выгрузки (успех/ошибка), запуски расписаний, сбои."),
+    crate::widgets::tab_help::HelpBlock::T("Лента событий: скачивание (успех/ошибка), запуски расписаний, сбои."),
     crate::widgets::tab_help::HelpBlock::B(&[
         "Хранятся последние 500 записей.",
         "«Очистить» — очищает экран (не трогает историю в БД).",
