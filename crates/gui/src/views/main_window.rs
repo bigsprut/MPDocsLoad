@@ -6,7 +6,7 @@
 use glib::clone;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Image, Label, Orientation, Separator, Stack, StackSidebar,
+    Box as GtkBox, Image, Label, Orientation, ProgressBar, Separator, Stack, StackSidebar,
 };
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -81,6 +81,16 @@ pub fn build_and_present(
     bottom.set_margin_bottom(2);
     bottom.append(&status);
 
+    // Полоса прогресса выгрузки: видна во время операции (fraction из
+    // UiEvent::Progress, который прежде выбрасывался). Слева статус, справа бар.
+    let progress = ProgressBar::builder()
+        .halign(gtk4::Align::End)
+        .hexpand(false)
+        .width_request(180)
+        .visible(false)
+        .build();
+    bottom.append(&progress);
+
     // --- ToolbarView: даёт полосу заголовка с кнопками управления окном ---
     // (свернуть/развернуть/закрыть). Без неё libadwaita на Windows не рисует
     // стандартные кнопки управления окном.
@@ -130,12 +140,13 @@ pub fn build_and_present(
         let status = status.clone();
         let title_icon = title_icon.clone();
         let title_label = title_label.clone();
+        let progress = progress.clone();
         let main_ctx = glib::MainContext::default();
         main_ctx.spawn_local(clone!(@strong event_rx => async move {
             // Порождаем таск, читающий receiver; обновляем UI по событию.
             loop {
                 match event_rx.recv().await {
-                    Ok(event) => dispatch_event(&event, &status, &title_icon, &title_label),
+                    Ok(event) => dispatch_event(&event, &status, &title_icon, &title_label, &progress),
                     Err(async_channel::RecvError) => break,
                 }
             }
@@ -223,6 +234,7 @@ fn dispatch_event(
     status: &Label,
     title_icon: &Image,
     title_label: &Label,
+    progress: &ProgressBar,
 ) {
     match event {
         UiEvent::Notify(msg) => {
@@ -266,8 +278,14 @@ fn dispatch_event(
                 Err(e) => status.set_text(&format!("Ошибка удаления: {e}")),
             }
         }
-        UiEvent::Progress { message, .. } => {
+        UiEvent::Progress { message, fraction } => {
             status.set_text(message);
+            // Прежде fraction выбрасывался — теперь ведём полосу прогресса.
+            progress.set_visible(true);
+            match fraction {
+                Some(f) => progress.set_fraction(f.clamp(0.0, 1.0)),
+                None => progress.pulse(), // неопределённый (poll/wait) — пульсация
+            }
         }
         UiEvent::ProvidersLoaded(list) => {
             status.set_text(&format!("Провайдеров: {}", list.len()));
@@ -339,6 +357,7 @@ fn dispatch_event(
         }
         UiEvent::DocumentsListed(res) => {
             crate::views::download::on_documents_listed(res);
+            progress.set_visible(false);
             match res {
                 Ok(d) => status.set_text(&format!("Документов: {}", d.len())),
                 Err(e) => status.set_text(&format!("Ошибка: {e}")),
@@ -347,16 +366,20 @@ fn dispatch_event(
         UiEvent::DocumentCategoriesLoaded(res) => {
             crate::views::download::on_document_categories_loaded(res);
         }
-        UiEvent::DownloadFinished(res) => match res {
-            Ok(result) => {
-                status.set_text(&format!("Скачано файлов: {}", result.files.len()));
-                crate::views::download::on_download_finished(result);
+        UiEvent::DownloadFinished(res) => {
+            // Выгрузка завершена (успех/ошибка) — гасим полосу прогресса.
+            progress.set_visible(false);
+            match res {
+                Ok(result) => {
+                    status.set_text(&format!("Скачано файлов: {}", result.files.len()));
+                    crate::views::download::on_download_finished(result);
+                }
+                Err(e) => {
+                    status.set_text(&format!("Ошибка скачивания: {e}"));
+                    crate::views::download::on_download_error(e);
+                }
             }
-            Err(e) => {
-                status.set_text(&format!("Ошибка скачивания: {e}"));
-                crate::views::download::on_download_error(e);
-            }
-        },
+        }
         UiEvent::ProfileSaved(res) => match res {
             Ok(id) => status.set_text(&format!("Профиль сохранён (id={id})")),
             Err(e) => status.set_text(&format!("Ошибка: {e}")),
