@@ -501,11 +501,16 @@ pub fn build(cs: &CommandSender) -> GtkBox {
                     params,
                 });
             }
-            notify(&format!(
-                "Генерация за {n} мес. ({}…{})…",
-                months.first().map(String::as_str).unwrap_or("?"),
-                months.last().map(String::as_str).unwrap_or("?")
-            ));
+            let msg = if n == 1 {
+                format!("Генерация отчёта за {}…", months[0])
+            } else {
+                format!(
+                    "Генерация за {n} мес. ({}…{})…",
+                    months.first().map(String::as_str).unwrap_or("?"),
+                    months.last().map(String::as_str).unwrap_or("?")
+                )
+            };
+            notify(&msg);
         } else {
             // Range/Day/None — один запрос за весь диапазон (период = стартовый
             // месяц для отчётов, которым он нужен).
@@ -655,10 +660,19 @@ fn update_mode_hint() {
                     .unwrap_or(mdwf_core::PeriodKind::Range);
                 let note = match kind {
                     mdwf_core::PeriodKind::Month => {
-                        let n = months_in_current_range().len();
-                        format!(
-                            "📅 Месячный отчёт. За выбранный интервал соберём по месяцам: {n} мес. (кнопка «Скачать по периоду»)."
-                        )
+                        let months = months_in_current_range();
+                        match months.len() {
+                            0 => "📅 Задайте корректный диапазон дат (date_from ≤ date_to).".to_string(),
+                            // Интервал ровно один месяц → обычная выгрузка за этот месяц.
+                            1 => format!(
+                                "📅 Месячный отчёт за {} — обычная выгрузка за месяц (кнопка «Скачать по периоду»).",
+                                months[0]
+                            ),
+                            // Несколько месяцев → собираем по месяцам из интервала.
+                            n => format!(
+                                "📅 Месячный отчёт. За интервал соберём по месяцам: {n} мес. (кнопка «Скачать по периоду»)."
+                            ),
+                        }
                     }
                     mdwf_core::PeriodKind::Range if is_browsable => {
                         "📊 Задайте диапазон дат и категорию → «Список документов» → отметьте → «Скачать выбранные».".to_string()
