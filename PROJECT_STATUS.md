@@ -739,6 +739,25 @@ thread_local! {
     видит mutex пока MDWF запущен; второй инстанс → exit 124 (блокирует на диалоге),
     в логе НЕТ «MDWF GUI starting» (ветка диалога, не app). Тонкость тестов: bash-
     переменная пути почему-то пустела во второй команде — литеральный путь надёжнее.
+43. **Иконка приложения в exe — НЕ использовать winres при glib-build-tools.** Симптом:
+    в проводнике/ярлыках/таскбаре ВСЕГДА дефолтная иконка (а не бренд). Корень: крейт
+    `winres` генерит `resource.o` (с иконкой + version-info), но НЕ эмитит для него
+    `cargo:rustc-link-arg` — потому что `glib-build-tools::compile_resources` эмитит
+    `cargo:rustc-link-lib=static=resource` (→ `libresource.a`, gresource), и winres-овский
+    объект с тем же базовым именем «resource» теряется. Итог: `.rsrc` exe = 1536 байт
+    (только version-info или пусто), иконки НЕТ. Проверка: `objdump -h exe | grep rsrc`
+    + Python-скан `.rsrc` на DIB-заголовки (biSize=40) и брендовые цвета. Фикс: в build.rs
+    ВРУЧНУЮ — `.rc` (иконка + VERSIONINFO, АБСОЛЮТНЫЙ путь к .ico со слешами `/`, т.к.
+    windres cwd=OUT_DIR) → `windres -O coff` → `cargo:rustc-link-arg=<o>`. winres убран.
+44. **ICO: малые размеры (16-128) — BMP/DIB, 256 — PNG. НЕ all-PNG.** `make-icon.sh`
+    раньше заворачивал ВСЕ размеры как PNG-blob'ы в ICO. Windows для малых/средних
+    значков (16/32/48 — таскбар/список/проводник) ждёт BMP/DIB; PNG-in-ICO надёжно
+    работает только для 256. All-PNG ICO → Windows показывает дефолт, а .NET
+    `Icon(file,size)` падает. Pillow/icotool/ImageMagick в MSYS2 НЕТ → энкодер
+    `scripts/ico_encode.py` (чистый stdlib zlib+struct): PNG→decode→BMP-DIB
+    (BITMAPINFOHEADER + BGRA bottom-up + AND-mask) для 16/24/32/48/64/128, 256 — PNG.
+    Проверка: .NET `Icon(ico,48)` OK + брендовый фиолетовый в пикселях; .NET на all-PNG
+    версии падал. См. также #43 (иконка должна ещё и влинковаться в exe).
 
 
 

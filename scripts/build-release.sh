@@ -130,6 +130,11 @@ if exist "%APPDIR%gdk-pixbuf-query-loaders.exe" (
 if exist "%APPDIR%glib-compile-schemas.exe" (
     "%APPDIR%glib-compile-schemas.exe" "%SDIR%"
 )
+rem Обновить кэш иконок Windows. После переустановки проводник/ярлыки/таскбар могут
+rem показывать ЗАКЭШИРОВАННУЮ старую/дефолт иконку exe (Windows кэширует иконку по
+rem пути файла и не обновляет автоматически при замене). ie4uinit -show перестраивает
+rem shell icon cache → свежая иконка exe/ярлыков отображается сразу.
+ie4uinit.exe -show >nul 2>&1
 endlocal
 BAT
 unix2dos "$DIST_APP/postinstall.bat" 2>/dev/null || sed -i 's/$/\r/' "$DIST_APP/postinstall.bat"
