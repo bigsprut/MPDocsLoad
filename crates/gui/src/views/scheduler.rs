@@ -140,24 +140,58 @@ pub fn build(cs: &CommandSender) -> gtk4::Box {
 }
 
 /// Форма добавления расписания: имя, отчёт, cron (+пресеты), период.
+/// Каждое поле — с tooltip-пояснением «что это и зачем»; под cron и периодом —
+/// развёрнутые подсказки; сверху — инструкция по настройке по шагам.
 fn build_add_form() -> gtk4::Box {
     let frame = gtk4::Box::new(Orientation::Vertical, 8);
+
+    // --- Инструкция по настройке (по шагам) ---
+    frame.append(&Label::builder()
+        .label("Как настроить расписание — по шагам")
+        .css_classes(["heading"])
+        .halign(Align::Start)
+        .build());
+    for step in [
+        "1) Во вкладке «Магазин» выберите магазин и профиль — новое расписание создаётся для активного магазина.",
+        "2) Задайте имя (любое, по нему расписание будет в списке) и выберите отчёт.",
+        "3) Укажите период: 0 — текущий месяц, −1 — прошлый (обычно нужно: отчёты готовы через несколько дней после конца месяца).",
+        "4) Задайте расписание: нажмите один из пресетов (Ежемесячно/Ежедневно/Еженедельно) или впишите cron вручную.",
+        "5) Нажмите «Добавить расписание». Готово — в срок оно выполнится само (пока программа запущена или включён фоновый планировщик ниже).",
+    ] {
+        frame.append(&Label::builder()
+            .label(step)
+            .wrap(true)
+            .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
+            .margin_start(8)
+            .css_classes(["dim-label"])
+            .build());
+    }
 
     let report = ComboBoxText::new();
     report.append_text("(выберите отчёт)");
     report.set_active(Some(0));
+    report.set_tooltip_text(Some(
+        "Какой отчёт выгружать по расписанию. Список берётся из активного магазина (вкладка «Магазин»)",
+    ));
     W_REPORT_COMBO.with(|w| *w.borrow_mut() = Some(report.clone()));
 
-    let name = Entry::builder().placeholder_text("Имя расписания").build();
+    let name = Entry::builder()
+        .placeholder_text("Имя расписания")
+        .tooltip_text("Произвольное название — только чтобы отличать расписания в списке")
+        .build();
     W_NAME.with(|w| *w.borrow_mut() = Some(name.clone()));
 
     let cron = Entry::builder()
         .placeholder_text("cron: мин час день мес день_недели")
         .text("0 2 1 * *")
+        .tooltip_text("Когда выполнять. 5 полей: минута час день_месяца месяц день_недели (0=вс, 1=пн). Звёздочка «*» = «каждый»")
         .build();
     W_CRON.with(|w| *w.borrow_mut() = Some(cron.clone()));
 
     let presets = gtk4::Box::new(Orientation::Horizontal, 6);
+    presets.set_tooltip_text(Some("Готовые варианты — нажми, и cron заполнится сам"));
     for (label, expr) in [
         ("Ежемесячно (1-го, 02:00)", "0 2 1 * *"),
         ("Ежедневно (09:00)", "0 9 * * *"),
@@ -173,18 +207,40 @@ fn build_add_form() -> gtk4::Box {
         .placeholder_text("Смещение периода в месяцах (-1 = прошлый месяц)")
         .text("-1")
         .width_chars(6)
+        .tooltip_text("За какой месяц выгружать отчёт: 0 — текущий, −1 — прошлый, −2 — позапрошлый")
         .build();
     W_PERIOD.with(|w| *w.borrow_mut() = Some(period.clone()));
 
     let add_btn = Button::with_label("Добавить расписание");
     add_btn.add_css_class("suggested-action");
+    add_btn.set_tooltip_text(Some("Сохранить расписание — оно появится в списке ниже"));
     add_btn.connect_clicked(|_| add_schedule());
 
     frame.append(&field_row("Имя:", &name));
     frame.append(&field_row("Отчёт:", &report));
     frame.append(&field_row("Cron:", &cron));
     frame.append(&presets);
+    // Расшифровка полей cron + примеры.
+    frame.append(&Label::builder()
+        .label("Cron — 5 полей через пробел:  минута  час  день_месяца  месяц  день_недели (0=вс).  «*» = каждый.\nПримеры:  «0 2 1 * *» — 1-го числа в 02:00;  «0 9 * * 1» — по понедельникам в 09:00;  «0 9 15 * *» — 15-го числа в 09:00;  «30 5 * * *» — ежедневно в 05:30")
+        .wrap(true)
+        .xalign(0.0)
+        .halign(Align::Start)
+        .hexpand(true)
+        .margin_start(8)
+        .css_classes(["dim-label"])
+        .build());
     frame.append(&field_row("Период:", &period));
+    // Пояснение смещения периода.
+    frame.append(&Label::builder()
+        .label("Период — за какой месяц выгружать отчёт (в месяцах относительно текущего):  0 — текущий;  −1 — прошлый (обычно так: отчёты за месяц готовы в первых числах следующего);  −2 — позапрошлый")
+        .wrap(true)
+        .xalign(0.0)
+        .halign(Align::Start)
+        .hexpand(true)
+        .margin_start(8)
+        .css_classes(["dim-label"])
+        .build());
     frame.append(&add_btn);
     frame
 }
@@ -364,6 +420,9 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     let name_for_toggle = s.name.clone();
     let enabled = CheckButton::with_label("вкл");
     enabled.set_active(s.enabled);
+    enabled.set_tooltip_text(Some(
+        "Включено — расписание выполняется автоматически. Снято — пауза (не удаляется)",
+    ));
     enabled.connect_toggled(move |cb| {
         let Some(cs) = CMD.with(|c| c.borrow().clone()) else { return };
         cs.send(UiCommand::SetScheduleEnabled {
@@ -373,6 +432,9 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     });
 
     let run_btn = Button::with_label("▶");
+    run_btn.set_tooltip_text(Some(
+        "Выполнить прямо сейчас (не дожидаясь срока) — удобно для проверки настройки",
+    ));
     let name_for_run = s.name.clone();
     run_btn.connect_clicked(move |_| {
         if let Some(cs) = CMD.with(|c| c.borrow().clone()) {
@@ -380,6 +442,7 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
         }
     });
     let del_btn = Button::with_label("🗑");
+    del_btn.set_tooltip_text(Some("Удалить расписание"));
     del_btn.add_css_class("destructive-action");
     let name_for_del = s.name.clone();
     del_btn.connect_clicked(move |_| {
