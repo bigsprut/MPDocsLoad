@@ -713,7 +713,7 @@ impl Report for WbDocumentsReport {
         auth: &dyn mdwf_core::Authenticator,
         filter: &DocumentFilter,
         progress: ProgressCallbackRef,
-        _cancel: CancelToken,
+        cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
         let docs_client = crate::documents::DocumentsClient::new(&self.client);
         // Категория опциональна: если не указана, WB вернёт документы всех категорий.
@@ -740,6 +740,9 @@ impl Report for WbDocumentsReport {
         let mut offset: u32 = 0;
         let mut page_no: u32 = 0;
         for _ in 0..WB_DOCS_MAX_PAGES {
+            if cancel.is_cancelled() {
+                return Err(mdwf_core::CoreError::Cancelled);
+            }
             // Если уже набрали ceiling — стоп.
             if let Some(max) = ceiling {
                 if all.len() as u32 >= max {

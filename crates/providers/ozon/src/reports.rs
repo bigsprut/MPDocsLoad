@@ -1136,7 +1136,7 @@ impl Report for OzonPaginatedReport {
         auth: &dyn mdwf_core::Authenticator,
         params: &ReportParams,
         _progress: ProgressCallbackRef,
-        _cancel: CancelToken,
+        cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
         let mut collected = serde_json::json!([]);
         match self.kind {
@@ -1144,6 +1144,9 @@ impl Report for OzonPaginatedReport {
                 // Цикл по page=1..=page_count, собираем result.cash_flows.
                 let mut page = 1u32;
                 loop {
+                    if cancel.is_cancelled() {
+                        return Err(CoreError::Cancelled);
+                    }
                     let mut body = build_download_body(&self.type_id, params);
                     body["page"] = json!(page);
                     let resp = self.client.post(self.endpoint, &body, auth).await?;
@@ -1168,6 +1171,9 @@ impl Report for OzonPaginatedReport {
                 let limit = 1000u64;
                 let mut offset = 0u64;
                 loop {
+                    if cancel.is_cancelled() {
+                        return Err(CoreError::Cancelled);
+                    }
                     let mut body = build_download_body(&self.type_id, params);
                     body["limit"] = json!(limit);
                     body["offset"] = json!(offset);
@@ -1197,6 +1203,9 @@ impl Report for OzonPaginatedReport {
                     let mut last_id = String::new();
                     let mut iter = 0u32;
                     loop {
+                        if cancel.is_cancelled() {
+                            return Err(CoreError::Cancelled);
+                        }
                         let mut body = build_download_body(&self.type_id, params);
                         body["date"] = json!(day);
                         body["last_id"] = json!(last_id);
@@ -1267,6 +1276,9 @@ impl Report for OzonPaginatedReport {
                 // rate limit, и без pacing каталог в ~2840 SKU (29 батчей)
                 // триггерит 429 «You have reached request rate limit per second».
                 for (i, chunk) in skus.chunks(100).enumerate() {
+                    if cancel.is_cancelled() {
+                        return Err(CoreError::Cancelled);
+                    }
                     if i > 0 {
                         tokio::time::sleep(STOCKS_BATCH_DELAY).await;
                     }
@@ -1278,6 +1290,9 @@ impl Report for OzonPaginatedReport {
                     let resp = {
                         let mut batch_attempts = 0u32;
                         loop {
+                            if cancel.is_cancelled() {
+                                return Err(CoreError::Cancelled);
+                            }
                             match self.client.post(self.endpoint, &body, auth).await {
                                 Ok(r) => break r,
                                 Err(e) if e.is_rate_limited() && batch_attempts < 5 => {
@@ -1307,6 +1322,9 @@ impl Report for OzonPaginatedReport {
                 let mut last_id: i64 = 0;
                 let mut iter = 0u32;
                 loop {
+                    if cancel.is_cancelled() {
+                        return Err(CoreError::Cancelled);
+                    }
                     let mut body = build_download_body(&self.type_id, params);
                     body["limit"] = json!(500);
                     body["last_id"] = json!(last_id);
@@ -1388,6 +1406,9 @@ impl Report for OzonPaginatedReport {
                 // Батчинг ≤200 posting_numbers на запрос (лимит /v1/finance/accrual/postings).
                 // Между батчами — мягкий pacing (защита от per-second rate limit).
                 for (i, chunk) in postings.chunks(200).enumerate() {
+                    if cancel.is_cancelled() {
+                        return Err(CoreError::Cancelled);
+                    }
                     if i > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     }
