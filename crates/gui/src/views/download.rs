@@ -633,11 +633,13 @@ fn current_target() -> Option<(String, String, String)> {
 }
 
 /// Возвращает выбранный report_type (без display_name).
+/// Combo показывает ТОЛЬКО display_name (type_id спрятан, QW1) — сам текст
+/// парсить нельзя: индекс combo синхронен списку REPORTS (заполняются одним
+/// циклом в on_reports_loaded), берём type_id оттуда.
 fn current_report_type() -> Option<String> {
     let combo = W_REPORT.with(|w| w.borrow().clone())?;
-    let text = combo.active_text()?.to_string();
-    // Формат: "wb.documents — Документы ...".
-    text.split(" — ").next().map(str::to_string)
+    let idx = combo.active()?;
+    REPORTS.with(|r| r.borrow().get(idx as usize).map(|ri| ri.type_id.clone()))
 }
 
 /// `PeriodKind` выбранного отчёта (по метаданным). По умолчанию `Range`.
