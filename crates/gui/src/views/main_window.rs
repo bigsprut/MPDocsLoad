@@ -183,11 +183,18 @@ pub fn build_and_present(
         mark_for_sync(&name);
     });
 
-    // Начальная подсветка — «Магазин» (стек стартует на первой добавленной вкладке).
-    if let Some(row) = rows_by_name.borrow().get("shop") {
+    // Начальная вкладка — «Магазин» (стек стартует на первой добавленной вкладке).
+    // Отладочный хук MDWF_START_VIEW=<id> (shop/reports/download/archive/scheduler/
+    // logs/settings/help/about) открывает окно сразу на нужной вкладке — для
+    // GUI-тестов: скриншот вкладки без кликов по живому рабочему столу (урок #51).
+    let start_view = std::env::var("MDWF_START_VIEW")
+        .ok()
+        .filter(|v| rows_by_name.borrow().contains_key(v.as_str()))
+        .unwrap_or_else(|| "shop".to_string());
+    if let Some(row) = rows_by_name.borrow().get(start_view.as_str()) {
         sidebar.select_row(Some(row));
     }
-    mark_active("shop");
+    mark_active(&start_view);
 
     root.append(&sidebar);
     root.append(&Separator::new(Orientation::Vertical));
