@@ -90,7 +90,11 @@ impl FileStore {
         let file_name = ctx.render(&self.config.file_name_template);
         let path = dir.join(&file_name);
 
-        fs::write(&path, data).map_err(StorageError::Io)?;
+        // Атомарная запись: tmp + rename — крах посреди записи не оставит
+        // обрезанный файл (который уже мог быть записан в каталог как «скачан»).
+        let tmp = path.with_extension("part");
+        fs::write(&tmp, data).map_err(StorageError::Io)?;
+        fs::rename(&tmp, &path).map_err(StorageError::Io)?;
 
         let hash = if self.config.compute_hash {
             Some(sha256_hex(data))

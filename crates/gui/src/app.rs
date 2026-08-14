@@ -16,6 +16,7 @@ use mdwf_config::ProvisionedConfig;
 use mdwf_core::{ProviderRegistry, ProviderRef};
 use mdwf_secrets::{InMemorySecretStore, OsKeychain, SecretStore};
 use mdwf_storage::{Catalog, FileStore, FileStoreConfig, FileNameContext, FolderStructure};
+#[cfg(debug_assertions)]
 use mdwf_test_provider::TestProvider;
 
 use crate::channels::{
@@ -99,7 +100,9 @@ impl App {
             .context("tokio runtime")?;
 
         let registry = ProviderRegistry::new();
-        // Регистрируем провайдеров: TestProvider (mock) + Ozon + Wildberries.
+        // Регистрируем провайдеров: Ozon + Wildberries (+ TestProvider (mock)
+        // только в debug-сборках — в релизе пользователю mock не нужен).
+        #[cfg(debug_assertions)]
         registry.register(Arc::new(TestProvider::new()) as ProviderRef)?;
         registry.register(Arc::new(mdwf_providers_ozon::OzonProvider::new()?) as ProviderRef)?;
         registry.register(Arc::new(

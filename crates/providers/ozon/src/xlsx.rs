@@ -530,8 +530,19 @@ fn value_to_cell(v: &Value) -> String {
 fn write_cell(sheet: &mut rust_xlsxwriter::Worksheet, row: u32, col: u16, text: Option<&str>) {
     if let Some(t) = text {
         if !t.is_empty() {
-            // Пишем как строку (даже числа) — надёжно, без угадывания типа.
-            let _ = sheet.write_string(row, col, t);
+            // Числа — числами (Excel суммирует/сортирует), остальное — строкой.
+            // Дробные парсим напрямую; целые через i128→f64 (mantissa f64 = 52 бита,
+            // потери для финансовых величин нет; крейт пишет f64).
+            #[allow(clippy::cast_precision_loss)]
+            if let Ok(f) = t.parse::<f64>() {
+                if t.parse::<i64>().is_ok() && !t.contains('.') && !t.contains('e') {
+                    let _ = sheet.write_number(row, col, f.trunc());
+                } else {
+                    let _ = sheet.write_number(row, col, f);
+                }
+            } else {
+                let _ = sheet.write_string(row, col, t);
+            }
         }
     }
 }
@@ -583,26 +594,37 @@ fn sheet_key_value(wb: &mut Workbook, title: &str, json: &Value) -> CoreResult<(
     Ok(())
 }
 
+/// Интернер ключей: &'static без безлимитного Box::leak на каждый вызов —
+/// утечка ограничена числом УНИКАЛЬНЫХ ключей за сессию (обчно десятки).
+static INTERNED_KEYS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<&'static str>>> =
+    std::sync::OnceLock::new();
+
+fn intern(s: &str) -> &'static str {
+    let lock = INTERNED_KEYS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    let mut set = lock.lock().expect("interner poisoned");
+    if let Some(&owned) = set.get(s) {
+        return owned;
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    set.insert(leaked);
+    leaked
+}
+
 /// Fallback: выводит заголовки из union ключей массива объектов.
 fn infer_headers(arr: &[&Value]) -> Vec<(&'static str, &'static str)> {
     // Собираем union ключей; path = имя поля, заголовок = оно же.
-    // Используем leak, чтобы получить 'static (модуль живёт всё время работы).
-    let mut keys: Vec<String> = Vec::new();
+    let mut keys: Vec<&'static str> = Vec::new();
     for row in arr {
         if let Some(obj) = row.as_object() {
             for k in obj.keys() {
-                if !keys.contains(k) {
-                    keys.push(k.clone());
+                let owned = intern(k);
+                if !keys.contains(&owned) {
+                    keys.push(owned);
                 }
             }
         }
     }
-    keys.into_iter()
-        .map(|k| {
-            let leaked: &'static str = Box::leak(k.into_boxed_str());
-            (leaked, leaked)
-        })
-        .collect()
+    keys.into_iter().map(|k| (k, k)).collect()
 }
 
 #[allow(clippy::ptr_arg)]

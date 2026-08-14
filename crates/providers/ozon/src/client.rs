@@ -357,7 +357,13 @@ impl OzonHttpClient {
         let url = format!("{}/v2/warehouse/list", self.base_url);
         let mut ids = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut iter = 0u32;
         loop {
+            // Защита от бесконечного цикла при незаменяющемся курсоре (~40k складов).
+            if iter >= 200 {
+                break;
+            }
+            iter += 1;
             let mut body = json!({ "limit": 200 });
             if let Some(c) = &cursor {
                 body["cursor"] = json!(c);
