@@ -108,9 +108,10 @@ struct ReportDef {
     period_kind: PeriodKind,
     description: &'static str,
     /// Раздел личного кабинета продавца. Источник — ФАКТИЧЕСКИЕ названия
-    /// разделов ЛК (сверено 2026-08-15; docs.ozon.ru местами называет их
-    /// по-старому: «Реестр продаж юр. лицам» = «Продажи юрлицам» и т.п.).
-    /// None — путь не указан ни докой, ни ЛК.
+    /// разделов ЛК (сверено по скриншотам продавца 2026-08-15: Финансы→Документы,
+    /// Финансы→Начисления и документы→Баланс, Товары, FBO, FBS, Аналитика;
+    /// docs.ozon.ru называет разделы по-старому). Остались по доке: placement_*
+    /// (FBO → Стоимость размещения), returns. None — путь не установлен.
     cabinet: Option<&'static str>,
     params: DefParams,
     max_range_days: Option<u32>,
@@ -178,7 +179,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Range,
         description: "Баланс кошелька за период (диапазон ≤30 дней).",
-        cabinet: Some("Финансы → Баланс"),
+        cabinet: Some("Финансы → Начисления и документы → Баланс"),
         params: DefParams::None,
         max_range_days: Some(30),
         dispatch: Dispatch::Direct("/v1/finance/balance"),
@@ -189,7 +190,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Range,
         description: "Движение средств по датам за период (диапазон, без жёсткого лимита дней).",
-        cabinet: Some("Финансы → Баланс → Доходы и расходы"),
+        cabinet: Some("Финансы → Начисления и документы → Доходы и расходы"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Paginated(
@@ -280,7 +281,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::None,
         description: "Отчёт по товарам (без привязки к периоду, async).",
-        cabinet: Some("Товары и цены → Список товаров → Скачать → Товары CSV"),
+        cabinet: Some("Товары → Работа с товарами → Список товаров"),
         params: DefParams::None,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/report/products/create"),
@@ -304,7 +305,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Отчёт об отправлениях за период (диапазон дат, async).",
-        cabinet: Some("FBO → Заказы со склада Ozon / FBS → Заказы с моих складов (CSV)"),
+        cabinet: Some("FBO → Заказы → Скачать CSV / FBS → Заказы с моих складов"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/report/postings/create"),
@@ -315,7 +316,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::None,
         description: "Отчёт об уценённых товарах (без привязки к периоду, async).",
-        cabinet: Some("Аналитика → Отчёты → Товары, уценённые Ozon"),
+        cabinet: Some("Аналитика → Моя аналитика → Отчёты → Товары → Продажи со склада Ozon → Товары, уценённые Ozon"),
         params: DefParams::None,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/report/discounted/create"),
@@ -328,7 +329,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         period_kind: PeriodKind::None,
         description: "Остатки на FBS-складе (ID складов подставляются автоматически). \
              Для схемы FBO складов нет — используйте отчёт «Аналитика по остаткам».",
-        cabinet: Some("FBS → Управление логистикой → Управление остатками (XLS)"),
+        cabinet: Some("FBS → Обновить остатки на складах"),
         params: DefParams::Text {
             id: "warehouse_ids",
             label: "ID складов (через запятую)",
@@ -377,7 +378,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::None,
         description: "Аналитика по остаткам (SKU подставляются автоматически, без даты — срез).",
-        cabinet: Some("FBO → Управление остатками (аналитика)"),
+        cabinet: Some("Аналитика → Моя аналитика → Отчёты → Товары → Продажи со склада Ozon → Управление остатками"),
         params: DefParams::Text {
             id: "skus",
             label: "SKU (через запятую, ≤100)",
@@ -391,7 +392,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::None,
         description: "Оборачиваемость товара (без привязки к периоду — срез).",
-        cabinet: Some("FBO → Управление остатками (аналитика)"),
+        cabinet: Some("Аналитика → Моя аналитика → Отчёты → Товары → Продажи со склада Ozon → Оборотная ведомость по товарам"),
         params: DefParams::None,
         max_range_days: None,
         dispatch: Dispatch::Paginated("/v1/analytics/turnover/stocks", PaginationKind::Offset),
