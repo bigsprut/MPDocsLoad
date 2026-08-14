@@ -1325,6 +1325,7 @@ impl Report for OzonPaginatedReport {
                     if cancel.is_cancelled() {
                         return Err(CoreError::Cancelled);
                     }
+                    let prev_last_id = last_id;
                     let mut body = build_download_body(&self.type_id, params);
                     body["limit"] = json!(500);
                     body["last_id"] = json!(last_id);
@@ -1354,6 +1355,16 @@ impl Report for OzonPaginatedReport {
                     // Выход: пустая страница, has_next=false, либо лимит итераций.
                     if n == 0 || !has_next || iter >= MAX_PAGES {
                         break;
+                    }
+                    // Защита от зависшего курсора: если id в ответе не спарсился и
+                    // last_id не изменился — следующая страница вернёт ТЕ ЖЕ данные
+                    // (раньше: 200 итераций дублей). Останов с понятной ошибкой.
+                    if last_id == prev_last_id {
+                        return Err(CoreError::Internal(format!(
+                            "Ozon {}: returns/list: курсор last_id не продвинулся \
+                             (id в ответе отсутствует/непарсим) — останов во избежание дублей",
+                            self.type_id
+                        )));
                     }
                     iter += 1;
                 }

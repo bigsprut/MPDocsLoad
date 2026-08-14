@@ -304,33 +304,39 @@ impl Catalog {
     /// повторная вставка того же хэша вернёт существующий id (no-op).
     pub fn record_download(&self, r: &NewDownload) -> CoreResult<i64> {
         let conn = self.conn.lock();
-        conn.execute(
-            "INSERT INTO downloads
+        // RETURNING id: при upsert-конфликте last_insert_rowid() ненадёжен (может
+        // вернуть stale/чужой id) — RETURNING даёт id фактической строки
+        // (bundled SQLite ≥ 3.35).
+        let id: i64 = conn
+            .query_row(
+                "INSERT INTO downloads
              (profile_id, report_type, period, params, file_path, file_size, file_hash,
               file_format, rows_count, downloader_kind, source_url, document_id, document_date)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(profile_id, report_type, period, file_hash) DO UPDATE SET
                  file_path=excluded.file_path, document_id=excluded.document_id,
                  document_date=excluded.document_date,
-                 downloaded_at=CURRENT_TIMESTAMP",
-            params![
-                r.profile_id,
-                r.report_type,
-                r.period,
-                r.params,
-                r.file_path,
-                r.file_size,
-                r.file_hash,
-                r.file_format,
-                r.rows_count,
-                r.downloader_kind,
-                r.source_url,
-                r.document_id,
-                r.document_date,
-            ],
-        )
-        .map_err(map_sqlite_err)?;
-        Ok(conn.last_insert_rowid())
+                 downloaded_at=CURRENT_TIMESTAMP
+             RETURNING id",
+                params![
+                    r.profile_id,
+                    r.report_type,
+                    r.period,
+                    r.params,
+                    r.file_path,
+                    r.file_size,
+                    r.file_hash,
+                    r.file_format,
+                    r.rows_count,
+                    r.downloader_kind,
+                    r.source_url,
+                    r.document_id,
+                    r.document_date,
+                ],
+                |row| row.get(0),
+            )
+            .map_err(map_sqlite_err)?;
+        Ok(id)
     }
 
     /// Список скачанных документов для профиля+отчёта (для значка «уже загружен»).
@@ -949,6 +955,16 @@ mod tests {
         assert!(cat
             .has_download(id, "ozon.realization", Some("2026-06"), "abc")
             .unwrap());
+        // Повторная запись (upsert-конфликт) обязана вернуть ТОТ ЖЕ id — прежде
+        // last_insert_rowid() на DO UPDATE давал stale/чужой id (баг P1).
+        let id2 = cat.record_download(&rec).unwrap();
+        assert_eq!(id2, cat.record_download(&rec).unwrap(), "upsert: стабильный id");
+        let rows = cat.list_downloads_filtered(None, None, None).unwrap();
+        assert_eq!(
+            rows.iter().filter(|d| d.period.as_deref() == Some("2026-06")).count(),
+            1,
+            "дедуп: одна строка, не дубликат"
+        );
         assert!(!cat
             .has_download(id, "ozon.realization", Some("2026-06"), "other")
             .unwrap());

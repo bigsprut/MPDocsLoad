@@ -463,9 +463,30 @@ impl EventForwarder {
         Self { tx }
     }
 
-    /// Отправляет событие в UI-поток (молча игнорирует ошибку).
+    /// Отправляет событие в UI-поток.
+    ///
+    /// Канал bounded(256); GTK-поток непрерывно его читает, но при потоке
+    /// Progress-событий возможно переполнение. Прежде try_send молча ронял ЛЮБОЕ
+    /// событие — включая терминальные (DownloadFinished → UI навсегда «скачивание…»).
+    /// Теперь: Progress (высокочастотный, низкая ценность) жертвуем при переполнении;
+    /// всё остальное — ретраим с короткими паузами (главный поток быстро освобождает).
     pub fn forward(&self, event: UiEvent) {
-        // try_send: не блокируем tokio-задачу; канал bounded.
-        let _ = self.tx.try_send(event);
+        if matches!(event, UiEvent::Progress { .. }) {
+            let _ = self.tx.try_send(event);
+            return;
+        }
+        let mut ev = event;
+        for _ in 0..100 {
+            match self.tx.try_send(ev) {
+                Ok(()) => return,
+                Err(async_channel::TrySendError::Full(back)) => {
+                    ev = back;
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                // UI закрыт — доставлять некому.
+                Err(async_channel::TrySendError::Closed(_)) => return,
+            }
+        }
+        tracing::error!("UiEvent потеряно: канал событий переполнен (ретраи исчерпаны)");
     }
 }
