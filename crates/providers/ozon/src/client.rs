@@ -510,6 +510,64 @@ impl OzonHttpClient {
         }
         Ok(nums)
     }
+
+    /// Номера FBS-отправлений за период — POST /v4/posting/fbs/list
+    /// (cursor-пагинация). Сверено с docs/ozon-seller-api-reference.md:
+    /// v3 отключается (31.08.2026), v4: filter{since,to} ISO-datetime,
+    /// limit 1..100 (обязателен), ответ {cursor, has_next, postings[]}.
+    pub async fn fetch_fbs_posting_numbers(
+        &self,
+        auth: &dyn Authenticator,
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+    ) -> CoreResult<Vec<String>> {
+        let url = format!("{}/v4/posting/fbs/list", self.base_url);
+        let mut nums = Vec::new();
+        let mut cursor = String::new();
+        let mut iter = 0u32;
+        loop {
+            let mut filter = serde_json::Map::new();
+            if let Some(df) = date_from {
+                if let Some(iso) = crate::date_format::date_only_to_iso(df, false) {
+                    filter.insert("since".into(), json!(iso));
+                }
+            }
+            if let Some(dt) = date_to {
+                if let Some(iso) = crate::date_format::date_only_to_iso(dt, true) {
+                    filter.insert("to".into(), json!(iso));
+                }
+            }
+            let body = json!({
+                "limit": 100,
+                "cursor": cursor,
+                "filter": filter,
+            });
+            let resp = self.post_url(&url, &body, auth).await?;
+            if let Some(postings) = resp.get("postings").and_then(serde_json::Value::as_array) {
+                for p in postings {
+                    if let Some(pn) = p.get("posting_number").and_then(serde_json::Value::as_str) {
+                        nums.push(pn.to_string());
+                    }
+                }
+            }
+            let has_next = resp
+                .get("has_next")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let next_cursor = resp
+                .get("cursor")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            // Выход: нет продолжения, курсор не двигается или защита от цикла.
+            if !has_next || next_cursor.is_empty() || next_cursor == cursor || iter >= 500 {
+                break;
+            }
+            cursor = next_cursor;
+            iter += 1;
+        }
+        Ok(nums)
+    }
 }
 
 /// Извлекает задержку из ответа Ozon 429. Ozon использует несколько заголовков:

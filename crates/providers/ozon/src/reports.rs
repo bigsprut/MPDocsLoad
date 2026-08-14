@@ -1388,32 +1388,52 @@ impl Report for OzonPaginatedReport {
                         .filter(|s| !s.is_empty())
                         .map(String::from)
                         .collect(),
-                    _ => match self
-                        .client
-                        .fetch_posting_numbers(auth, df.as_deref(), dt.as_deref())
-                        .await
-                    {
-                        Ok(v) if !v.is_empty() => {
-                            tracing::info!(
-                                type_id = %self.type_id,
-                                count = v.len(),
-                                "posting_numbers auto-filled из /v2/posting/fbo/list"
-                            );
-                            v
+                    _ => {
+                        // Auto-fill: сначала FBO, затем FBS (отчёт покрывает обе
+                        // схемы — раньше FBS-аккаунты оставались без отправлений).
+                        let fbo_nums = self
+                            .client
+                            .fetch_posting_numbers(auth, df.as_deref(), dt.as_deref())
+                            .await;
+                        let mut v = match fbo_nums {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return Err(CoreError::Internal(format!(
+                                    "не удалось получить posting_numbers через /v2/posting/fbo/list: {e}"
+                                )));
+                            }
+                        };
+                        match self
+                            .client
+                            .fetch_fbs_posting_numbers(auth, df.as_deref(), dt.as_deref())
+                            .await
+                        {
+                            Ok(extra) => {
+                                if !extra.is_empty() {
+                                    tracing::info!(
+                                        type_id = %self.type_id,
+                                        fbo = v.len(),
+                                        fbs = extra.len(),
+                                        "posting_numbers auto-filled: FBO + FBS (/v4/posting/fbs/list)"
+                                    );
+                                    v.extend(extra);
+                                }
+                            }
+                            Err(e) => {
+                                return Err(CoreError::Internal(format!(
+                                    "не удалось получить posting_numbers через /v4/posting/fbs/list: {e}"
+                                )));
+                            }
                         }
-                        Ok(_) => {
+                        if v.is_empty() {
                             return Err(CoreError::Internal(
-                                "нет отправлений за период ( /v2/posting/fbo/list вернул пустой \
-                                 список) — отчёт «Начисления по отправлениям» нечего строить."
+                                "нет отправлений за период (FBO /v2 + FBS /v4 вернули пустые \
+                                 списки) — отчёту «Начисления по отправлениям» нечего строить."
                                     .into(),
                             ));
                         }
-                        Err(e) => {
-                            return Err(CoreError::Internal(format!(
-                                "не удалось получить posting_numbers через /v2/posting/fbo/list: {e}"
-                            )));
-                        }
-                    },
+                        v
+                    }
                 };
                 // Батчинг ≤200 posting_numbers на запрос (лимит /v1/finance/accrual/postings).
                 // Между батчами — мягкий pacing (защита от per-second rate limit).
