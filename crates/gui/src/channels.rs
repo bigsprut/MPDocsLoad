@@ -145,6 +145,14 @@ pub enum UiCommand {
     DeleteSchedule {
         name: String,
     },
+    /// Изменить расписание (имя, cron-выражение, смещение периода) по id.
+    /// profile_id/reports/enabled сохраняются. После — reload списка.
+    UpdateSchedule {
+        id: i64,
+        name: String,
+        cron_expr: String,
+        period_offset: i32,
+    },
     /// Включить/выключить расписание. После — reload списка.
     SetScheduleEnabled {
         name: String,

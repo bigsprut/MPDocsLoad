@@ -566,6 +566,41 @@ async fn run_command_loop(
                 }
                 fwd.forward(UiEvent::SchedulesListed(list_schedule_views(&domain)));
             }
+            UiCommand::UpdateSchedule {
+                id,
+                name,
+                cron_expr,
+                period_offset,
+            } => {
+                let outcome: Result<(), String> = (|| {
+                    let cat = domain.catalog.read();
+                    let cat = cat.as_ref().ok_or("каталог недоступен")?;
+                    let next = mdwf_scheduler::next_run(&cron_expr, chrono::Utc::now())
+                        .map_err(|_| "неверное выражение расписания".to_string())?;
+                    cat.update_schedule(
+                        id,
+                        &name,
+                        &cron_expr,
+                        period_offset,
+                        Some(&next.to_rfc3339()),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Ok(())
+                })();
+                match outcome {
+                    Ok(()) => log_event(
+                        &fwd,
+                        crate::channels::LogKind::Success,
+                        format!("Расписание «{name}» изменено"),
+                    ),
+                    Err(e) => log_event(
+                        &fwd,
+                        crate::channels::LogKind::Error,
+                        format!("Не удалось изменить расписание: {e}"),
+                    ),
+                }
+                fwd.forward(UiEvent::SchedulesListed(list_schedule_views(&domain)));
+            }
             UiCommand::DeleteSchedule { name } => {
                 {
                     let cat = domain.catalog.read();

@@ -197,12 +197,17 @@ fn build_add_form() -> gtk4::Box {
         let btn = when_btn.clone();
         cron.connect_changed(move |e| btn.set_label(&describe_cron(&e.text())));
     }
-    when_btn.connect_clicked(|_| show_when_dialog());
 
     // --- Период — combo с понятными названиями (вместо ввода «-1») ---
     let period = Entry::builder().text("-1").build();
     period.set_visible(false);
     W_PERIOD.with(|w| *w.borrow_mut() = Some(period.clone()));
+    // «Когда…» открывает диалог настройки; пишет в скрытые поля cron/period формы.
+    {
+        let ce = cron.clone();
+        let pe = period.clone();
+        when_btn.connect_clicked(move |_| show_when_dialog(&ce, &pe));
+    }
 
     let period_combo = ComboBoxText::new();
     period_combo.set_tooltip_text(Some(
@@ -315,14 +320,14 @@ fn describe_schedule(s: &ScheduleView) -> String {
 
 /// Диалог настройки расписания с понятными названиями вместо ввода cron-цифр.
 /// Частота (ежемесячно/еженедельно/ежедневно) + день + время → собирает cron
-/// и записывает в скрытые W_CRON (и период — в W_PERIOD).
-fn show_when_dialog() {
-    let cur_cron = W_CRON
-        .with(|w| w.borrow().as_ref().map(|e| e.text().to_string()))
-        .unwrap_or_else(|| "0 2 1 * *".into());
-    let cur_period = W_PERIOD
-        .with(|w| w.borrow().as_ref().map(|e| e.text().to_string()))
-        .unwrap_or_else(|| "-1".into());
+/// и записывает в `cron_entry` (и период — в `period_entry`). Параметрический:
+/// переиспользуется и формой добавления (W_CRON/W_PERIOD), и диалогом изменения.
+fn show_when_dialog(cron_entry: &Entry, period_entry: &Entry) {
+    let cur_cron = cron_entry.text().to_string();
+    let cur_period = period_entry.text().to_string();
+    // Клоны для обработчика «Применить» (запись cron/period в переданные поля).
+    let cron_entry = cron_entry.clone();
+    let period_entry = period_entry.clone();
 
     let dlg = gtk4::Dialog::builder()
         .title("Когда выполнять расписание")
@@ -457,17 +462,9 @@ fn show_when_dialog() {
                 }
                 _ => format!("{m} {h} * * *"),
             };
-            W_CRON.with(|w| {
-                if let Some(e) = w.borrow().as_ref() {
-                    e.set_text(&cron_text);
-                }
-            });
+            cron_entry.set_text(&cron_text);
             if let Some(pid) = period_combo.active_id() {
-                W_PERIOD.with(|w| {
-                    if let Some(e) = w.borrow().as_ref() {
-                        e.set_text(&pid);
-                    }
-                });
+                period_entry.set_text(&pid);
             }
         }
         d.destroy();
@@ -599,6 +596,84 @@ pub fn on_win_scheduler_changed(result: &Result<bool, String>) {
     RESTORING.with(|r| *r.borrow_mut() = false);
 }
 
+/// Диалог ИЗМЕНЕНИЯ расписания: имя + «Когда…» (cron и период). Отчёт и профиль
+/// сохраняются (сменить их для готового расписания — редко нужно; для этого
+/// удалите и создайте заново). Переиспользует параметрический show_when_dialog.
+fn show_edit_dialog(s: &ScheduleView) {
+    let Some(cs) = CMD.with(|c| c.borrow().clone()) else { return };
+
+    let dlg = gtk4::Dialog::builder()
+        .title("Изменить расписание")
+        .modal(true)
+        .default_width(420)
+        .build();
+    let content = dlg.content_area();
+    let col = gtk4::Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(10)
+        .margin_top(16)
+        .margin_bottom(8)
+        .margin_start(16)
+        .margin_end(16)
+        .build();
+
+    let name_entry = Entry::builder().text(&s.name).build();
+
+    // Скрытые поля cron/period предзаполнены текущими значениями расписания;
+    // «Когда…» пишет в них через show_when_dialog.
+    let cron_entry = Entry::builder().text(&s.cron_expr).build();
+    cron_entry.set_visible(false);
+    let period_entry = Entry::builder()
+        .text(s.period_offset.to_string())
+        .build();
+    period_entry.set_visible(false);
+
+    let when_btn = Button::with_label(&describe_cron(&s.cron_expr));
+    when_btn.set_tooltip_text(Some("Нажмите, чтобы изменить время и период"));
+    {
+        let btn = when_btn.clone();
+        cron_entry.connect_changed(move |e| btn.set_label(&describe_cron(&e.text())));
+    }
+    {
+        let ce = cron_entry.clone();
+        let pe = period_entry.clone();
+        when_btn.connect_clicked(move |_| show_when_dialog(&ce, &pe));
+    }
+
+    col.append(&field_row("Имя:", &name_entry));
+    col.append(&field_row("Когда:", &when_btn));
+    content.append(&col);
+
+    dlg.add_button("Отмена", gtk4::ResponseType::Cancel);
+    dlg.add_button("Сохранить", gtk4::ResponseType::Accept);
+
+    let id = s.id;
+    let name_for_save = name_entry.clone();
+    let cron_for_save = cron_entry.clone();
+    let period_for_save = period_entry.clone();
+    dlg.connect_response(move |d, resp| {
+        if resp == gtk4::ResponseType::Accept {
+            let name = name_for_save.text().to_string();
+            let cron = cron_for_save.text().to_string();
+            let period = period_for_save
+                .text()
+                .to_string()
+                .parse::<i32>()
+                .unwrap_or(-1);
+            if !name.trim().is_empty() {
+                cs.send(UiCommand::UpdateSchedule {
+                    id,
+                    name,
+                    cron_expr: cron,
+                    period_offset: period,
+                });
+            }
+        }
+        d.destroy();
+    });
+    dlg.show();
+}
+
 /// Строка расписания — карточка с человекочитаемым описанием
 /// (что выгружать / за какой период / когда). Сырое cron-выражение и прочие
 /// технические детали вынесены в отдельную приглушённую строку для справки.
@@ -636,6 +711,12 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
         });
     });
     top.append(&enabled);
+
+    let edit_btn = Button::with_label("✎");
+    edit_btn.set_tooltip_text(Some("Изменить расписание: имя, время и период"));
+    let s_for_edit = s.clone();
+    edit_btn.connect_clicked(move |_| show_edit_dialog(&s_for_edit));
+    top.append(&edit_btn);
 
     let run_btn = Button::with_label("▶");
     run_btn.set_tooltip_text(Some(
@@ -682,8 +763,7 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
         "След. запуск: {}",
         s.next_run_at
             .as_deref()
-            .map(mdwf_scheduler::fmt_local)
-            .unwrap_or_else(|| "—".to_string())
+            .map_or_else(|| "—".to_string(), mdwf_scheduler::fmt_local)
     ));
     if let Some(st) = s.last_run_status.as_deref() {
         meta.push(format!("Статус: {st}"));

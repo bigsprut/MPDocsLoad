@@ -602,6 +602,27 @@ impl Catalog {
         }
     }
 
+    /// Обновляет редактируемые поля расписания по id: имя, cron-выражение,
+    /// смещение периода. Пересчитывает next_run_at (из нового cron). Сохраняет
+    /// profile_id/reports/enabled/params/last_run — редактирование не сбрасывает
+    /// состояние расписания.
+    pub fn update_schedule(
+        &self,
+        id: i64,
+        name: &str,
+        cron_expr: &str,
+        period_offset: i32,
+        next_run_at_ts: Option<&str>,
+    ) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE schedules SET name=?1, cron_expr=?2, period_offset=?3, next_run_at=?4 WHERE id=?5",
+            params![name, cron_expr, period_offset, next_run_at_ts, id],
+        )
+        .map_err(map_sqlite_err)?;
+        Ok(())
+    }
+
     /// Список всех расписаний.
     pub fn list_schedules(&self) -> CoreResult<Vec<ScheduleRecord>> {
         let conn = self.conn.lock();
@@ -847,6 +868,43 @@ mod tests {
 
         cat.delete_profile("Ozon-1").unwrap();
         assert!(cat.get_profile_by_name("Ozon-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn update_schedule_updates_fields_and_preserves_enabled() {
+        let cat = make_cat();
+        let pid = cat.upsert_profile(&Profile::new("p", "ozon")).unwrap();
+        let id = cat
+            .upsert_schedule(&NewSchedule {
+                id: None,
+                name: "Старое".into(),
+                profile_id: pid,
+                reports: vec!["ozon.realization".into()],
+                cron_expr: "0 2 1 * *".into(),
+                period_offset: -1,
+                params: None,
+                enabled: false, // проверим, что update не включит обратно
+                next_run_at_ts: Some("2026-01-01T00:00:00+00:00".into()),
+            })
+            .unwrap();
+
+        cat.update_schedule(id, "Новое", "0 5 * * 1", 0, Some("2026-09-01T00:00:00+00:00"))
+            .unwrap();
+
+        let updated = cat
+            .list_schedules()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("schedule exists");
+        assert_eq!(updated.name, "Новое");
+        assert_eq!(updated.cron_expr, "0 5 * * 1");
+        assert_eq!(updated.period_offset, 0);
+        assert_eq!(updated.next_run_at, Some("2026-09-01T00:00:00+00:00".into()));
+        // profile_id/reports/enabled сохранены — редактирование их не трогает.
+        assert_eq!(updated.profile_id, pid);
+        assert_eq!(updated.reports, vec!["ozon.realization"]);
+        assert!(!updated.enabled, "update_schedule не должен менять enabled");
     }
 
     #[test]
