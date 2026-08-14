@@ -71,7 +71,8 @@ pub fn on_providers_loaded(providers: &[ProviderInfo]) {
         if let Some(combo) = w.borrow().as_ref() {
             combo.remove_all();
             for pr in providers {
-                combo.append_text(&format!("{} [{}]", pr.display_name, pr.id));
+                // display_name как видимый текст, id — как значение (active_id).
+                combo.append(Some(pr.id.as_str()), pr.display_name.as_str());
             }
             combo.set_active(Some(0));
         }
@@ -105,31 +106,14 @@ pub fn on_active_shop_loaded(shop: Option<&ActiveShop>) {
     let pid = shop.provider_id.clone();
     W_PROVIDER.with(|w| {
         if let Some(combo) = w.borrow().as_ref() {
-            let n = combo.model().map_or(0, |m| m.iter_n_children(None));
-            let suffix = format!(" [{pid}]");
-            for i in 0..n {
-                combo.set_active(Some(i as u32));
-                if let Some(text) = combo.active_text() {
-                    if text.ends_with(&suffix) {
-                        break;
-                    }
-                }
-            }
+            combo.set_active_id(Some(&pid));
         }
     });
     // Восстанавливаем combo профиля (фильтруется по провайдеру в refresh).
     let pname = shop.profile_name.clone();
     W_PROFILE.with(|w| {
         if let Some(combo) = w.borrow().as_ref() {
-            let n = combo.model().map_or(0, |m| m.iter_n_children(None));
-            for i in 0..n {
-                combo.set_active(Some(i as u32));
-                if let Some(text) = combo.active_text() {
-                    if text.to_string().starts_with(&format!("{pname} [")) {
-                        break;
-                    }
-                }
-            }
+            combo.set_active_id(Some(&pname));
         }
     });
     // Инициируем SelectShop — persist + fetch seller_name для заголовка.
@@ -168,7 +152,7 @@ pub fn on_auth_fields_loaded(provider_id: &str, fields: &[AuthFieldInfo]) {
         let Some(state) = state else { return };
         let current = state
             .provider_combo
-            .active_text()
+            .active_id()
             .map(|s| s.to_string())
             .unwrap_or_default();
         if current != provider_id {
@@ -368,16 +352,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
 // ===== Хелперы выбора магазина =====
 
-/// Парсит "Display [id]" → id. Внешний `and_then` нужен, т.к. `active_text`
-/// возвращает `Option<gstring>`.
+/// id активного маркетплейса из combo (значение элемента, не видимый текст).
 fn provider_id_from_combo(combo: &ComboBoxText) -> Option<String> {
-    let text = combo.active_text()?.to_string();
-    Some(
-        text.split(" [")
-            .nth(1)?
-            .trim_end_matches(']')
-            .to_string(),
-    )
+    combo.active_id().map(|s| s.to_string())
 }
 
 /// Возвращает (provider_id, profile_name) активного выбора combos.
@@ -385,13 +362,8 @@ fn current_shop(
     provider_combo: &ComboBoxText,
     profile_combo: &ComboBoxText,
 ) -> Option<(String, String)> {
-    let pid = provider_id_from_combo(provider_combo)?;
-    let ptext = profile_combo.active_text()?.to_string();
-    // Формат: "Имяпрофиля [provider_id]" либо служебный "(нет профилей...)".
-    if ptext.starts_with('(') {
-        return None;
-    }
-    let pname = ptext.split(" [").next()?.to_string();
+    let pid = provider_combo.active_id()?.to_string();
+    let pname = profile_combo.active_id()?.to_string();
     Some((pid, pname))
 }
 
@@ -413,7 +385,8 @@ fn refresh_profile_combo() {
     let mut any = false;
     for p in &profiles {
         if pid.as_deref() == Some(p.provider_id.as_str()) {
-            combo.append_text(&format!("{} [{}]", p.name, p.provider_id));
+            // Имя профиля — и видимый текст, и значение (active_id → profile_name).
+            combo.append(Some(p.name.as_str()), p.name.as_str());
             any = true;
         }
     }
