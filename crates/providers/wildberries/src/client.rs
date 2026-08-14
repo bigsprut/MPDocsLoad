@@ -238,6 +238,11 @@ impl WbHttpClient {
                         return Err(map_status_error(status, resp).await);
                     }
                     if status.is_success() {
+                        // 204 No Content — конец курсорной пагинации WB (detailed-
+                        // методы финансов): пустое тело — НЕ ошибка протокола.
+                        if status == StatusCode::NO_CONTENT {
+                            return Ok(Value::Array(Vec::new()));
+                        }
                         // 2xx, но не JSON — ошибка протокола, не сеть.
                         return resp.json::<Value>().await.map_err(|e| {
                             CoreError::Protocol(format!("WB: некорректный JSON-ответ ({e})"))
@@ -312,6 +317,11 @@ impl WbHttpClient {
                         return Err(map_status_error(status, resp).await);
                     }
                     if status.is_success() {
+                        // 204 No Content — конец курсорной пагинации WB (detailed-
+                        // методы финансов): пустое тело — НЕ ошибка протокола.
+                        if status == StatusCode::NO_CONTENT {
+                            return Ok(Value::Array(Vec::new()));
+                        }
                         // 2xx, но не JSON — ошибка протокола, не сеть.
                         return resp.json::<Value>().await.map_err(|e| {
                             CoreError::Protocol(format!("WB: некорректный JSON-ответ ({e})"))

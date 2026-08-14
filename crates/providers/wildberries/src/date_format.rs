@@ -20,6 +20,19 @@ pub fn format_date_moscow(date: NaiveDate) -> String {
     dt.to_rfc3339()
 }
 
+/// RFC3339 для конца дня по Москве: `2026-07-03T23:59:59+03:00`.
+/// Нужен обязательным `dateTo`-параметрам, ждущим date-time (удержания):
+/// полночь «дня по» исключила бы записи этого же дня.
+#[must_use]
+pub fn format_date_moscow_eod(date: NaiveDate) -> String {
+    let dt = date
+        .and_hms_opt(23, 59, 59)
+        .unwrap()
+        .and_local_timezone(Moscow)
+        .unwrap();
+    dt.to_rfc3339()
+}
+
 /// Парсинг даты `YYYY-MM-DD`.
 pub fn parse_date(s: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
@@ -44,5 +57,12 @@ mod tests {
         let d = NaiveDate::from_ymd_opt(2026, 7, 3).unwrap();
         let s = format_date_moscow(d);
         assert_eq!(s, "2026-07-03T00:00:00+03:00");
+    }
+
+    #[test]
+    fn date_moscow_eod_format() {
+        let d = NaiveDate::from_ymd_opt(2026, 7, 3).unwrap();
+        let s = format_date_moscow_eod(d);
+        assert_eq!(s, "2026-07-03T23:59:59+03:00");
     }
 }

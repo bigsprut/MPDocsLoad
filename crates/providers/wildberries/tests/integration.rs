@@ -7,8 +7,13 @@ use base64::Engine;
 use mdwf_core::{MarketplaceProvider, Profile};
 use mdwf_providers_wildberries::WildberriesProvider;
 use serial_test::serial;
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{body_partial_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Прогресс-заглушка для вызовов list/download в тестах.
+fn noop_progress() -> std::sync::Arc<dyn mdwf_core::ProgressCallback> {
+    std::sync::Arc::new(mdwf_core::NoopProgress)
+}
 
 fn set_wb_base_urls(server_uri: &str) {
     let uri = server_uri.trim_end_matches('/');
@@ -228,4 +233,280 @@ async fn categories_report_lists_categories() {
     assert_eq!(cats.len(), 3);
     assert!(cats.iter().any(|c| c.id == "upd"));
     assert!(cats.iter().any(|c| c.id == "sale-to-le-signed"));
+}
+
+// =========================================================================
+// Аудит 2026-08-14: пагинация и параметры по спеке (eslazarev/wildberries-sdk)
+// =========================================================================
+
+/// Полный обход detailed-финансов: курсор rrdId (последняя строка страницы),
+/// конец данных — 204 No Content (клиент обязан вернуть пустой массив, а не
+/// ошибку протокола). Раньше выгружалась только первая тысяча строк.
+#[tokio::test]
+#[serial(wb_env)]
+async fn finance_detailed_paginates_rrdid_until_204() {
+    let server = MockServer::start().await;
+    set_wb_base_urls(&server.uri());
+
+    // Страница 1: rrdId=0 → 2 строки (курсор — rrdId последней = 20).
+    Mock::given(method("POST"))
+        .and(path("/api/finance/v1/sales-reports/detailed"))
+        .and(body_partial_json(serde_json::json!({ "rrdId": 0 })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"rrdId": 10, "supplierArticle": "A"},
+            {"rrdId": 20, "supplierArticle": "B"}
+        ])))
+        .mount(&server)
+        .await;
+
+    // Страница 2: rrdId=20 → 204 (данных больше нет).
+    Mock::given(method("POST"))
+        .and(path("/api/finance/v1/sales-reports/detailed"))
+        .and(body_partial_json(serde_json::json!({ "rrdId": 20 })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let provider = WildberriesProvider::new().unwrap();
+    let profile = Profile::new("WB-1", "wildberries").with_metadata("token", "wb-token");
+    let auth = provider.authenticator(&profile).await.unwrap();
+    let report = provider.report("wb.sales_reports_detailed").await.unwrap();
+
+    let params = mdwf_core::ReportParams::new()
+        .with("date_from", "2026-07-01")
+        .with("date_to", "2026-07-31");
+    let files = report
+        .download(auth.as_ref(), &params, noop_progress(), mdwf_core::CancelToken::new())
+        .await
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    let rows: serde_json::Value =
+        serde_json::from_slice(files[0].content.as_ref().unwrap()).unwrap();
+    let arr = rows.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "обе строки страницы внутри");
+    assert_eq!(arr[1]["rrdId"], serde_json::json!(20));
+    // Запросов ровно два: страница 1 + страница 2 (204 — конец).
+    let hits = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| r.url.as_str().contains("/sales-reports/detailed"))
+        .count();
+    assert_eq!(hits, 2);
+}
+
+/// Claims: обязательный is_archive, limit=200, offset-пагинация по total,
+/// локальная фильтрация по dt в выбранном периоде.
+#[tokio::test]
+#[serial(wb_env)]
+async fn claims_sweeps_active_and_archived_with_local_date_filter() {
+    let server = MockServer::start().await;
+    set_wb_base_urls(&server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/claims"))
+        .and(query_param("is_archive", "false"))
+        .and(query_param("limit", "200"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "claims": [
+                {"id": "c-active", "imt_name": "Кроссовки", "dt": "2026-07-02T10:00:00"},
+                {"id": "c-active-out", "imt_name": "Шапка", "dt": "2026-08-01"}
+            ],
+            "total": 2
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/claims"))
+        .and(query_param("is_archive", "true"))
+        .and(query_param("limit", "200"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "claims": [
+                {"id": "c-arch", "imt_name": "Футболка", "dt": "2026-07-15"}
+            ],
+            "total": 1
+        })))
+        .mount(&server)
+        .await;
+
+    let provider = WildberriesProvider::new().unwrap();
+    let profile = Profile::new("WB-1", "wildberries").with_metadata("token", "wb-token");
+    let auth = provider.authenticator(&profile).await.unwrap();
+    let report = provider.report("wb.claims").await.unwrap();
+
+    let filter = mdwf_core::DocumentFilter {
+        date_from: chrono::NaiveDate::from_ymd_opt(2026, 7, 1),
+        date_to: chrono::NaiveDate::from_ymd_opt(2026, 7, 31),
+        ..Default::default()
+    };
+    let entries = report
+        .list(auth.as_ref(), &filter, noop_progress(), mdwf_core::CancelToken::new())
+        .await
+        .unwrap();
+    // Архивная + активная за июль; заявка августа отфильтрована локально.
+    let mut ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, vec!["c-active", "c-arch"]);
+    // Дата заявки протащена в DocumentEntry (для {doc_date}/архива).
+    let with_date = entries.iter().find(|e| e.id == "c-arch").unwrap();
+    assert_eq!(with_date.date, chrono::NaiveDate::from_ymd_opt(2026, 7, 15));
+}
+
+/// Удержания: обязательные dateTo/limit в query, разбор {data:{reports,total}},
+/// конец по неполной странице.
+#[tokio::test]
+#[serial(wb_env)]
+async fn penalties_send_required_params() {
+    let server = MockServer::start().await;
+    set_wb_base_urls(&server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/api/analytics/v1/deductions"))
+        .and(query_param("dateTo", "2026-07-31T23:59:59+03:00"))
+        .and(query_param("limit", "1000"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {"reports": [{"nmId": 1, "subjectName": "S1"}], "total": 1}
+        })))
+        .mount(&server)
+        .await;
+
+    let provider = WildberriesProvider::new().unwrap();
+    let profile = Profile::new("WB-1", "wildberries").with_metadata("token", "wb-token");
+    let auth = provider.authenticator(&profile).await.unwrap();
+    let report = provider.report("wb.deductions").await.unwrap();
+
+    let filter = mdwf_core::DocumentFilter {
+        date_from: chrono::NaiveDate::from_ymd_opt(2026, 7, 1),
+        date_to: chrono::NaiveDate::from_ymd_opt(2026, 7, 31),
+        ..Default::default()
+    };
+    let entries = report
+        .list(auth.as_ref(), &filter, noop_progress(), mdwf_core::CancelToken::new())
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, "1");
+    assert_eq!(entries[0].display_name, "S1");
+}
+
+/// Async-отчёт приёмки: create (даты ГГГГ-ММ-ДД в query) → taskId →
+/// poll status (done) → download (прямой массив строк).
+#[tokio::test]
+#[serial(wb_env)]
+async fn acceptance_report_create_poll_download() {
+    let server = MockServer::start().await;
+    set_wb_base_urls(&server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/acceptance_report"))
+        .and(query_param("dateFrom", "2026-07-01"))
+        .and(query_param("dateTo", "2026-07-31"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {"taskId": "t-42"}
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/acceptance_report/tasks/t-42/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {"id": "t-42", "status": "done"}
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/acceptance_report/tasks/t-42/download"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"count": 3, "incomeId": "111", "nmID": 7, "subjectName": "Товар"}
+        ])))
+        .mount(&server)
+        .await;
+
+    let provider = WildberriesProvider::new().unwrap();
+    let profile = Profile::new("WB-1", "wildberries").with_metadata("token", "wb-token");
+    let auth = provider.authenticator(&profile).await.unwrap();
+    let report = provider.report("wb.acceptance_report").await.unwrap();
+
+    let params = mdwf_core::ReportParams::new()
+        .with("date_from", "2026-07-01")
+        .with("date_to", "2026-07-31");
+    let files = report
+        .download(auth.as_ref(), &params, noop_progress(), mdwf_core::CancelToken::new())
+        .await
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].extension, "json");
+    let rows: serde_json::Value =
+        serde_json::from_slice(files[0].content.as_ref().unwrap()).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["incomeId"], serde_json::json!("111"));
+}
+
+/// Отчёт приёмки с периодом > 31 дня — внятный отказ (спека: максимум 31 день).
+#[tokio::test]
+#[serial(wb_env)]
+async fn acceptance_report_rejects_range_over_31_days() {
+    let provider = WildberriesProvider::new().unwrap();
+    let profile = Profile::new("WB-1", "wildberries").with_metadata("token", "wb-token");
+    let auth = provider.authenticator(&profile).await.unwrap();
+    let report = provider.report("wb.acceptance_report").await.unwrap();
+
+    // Квартал: 01.07–30.09 = 92 дня.
+    let params = mdwf_core::ReportParams::new()
+        .with("date_from", "2026-07-01")
+        .with("date_to", "2026-09-30");
+    let err = report
+        .download(auth.as_ref(), &params, noop_progress(), mdwf_core::CancelToken::new())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("31"), "got: {err}");
+}
+
+/// Статистика: спека допускает только dateFrom (по lastChangeDate) и flag —
+/// dateTo/limit не существуют и не должны отправляться.
+#[tokio::test]
+#[serial(wb_env)]
+async fn statistics_sends_datefrom_and_flag_only() {
+    let server = MockServer::start().await;
+    set_wb_base_urls(&server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/supplier/orders"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"srid": "S1", "supplierArticle": "A", "lastChangeDate": "2026-07-02T00:00:00"}
+        ])))
+        .mount(&server)
+        .await;
+
+    let provider = WildberriesProvider::new().unwrap();
+    let profile = Profile::new("WB-1", "wildberries").with_metadata("token", "wb-token");
+    let auth = provider.authenticator(&profile).await.unwrap();
+    let report = provider.report("wb.orders").await.unwrap();
+
+    let filter = mdwf_core::DocumentFilter {
+        date_from: chrono::NaiveDate::from_ymd_opt(2026, 7, 1),
+        date_to: chrono::NaiveDate::from_ymd_opt(2026, 7, 31),
+        ..Default::default()
+    };
+    let entries = report
+        .list(auth.as_ref(), &filter, noop_progress(), mdwf_core::CancelToken::new())
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+
+    // Проверяем фактический URL запроса: dateFrom и flag есть, dateTo — НЕТ.
+    let reqs = server.received_requests().await.unwrap_or_default();
+    let url = reqs
+        .iter()
+        .find(|r| r.url.as_str().contains("/supplier/orders"))
+        .expect("запрос orders")
+        .url
+        .to_string();
+    assert!(url.contains("dateFrom="), "url: {url}");
+    assert!(url.contains("flag=0"), "url: {url}");
+    assert!(!url.contains("dateTo"), "url: {url}");
+    assert!(!url.contains("limit"), "url: {url}");
 }

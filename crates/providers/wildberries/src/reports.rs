@@ -1,18 +1,28 @@
-//! Описания отчётов WB (сверено с официальной документацией dev.wildberries.ru).
+//! Описания отчётов WB (сверено с официальной OpenAPI-спекой dev.wildberries.ru
+//! через зеркало github.com/eslazarev/wildberries-sdk, specs/*.yaml; аудит
+//! живым прогоном 2026-08-14).
 //!
 //! Разделы документации (все домены подтверждены):
-//! - Баланс:           GET  finance-api      /api/v1/account/balance
-//! - Финансы:          POST finance-api      /api/finance/v1/sales-reports/* , /acquiring/*
-//! - Документы:        GET  documents-api    /api/v1/documents/*
-//! - Отчёты (стат):    GET  statistics-api   /api/v1/supplier/orders, /sales
-//! - Аналитика/данные: POST seller-analytics /api/analytics/v3/*, GET /api/analytics/v1/*
-//! - Удержания:        GET  seller-analytics /api/analytics/v1/{deductions,measurement-penalties,...}
-//! - Возвраты:         GET  seller-analytics /api/v1/analytics/goods-return
+//! - Баланс: GET finance-api /api/v1/account/balance (плоский объект)
+//! - Финансы: POST finance-api /api/finance/v1/sales-reports/* , /acquiring/*
+//!   (list — offset-пагинация; detailed — курсор rrdId, конец по 204)
+//! - Документы: GET documents-api /api/v1/documents/*
+//! - Отчёты (стат): GET statistics-api /api/v1/supplier/orders, /sales
+//!   (только dateFrom по lastChangeDate + flag; без пагинации)
+//! - Удержания: GET seller-analytics /api/analytics/v1/{deductions,measurement-penalties}
+//!   (dateTo и limit обязательны; offset-пагинация с total)
+//! - Антифрод: GET seller-analytics /api/v1/analytics/antifraud-details
+//!   (только date; фильтрация по периоду — локально)
+//! - Возвраты: GET returns-api /api/v1/claims (окно 14 дней,
+//!   обязательный is_archive; фильтрация по периоду — локально)
+//! - Приёмка (async): GET seller-analytics /api/v1/acceptance_report → taskId
+//!   → poll status → download
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use mdwf_core::{
     capabilities::{AuthField, AuthFieldKind, AuthType},
@@ -103,14 +113,16 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "Заказы",
             ReportCategory::Operational,
             PeriodKind::Range,
-            "Заказы за период.",
+            "Заказы, изменёншиеся с начала периода (API фильтрует по дате изменения; \
+             WB хранит данные 90 дней).",
         ),
         desc_browsable(
             "wb.sales",
             "Продажи",
             ReportCategory::Operational,
             PeriodKind::Range,
-            "Продажи за период.",
+            "Продажи, изменявшиеся с начала периода (API фильтрует по дате изменения; \
+             WB хранит данные 90 дней).",
         ),
         // --- Удержания (seller-analytics-api, GET) ---
         desc_browsable(
@@ -118,38 +130,42 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             "Штрафы за подмены",
             ReportCategory::Penalties,
             PeriodKind::Range,
-            "Штрафы за подмены за период.",
+            "Штрафы за подмены и неверные вложения за период.",
         ),
         desc_browsable(
             "wb.measurement_penalties",
             "Штрафы за габариты",
             ReportCategory::Penalties,
             PeriodKind::Range,
-            "Штрафы за габариты за период.",
+            "Штрафы за занижение габаритов за период.",
         ),
         desc_browsable(
             "wb.antifraud",
             "Самовыкупы (антифрод)",
             ReportCategory::Penalties,
             PeriodKind::Range,
-            "Самовыкупы и антифрод за период.",
+            "Отчёт по самовыкупам (антифрод), еженедельный. Выгружаются все данные, \
+             фильтрация по периоду выполняется локально.",
         ),
-        // --- Возвраты (claims) — спека §2.2.2 ---
+        // --- Возвраты (claims) — спека 09-communications.yaml ---
         desc_browsable(
             "wb.claims",
-            "Возвраты (claims)",
+            "Возвраты (заявки покупателей)",
             ReportCategory::Returns,
             PeriodKind::Range,
-            "Возвраты (claims) за период.",
+            "Заявки на возврат товаров. API WB отдаёт заявки только за последние \
+             14 дней; выгружаются и активные, и архивные.",
         ),
-        // --- Async-отчёт приёмки (спека §2.2.2) ---
+        // --- Async-отчёт приёмки (спека 12-reports.yaml) ---
         desc_period(
             "wb.acceptance_report",
             "Аналитический отчёт приёмки (async)",
             ReportCategory::Finance,
             PeriodKind::Range,
-            "Аналитический отчёт приёмки за период (async).",
-        ),
+            "Аналитический отчёт приёмки за период (до 31 дня). Формируется на \
+             стороне WB — выгрузка может занять несколько минут.",
+        )
+        .with_max_range_days(31),
     ]
 }
 
@@ -211,84 +227,99 @@ fn param_date_range() -> ReportParameter {
 // Фабрика отчётов
 // =========================================================================
 
-/// HTTP-метод для запроса.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HttpMethod {
-    Get,
-    Post,
+/// Семейство запроса: определяет HTTP-метод, построение параметров, пагинацию
+/// и разбор ответа. Специфика каждого семейства сверена со спекой WB
+/// (eslazarev/wildberries-sdk, specs/*.yaml).
+#[derive(Clone, Copy)]
+pub(crate) enum WbQueryKind {
+    /// GET без параметров; ответ — плоский объект (баланс).
+    Balance,
+    /// GET ?dateFrom&flag=0; ответ — прямой массив. Одно обращение: спека не
+    /// предусматривает ни dateTo, ни limit (фильтр — по lastChangeDate).
+    Statistics,
+    /// POST {dateFrom,dateTo,limit,offset}; ответ — прямой массив; страницы по offset.
+    FinanceList,
+    /// POST {dateFrom,dateTo,limit,rrdId}; ответ — прямой массив; курсор rrdId,
+    /// конец данных — 204 No Content (клиент возвращает пустой массив).
+    FinanceDetailed,
+    /// GET ?dateFrom&dateTo&limit&offset (dateTo и limit обязательны);
+    /// ответ `{data:{reports:[...],total}}`; страницы по offset до total.
+    Penalties,
+    /// GET без параметров; ответ `{details:[...]}`; фильтрация по периоду локально.
+    Antifraud,
+    /// GET ?is_archive&limit&offset; ответ `{claims:[...],total}`; сервер отдаёт
+    /// только последние 14 дней; выгружаются активные и архивные заявки,
+    /// фильтрация по периоду локально.
+    Claims,
 }
 
-/// Способ извлечения массива из ответа WB.
-/// WB использует разные обёртки в зависимости от эндпоинта.
-#[derive(Clone, Copy)]
-pub(crate) enum ResponseShape {
-    /// Прямой массив `[...]` (orders, sales).
-    Array,
-    /// `{data: [...]}` (старый формат).
-    DataArray,
-    /// `{data: {reports: [...], total: N}}` (deductions, measurement-penalties).
-    DataReports,
-    /// `{data: {documents: [...]}}` (documents list — обрабатывается отдельно).
-    DataDocuments,
-    /// `{details: [...]}` (antifraud).
-    Details,
-}
+/// Страница offset-пагинации финансов (list-методы): максимум по спеке — 1000.
+const FINANCE_LIST_PAGE: u32 = 1000;
+/// Лимит detailed-методов финансов: по спеке допускается до 100 000 строк.
+const FINANCE_DETAILED_PAGE: u32 = 100_000;
+/// Страница удержаний (deductions / measurement-penalties): максимум 1000.
+const PENALTIES_PAGE: u32 = 1000;
+/// Страница заявок возврата (claims): максимум 200.
+const CLAIMS_PAGE: u32 = 200;
+/// Страховочный потолок числа страниц (защита от вечного цикла при аномальных
+/// ответах). 1000 × 1000 = 1 млн строк — заведомо больше реальных объёмов.
+const MAX_PAGES: u32 = 1000;
 
 /// Фабрика отчётов: возвращает `ReportRef` по `type_id`.
-/// Все пути/методы/форматы сверенs с официальной документацией WB.
+/// Все пути/методы/форматы сверены с официальной спекой WB.
 pub fn make_report(type_id: &str, client: WbHttpClient) -> CoreResult<ReportRef> {
     let report: ReportRef = match type_id {
-        // === Баланс === GET finance-api /api/v1/account/balance
-        "wb.balance" => Arc::new(WbReport::new_get(
+        // === Баланс === GET finance-api /api/v1/account/balance (плоский объект)
+        "wb.balance" => Arc::new(WbReport::new(
             "wb.balance",
             "Баланс продавца",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/v1/account/balance",
-            ResponseShape::DataArray,
+            WbQueryKind::Balance,
             client,
         )),
 
         // === Финансы === POST finance-api
-        "wb.sales_reports_list" => Arc::new(WbReport::new_post(
+        "wb.sales_reports_list" => Arc::new(WbReport::new(
             "wb.sales_reports_list",
             "Реестр реализации (список)",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/finance/v1/sales-reports/list",
-            ResponseShape::Array,
+            WbQueryKind::FinanceList,
             client,
         )),
-        "wb.sales_reports_detailed" => Arc::new(WbReport::new_post(
+        "wb.sales_reports_detailed" => Arc::new(WbReport::new(
             "wb.sales_reports_detailed",
             "Детализация реализации",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/finance/v1/sales-reports/detailed",
-            ResponseShape::Array,
+            WbQueryKind::FinanceDetailed,
             client,
         )),
-        "wb.acquiring_list" => Arc::new(WbReport::new_post(
+        "wb.acquiring_list" => Arc::new(WbReport::new(
             "wb.acquiring_list",
             "Эквайринг (список)",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/finance/v1/acquiring/list",
-            ResponseShape::Array,
+            WbQueryKind::FinanceList,
             client,
         )),
-        "wb.acquiring_detailed" => Arc::new(WbReport::new_post(
+        "wb.acquiring_detailed" => Arc::new(WbReport::new(
             "wb.acquiring_detailed",
             "Эквайринг (детализация)",
             ReportCategory::Finance,
             AcquisitionMode::Period,
             WbDomain::Finance,
             "/api/finance/v1/acquiring/detailed",
-            ResponseShape::Array,
+            WbQueryKind::FinanceDetailed,
             client,
         )),
 
@@ -297,82 +328,73 @@ pub fn make_report(type_id: &str, client: WbHttpClient) -> CoreResult<ReportRef>
         "wb.documents_categories" => Arc::new(WbCategoriesReport::new(client)),
 
         // === Статистика === GET statistics-api, ответ — прямой массив
-        "wb.orders" => Arc::new(WbReport::new_get(
+        "wb.orders" => Arc::new(WbReport::new(
             "wb.orders",
             "Заказы",
             ReportCategory::Operational,
             AcquisitionMode::Browsable,
             WbDomain::Statistics,
             "/api/v1/supplier/orders",
-            ResponseShape::Array,
+            WbQueryKind::Statistics,
             client,
         )),
-        "wb.sales" => Arc::new(WbReport::new_get(
+        "wb.sales" => Arc::new(WbReport::new(
             "wb.sales",
             "Продажи",
             ReportCategory::Operational,
             AcquisitionMode::Browsable,
             WbDomain::Statistics,
             "/api/v1/supplier/sales",
-            ResponseShape::Array,
+            WbQueryKind::Statistics,
             client,
         )),
 
         // === Удержания === GET seller-analytics-api
-        "wb.deductions" => Arc::new(WbReport::new_get(
+        "wb.deductions" => Arc::new(WbReport::new(
             "wb.deductions",
             "Штрафы за подмены",
             ReportCategory::Penalties,
             AcquisitionMode::Browsable,
             WbDomain::Analytics,
             "/api/analytics/v1/deductions",
-            ResponseShape::DataReports,
+            WbQueryKind::Penalties,
             client,
         )),
-        "wb.measurement_penalties" => Arc::new(WbReport::new_get(
+        "wb.measurement_penalties" => Arc::new(WbReport::new(
             "wb.measurement_penalties",
             "Штрафы за габариты",
             ReportCategory::Penalties,
             AcquisitionMode::Browsable,
             WbDomain::Analytics,
             "/api/analytics/v1/measurement-penalties",
-            ResponseShape::DataReports,
+            WbQueryKind::Penalties,
             client,
         )),
-        "wb.antifraud" => Arc::new(WbReport::new_get(
+        "wb.antifraud" => Arc::new(WbReport::new(
             "wb.antifraud",
             "Самовыкупы (антифрод)",
             ReportCategory::Penalties,
             AcquisitionMode::Browsable,
             WbDomain::Analytics,
             "/api/v1/analytics/antifraud-details",
-            ResponseShape::Details,
+            WbQueryKind::Antifraud,
             client,
         )),
 
-        // === Возвраты === спека §2.2.2: GET /api/v1/claims
-        "wb.claims" => Arc::new(WbReport::new_get(
+        // === Возвраты === спека 09-communications: GET /api/v1/claims
+        "wb.claims" => Arc::new(WbReport::new(
             "wb.claims",
-            "Возвраты (claims)",
+            "Возвраты (заявки покупателей)",
             ReportCategory::Returns,
             AcquisitionMode::Browsable,
             WbDomain::Returns,
             "/api/v1/claims",
-            ResponseShape::Array,
+            WbQueryKind::Claims,
             client,
         )),
 
-        // === Аналитический отчёт приёмки === спека §2.2.2: async
-        "wb.acceptance_report" => Arc::new(WbReport::new_post(
-            "wb.acceptance_report",
-            "Аналитический отчёт приёмки (async)",
-            ReportCategory::Finance,
-            AcquisitionMode::Period,
-            WbDomain::Analytics,
-            "/api/v1/acceptance_report",
-            ResponseShape::DataArray,
-            client,
-        )),
+        // === Аналитический отчёт приёмки === спека 12-reports: async create→poll→download
+        "wb.acceptance_report" => Arc::new(WbAcceptanceReport::new(client)),
 
         _ => return Err(CoreError::ReportTypeNotSupported(type_id.to_string())),
     };
@@ -380,10 +402,12 @@ pub fn make_report(type_id: &str, client: WbHttpClient) -> CoreResult<ReportRef>
 }
 
 // =========================================================================
-// WbReport — универсальный отчёт (GET или POST)
+// WbReport — универсальный отчёт (GET или POST, с пагинацией по семейству)
 // =========================================================================
 
-/// Универсальный отчёт WB с настраиваемым HTTP-методом и форматом ответа.
+/// Универсальный отчёт WB. Семейство запроса (`WbQueryKind`) определяет метод,
+/// параметры и способ пагинации; `fetch_all` обходит ВСЕ страницы и отдаёт
+/// полные данные (раньше финансовые отчёты молча обрезались первой страницей).
 pub struct WbReport {
     type_id: String,
     display_name: String,
@@ -391,22 +415,26 @@ pub struct WbReport {
     mode: AcquisitionMode,
     domain: WbDomain,
     path: &'static str,
-    method: HttpMethod,
-    shape: ResponseShape,
+    kind: WbQueryKind,
     client: WbHttpClient,
+}
+
+/// Результат полного обхода страниц: массив строк либо единичный объект (баланс).
+enum Fetched {
+    Rows(Vec<Value>),
+    Object(Value),
 }
 
 impl WbReport {
     #[must_use]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn new_get(
+    pub fn new(
         type_id: &str,
         display_name: &str,
         category: ReportCategory,
         mode: AcquisitionMode,
         domain: WbDomain,
         path: &'static str,
-        shape: ResponseShape,
+        kind: WbQueryKind,
         client: WbHttpClient,
     ) -> Self {
         Self {
@@ -416,33 +444,7 @@ impl WbReport {
             mode,
             domain,
             path,
-            method: HttpMethod::Get,
-            shape,
-            client,
-        }
-    }
-
-    #[must_use]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn new_post(
-        type_id: &str,
-        display_name: &str,
-        category: ReportCategory,
-        mode: AcquisitionMode,
-        domain: WbDomain,
-        path: &'static str,
-        shape: ResponseShape,
-        client: WbHttpClient,
-    ) -> Self {
-        Self {
-            type_id: type_id.into(),
-            display_name: display_name.into(),
-            category,
-            mode,
-            domain,
-            path,
-            method: HttpMethod::Post,
-            shape,
+            kind,
             client,
         }
     }
@@ -473,24 +475,35 @@ impl Report for WbReport {
         &self,
         auth: &dyn mdwf_core::Authenticator,
         filter: &DocumentFilter,
-        _progress: ProgressCallbackRef,
-        _cancel: CancelToken,
+        progress: ProgressCallbackRef,
+        cancel: CancelToken,
     ) -> CoreResult<Vec<DocumentEntry>> {
-        let json = self.fetch(auth, filter).await?;
-        Ok(extract_entries(&json, self.shape, &self.type_id))
+        match self.fetch_all(auth, filter, progress, cancel).await? {
+            Fetched::Rows(rows) => Ok(rows
+                .iter()
+                .enumerate()
+                .map(|(i, r)| entry_from_row(r, i, &self.type_id))
+                .collect()),
+            // Баланс — одиночный объект, списка документов нет.
+            Fetched::Object(_) => Ok(Vec::new()),
+        }
     }
 
     async fn download(
         &self,
         auth: &dyn mdwf_core::Authenticator,
         params: &ReportParams,
-        _progress: ProgressCallbackRef,
-        _cancel: CancelToken,
+        progress: ProgressCallbackRef,
+        cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
-        // Для простых отчётов — тот же запрос, результат сохраняем как JSON.
+        // Для простых отчётов — тот же обход страниц, результат сохраняем как JSON.
         let filter = filter_from_params(params);
-        let json = self.fetch(auth, &filter).await?;
-        let content = serde_json::to_vec_pretty(&json)
+        let fetched = self.fetch_all(auth, &filter, progress, cancel).await?;
+        let value = match fetched {
+            Fetched::Rows(rows) => Value::Array(rows),
+            Fetched::Object(v) => v,
+        };
+        let content = serde_json::to_vec_pretty(&value)
             .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
         Ok(vec![DownloadedFile::with_content(
@@ -502,93 +515,309 @@ impl Report for WbReport {
 }
 
 impl WbReport {
-    /// Выполняет запрос (GET или POST) в зависимости от метода.
-    async fn fetch(
+    /// Обходит все страницы согласно семейству запроса. Прогресс — постранично,
+    /// отмена проверяется между страницами.
+    async fn fetch_all(
         &self,
         auth: &dyn mdwf_core::Authenticator,
         filter: &DocumentFilter,
-    ) -> CoreResult<serde_json::Value> {
-        match self.method {
-            HttpMethod::Get => {
-                let query = build_query_from_filter(filter);
-                let query_ref: Vec<(&str, &str)> =
-                    query.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                self.client
-                    .get(self.domain, self.path, &query_ref, auth)
-                    .await
+        progress: ProgressCallbackRef,
+        cancel: CancelToken,
+    ) -> CoreResult<Fetched> {
+        match self.kind {
+            WbQueryKind::Balance => {
+                let json = self.client.get(self.domain, self.path, &[], auth).await?;
+                Ok(Fetched::Object(json))
             }
-            HttpMethod::Post => {
-                let body = build_body_from_filter(filter);
-                self.client
-                    .post(self.domain, self.path, &body, auth)
-                    .await
+
+            WbQueryKind::Statistics => {
+                // Спека: только dateFrom (фильтр по lastChangeDate) и flag.
+                // dateTo/limit эндпоинтом не поддерживаются — не шлём.
+                let mut q: Vec<(&'static str, String)> = vec![("flag", "0".into())];
+                if let Some(d) = filter.date_from {
+                    q.push(("dateFrom", date_format::format_date_moscow(d)));
+                }
+                let refs: Vec<(&str, &str)> = q.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                let json = self.client.get(self.domain, self.path, &refs, auth).await?;
+                Ok(Fetched::Rows(json.as_array().cloned().unwrap_or_default()))
+            }
+
+            WbQueryKind::FinanceList => {
+                let mut rows: Vec<Value> = Vec::new();
+                let mut offset: u32 = 0;
+                for page_no in 1..=MAX_PAGES {
+                    if cancel.is_cancelled() {
+                        return Err(CoreError::Cancelled);
+                    }
+                    let mut body = json!({ "limit": FINANCE_LIST_PAGE, "offset": offset });
+                    add_date_bounds(&mut body, filter);
+                    let page = self.client.post(self.domain, self.path, &body, auth).await?;
+                    let page_rows = page.as_array().cloned().unwrap_or_default();
+                    let got = page_rows.len();
+                    rows.extend(page_rows);
+                    report_page(&progress, page_no, rows.len(), &self.type_id);
+                    // Неполная страница — последняя (total в ответе нет).
+                    if got < FINANCE_LIST_PAGE as usize || reached_ceiling(&rows, filter.limit) {
+                        break;
+                    }
+                    offset = offset.saturating_add(FINANCE_LIST_PAGE);
+                }
+                truncate_ceiling(&mut rows, filter.limit);
+                Ok(Fetched::Rows(rows))
+            }
+
+            WbQueryKind::FinanceDetailed => {
+                let mut rows: Vec<Value> = Vec::new();
+                let mut cursor: i64 = 0;
+                for page_no in 1..=MAX_PAGES {
+                    if cancel.is_cancelled() {
+                        return Err(CoreError::Cancelled);
+                    }
+                    let mut body = json!({ "limit": FINANCE_DETAILED_PAGE, "rrdId": cursor });
+                    add_date_bounds(&mut body, filter);
+                    let page = self.client.post(self.domain, self.path, &body, auth).await?;
+                    let page_rows = page.as_array().cloned().unwrap_or_default();
+                    // 204/пустой массив — данных больше нет (курсор дошёл до конца).
+                    if page_rows.is_empty() {
+                        break;
+                    }
+                    // Новый курсор — rrdId последней строки; без него (или если
+                    // не двигается) продолжать нельзя — выходим, не зацикливаясь.
+                    let next = page_rows
+                        .last()
+                        .and_then(|r| r.get("rrdId"))
+                        .and_then(Value::as_i64);
+                    rows.extend(page_rows);
+                    report_page(&progress, page_no, rows.len(), &self.type_id);
+                    let Some(cursor_next) = next else {
+                        break;
+                    };
+                    if cursor_next == cursor || reached_ceiling(&rows, filter.limit) {
+                        break;
+                    }
+                    cursor = cursor_next;
+                }
+                truncate_ceiling(&mut rows, filter.limit);
+                Ok(Fetched::Rows(rows))
+            }
+
+            WbQueryKind::Penalties => {
+                // Спека: dateTo и limit ОБЯЗАТЕЛЬНЫ. Если фильтр без даты конца —
+                // берём сегодня (иначе WB ответит 400 missing parameter).
+                let to = filter
+                    .date_to
+                    .unwrap_or_else(|| chrono::Local::now().date_naive());
+                let mut rows: Vec<Value> = Vec::new();
+                let mut offset: u32 = 0;
+                for page_no in 1..=MAX_PAGES {
+                    if cancel.is_cancelled() {
+                        return Err(CoreError::Cancelled);
+                    }
+                    let mut q: Vec<(&'static str, String)> = vec![
+                        ("dateTo", date_format::format_date_moscow_eod(to)),
+                        ("limit", PENALTIES_PAGE.to_string()),
+                        ("offset", offset.to_string()),
+                    ];
+                    if let Some(d) = filter.date_from {
+                        q.push(("dateFrom", date_format::format_date_moscow(d)));
+                    }
+                    let refs: Vec<(&str, &str)> =
+                        q.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                    let json = self.client.get(self.domain, self.path, &refs, auth).await?;
+                    let data = json.get("data").cloned().unwrap_or(Value::Null);
+                    let page_rows = data
+                        .get("reports")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    let total = data.get("total").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    let got = page_rows.len();
+                    rows.extend(page_rows);
+                    report_page(&progress, page_no, rows.len(), &self.type_id);
+                    if got < PENALTIES_PAGE as usize
+                        || (total > 0 && rows.len() >= total)
+                        || reached_ceiling(&rows, filter.limit)
+                    {
+                        break;
+                    }
+                    offset = offset.saturating_add(got as u32);
+                }
+                truncate_ceiling(&mut rows, filter.limit);
+                Ok(Fetched::Rows(rows))
+            }
+
+            WbQueryKind::Antifraud => {
+                // Спека: единственный параметр date (опциональный) — выгружаем всё
+                // и фильтруем локально по пересечению недельных интервалов строк.
+                let json = self.client.get(self.domain, self.path, &[], auth).await?;
+                let mut rows = json
+                    .get("details")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if let (Some(from), Some(to)) = (filter.date_from, filter.date_to) {
+                    rows.retain(|r| match row_date_range(r) {
+                        Some((rf, rt)) => rf <= to && rt >= from,
+                        // Без дат в строке — оставляем (лучше показать, чем потерять).
+                        None => true,
+                    });
+                }
+                Ok(Fetched::Rows(rows))
+            }
+
+            WbQueryKind::Claims => {
+                // Спека: параметры дат НЕТ — сервер отдаёт заявки за последние
+                // 14 дней; обязательный is_archive разделяет активные и архивные.
+                // Выгружаем оба среза и фильтруем локально по дате заявки (dt).
+                let mut rows: Vec<Value> = Vec::new();
+                for is_archive in [false, true] {
+                    let label = if is_archive { "архивные" } else { "активные" };
+                    progress.report(mdwf_core::ProgressUpdate::message(format!(
+                        "Загрузка заявок возврата ({label})…"
+                    )));
+                    let mut offset: u32 = 0;
+                    let mut sweep = 0usize;
+                    for page_no in 1..=MAX_PAGES {
+                        if cancel.is_cancelled() {
+                            return Err(CoreError::Cancelled);
+                        }
+                        let q_owned: Vec<(&str, String)> = vec![
+                            ("is_archive", is_archive.to_string()),
+                            ("limit", CLAIMS_PAGE.to_string()),
+                            ("offset", offset.to_string()),
+                        ];
+                        let refs: Vec<(&str, &str)> = q_owned
+                            .iter()
+                            .map(|(k, v)| (*k, v.as_str()))
+                            .collect();
+                        let json =
+                            self.client.get(self.domain, self.path, &refs, auth).await?;
+                        let page_rows = json
+                            .get("claims")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        let total =
+                            json.get("total").and_then(Value::as_u64).unwrap_or(0) as usize;
+                        let got = page_rows.len();
+                        rows.extend(page_rows);
+                        sweep += got;
+                        report_page(&progress, page_no, rows.len(), &self.type_id);
+                        if got == 0
+                            || got < CLAIMS_PAGE as usize
+                            || (total > 0 && sweep >= total)
+                            || reached_ceiling(&rows, filter.limit)
+                        {
+                            break;
+                        }
+                        offset = offset.saturating_add(got as u32);
+                    }
+                }
+                // Локальный фильтр по дате заявки (dt) в выбранном периоде.
+                if let (Some(from), Some(to)) = (filter.date_from, filter.date_to) {
+                    rows.retain(|r| {
+                        r.get("dt")
+                            .and_then(Value::as_str)
+                            .and_then(parse_flexible_date)
+                            .map_or(true, |d| from <= d && d <= to)
+                    });
+                }
+                truncate_ceiling(&mut rows, filter.limit);
+                Ok(Fetched::Rows(rows))
             }
         }
     }
 }
 
-/// Извлекает DocumentEntry из ответа согласно формату (ResponseShape).
-fn extract_entries(
-    json: &serde_json::Value,
-    shape: ResponseShape,
-    type_id: &str,
-) -> Vec<DocumentEntry> {
-    let array = match shape {
-        ResponseShape::Array => json, // orders/sales: прямой массив [...]
-        ResponseShape::DataArray => json.get("data").unwrap_or(json),
-        ResponseShape::DataReports => json
-            .get("data")
-            .and_then(|d| d.get("reports"))
-            .unwrap_or(json),
-        ResponseShape::DataDocuments => json
-            .get("data")
-            .and_then(|d| d.get("documents"))
-            .unwrap_or(json),
-        ResponseShape::Details => json.get("details").unwrap_or(json),
-    };
+/// Добавляет dateFrom/dateTo (RFC3339, Москва) в POST-тело финансов.
+fn add_date_bounds(body: &mut Value, filter: &DocumentFilter) {
+    if let Some(d) = filter.date_from {
+        body["dateFrom"] = json!(date_format::format_date_moscow(d));
+    }
+    if let Some(d) = filter.date_to {
+        body["dateTo"] = json!(date_format::format_date_moscow(d));
+    }
+}
 
-    let mut out = Vec::new();
-    if let Some(arr) = array.as_array() {
-        for (i, item) in arr.iter().enumerate() {
-            // Универсальный ID: пробуем srid, orderId, nmId, reportId, rrdId, id.
-            let id = item
-                .get("srid")
-                .or_else(|| item.get("orderId"))
-                .or_else(|| item.get("nmId"))
-                .or_else(|| item.get("reportId"))
-                .or_else(|| item.get("rrdId"))
-                .or_else(|| item.get("id"))
-                .map(|v| {
-                    v.as_str()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| v.to_string())
-                })
-                .unwrap_or_else(|| format!("item-{i}"));
-            let display = item
-                .get("supplierArticle")
-                .or_else(|| item.get("subject"))
-                .or_else(|| item.get("category"))
-                .or_else(|| item.get("brand"))
-                .or_else(|| item.get("docTypeName"))
-                .and_then(|v| v.as_str())
+/// Сообщает прогресс страницы: сколько строк накоплено.
+fn report_page(progress: &ProgressCallbackRef, page_no: u32, total_rows: usize, type_id: &str) {
+    progress.report(mdwf_core::ProgressUpdate {
+        fraction: None,
+        message: format!("{type_id}: страница {page_no}, строк: {total_rows}"),
+        current: Some(total_rows as u64),
+        total: None,
+    });
+}
+
+/// Достигнут ли потолок общего числа строк (filter.limit).
+fn reached_ceiling(rows: &[Value], limit: Option<u32>) -> bool {
+    limit.is_some_and(|max| rows.len() >= max as usize)
+}
+
+/// Обрезает результат по потолку filter.limit.
+fn truncate_ceiling(rows: &mut Vec<Value>, limit: Option<u32>) {
+    if let Some(max) = limit {
+        rows.truncate(max as usize);
+    }
+}
+
+/// Диапазон дат строки (поля dateFrom..dateTo — недельные интервалы антифрода).
+fn row_date_range(row: &Value) -> Option<(chrono::NaiveDate, chrono::NaiveDate)> {
+    let from = row.get("dateFrom").and_then(Value::as_str).and_then(parse_flexible_date)?;
+    let to = row.get("dateTo").and_then(Value::as_str).and_then(parse_flexible_date)?;
+    Some((from, to))
+}
+
+/// Строит DocumentEntry из строки ответа: универсальные кандидаты полей id/
+/// названия/даты (разные семейства WB называют их по-разному).
+fn entry_from_row(item: &Value, i: usize, type_id: &str) -> DocumentEntry {
+    // Универсальный ID: пробуем id (claims — UUID), srid, orderId, nmId, reportId, rrdId.
+    let id = item
+        .get("id")
+        .or_else(|| item.get("srid"))
+        .or_else(|| item.get("orderId"))
+        .or_else(|| item.get("nmId"))
+        .or_else(|| item.get("reportId"))
+        .or_else(|| item.get("rrdId"))
+        .map(|v| {
+            v.as_str()
                 .map(str::to_string)
-                .unwrap_or_else(|| format!("{type_id} #{i}"));
-            let mut e = DocumentEntry::new(id, display);
-            e.category = type_id.to_string();
-            e.extensions = vec!["json".into()];
-            // Дата: пробуем date, saleDt, orderDt, rrDate, createDate.
-            for date_field in ["date", "saleDt", "orderDt", "rrDate", "createDate"] {
-                if let Some(d) = item.get(date_field).and_then(|v| v.as_str()) {
-                    e.date = parse_flexible_date(d);
-                    if e.date.is_some() {
-                        break;
-                    }
-                }
+                .unwrap_or_else(|| v.to_string())
+        })
+        .unwrap_or_else(|| format!("item-{i}"));
+    let display = item
+        .get("supplierArticle")
+        .or_else(|| item.get("imt_name"))
+        .or_else(|| item.get("subject"))
+        .or_else(|| item.get("subjectName"))
+        .or_else(|| item.get("category"))
+        .or_else(|| item.get("brand"))
+        .or_else(|| item.get("docTypeName"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{type_id} #{i}"));
+    let mut e = DocumentEntry::new(id, display);
+    e.category = type_id.to_string();
+    e.extensions = vec!["json".into()];
+    // Дата: пробуем date, saleDt, orderDt, rrDate, createDate, dt, lastChangeDate, order_dt.
+    for date_field in [
+        "date",
+        "saleDt",
+        "orderDt",
+        "rrDate",
+        "createDate",
+        "dt",
+        "lastChangeDate",
+        "order_dt",
+    ] {
+        if let Some(d) = item.get(date_field).and_then(|v| v.as_str()) {
+            e.date = parse_flexible_date(d);
+            if e.date.is_some() {
+                break;
             }
-            out.push(e);
         }
     }
-    out
+    e
 }
 
 /// Парсит дату в нескольких форматах (YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, YYYY-MM-DDTHH:MM:SSZ).
@@ -604,39 +833,8 @@ fn parse_flexible_date(s: &str) -> Option<chrono::NaiveDate> {
 }
 
 // =========================================================================
-// Хелперы построения query/body
+// Хелперы построения параметров
 // =========================================================================
-
-/// Строит query-параметры для GET-запросов из фильтра.
-fn build_query_from_filter(filter: &DocumentFilter) -> Vec<(&'static str, String)> {
-    let mut q: Vec<(&'static str, String)> = Vec::new();
-    if let Some(d) = filter.date_from {
-        q.push(("dateFrom", date_format::format_date_moscow(d)));
-    }
-    if let Some(d) = filter.date_to {
-        q.push(("dateTo", date_format::format_date_moscow(d)));
-    }
-    if let Some(limit) = filter.limit {
-        q.push(("limit", limit.to_string()));
-    }
-    q
-}
-
-/// Строит JSON-тело для POST-запросов (финансовые отчёты) из фильтра.
-/// Дока: {dateFrom, dateTo, limit, offset, period}.
-fn build_body_from_filter(filter: &DocumentFilter) -> serde_json::Value {
-    let mut body = json!({
-        "limit": filter.limit.unwrap_or(1000),
-        "offset": 0,
-    });
-    if let Some(d) = filter.date_from {
-        body["dateFrom"] = json!(date_format::format_date_moscow(d));
-    }
-    if let Some(d) = filter.date_to {
-        body["dateTo"] = json!(date_format::format_date_moscow(d));
-    }
-    body
-}
 
 /// Преобразует ReportParams в DocumentFilter (для download).
 fn filter_from_params(params: &ReportParams) -> DocumentFilter {
@@ -652,15 +850,183 @@ fn filter_from_params(params: &ReportParams) -> DocumentFilter {
         }
     }
     if let Some(p) = &params.period {
-        // YYYY-MM -> первый день месяца.
+        // YYYY-MM -> первый..последний день месяца (сдвиг «+30 дней» ошибался
+        // для месяцев короче июля: февраль заканчивался 2-3 марта).
         if p.len() == 7 {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(&format!("{p}-01"), "%Y-%m-%d") {
-                f.date_from = Some(date);
-                f.date_to = Some(date + chrono::Duration::days(30));
+            if let Ok(first) = chrono::NaiveDate::parse_from_str(&format!("{p}-01"), "%Y-%m-%d") {
+                f.date_from = Some(first);
+                f.date_to = first
+                    .checked_add_months(chrono::Months::new(1))
+                    .and_then(|next| next.pred_opt());
             }
         }
     }
     f
+}
+
+// =========================================================================
+// WbAcceptanceReport — async-отчёт приёмки (спека 12-reports.yaml)
+// =========================================================================
+
+/// Максимальный период выгрузки (спека: не больше 31 дня).
+const ACCEPTANCE_MAX_RANGE_DAYS: i64 = 31;
+/// Пауза между опросами статуса (спека допускает 1 запрос/5с; per-domain
+/// лимитер аналитики дополнительно разносит запросы).
+const ACCEPTANCE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// Общий таймаут генерации (как у Ozon async-отчётов).
+const ACCEPTANCE_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Аналитический отчёт приёмки: async-паттерн WB.
+/// 1) `GET /api/v1/acceptance_report?dateFrom&dateTo` → `{data:{taskId}}`;
+/// 2) `GET /api/v1/acceptance_report/tasks/{id}/status` → `{data:{status}}`;
+/// 3) `GET /api/v1/acceptance_report/tasks/{id}/download` → прямой массив
+///    строк (204 — данных за период нет).
+pub struct WbAcceptanceReport {
+    client: WbHttpClient,
+}
+
+impl WbAcceptanceReport {
+    #[must_use]
+    pub fn new(client: WbHttpClient) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl Report for WbAcceptanceReport {
+    fn type_id(&self) -> &str {
+        "wb.acceptance_report"
+    }
+    fn display_name(&self) -> &str {
+        "Аналитический отчёт приёмки (async)"
+    }
+    fn category(&self) -> ReportCategory {
+        ReportCategory::Finance
+    }
+    fn acquisition_mode(&self) -> AcquisitionMode {
+        AcquisitionMode::Period
+    }
+    fn downloader_kind(&self) -> DownloaderKind {
+        DownloaderKind::Api
+    }
+    fn parameters(&self) -> &[ReportParameter] {
+        &[]
+    }
+
+    async fn list(
+        &self,
+        _auth: &dyn mdwf_core::Authenticator,
+        _filter: &DocumentFilter,
+        _progress: ProgressCallbackRef,
+        _cancel: CancelToken,
+    ) -> CoreResult<Vec<DocumentEntry>> {
+        // Периодический отчёт: выгружается целиком за период, списка документов нет.
+        Err(CoreError::InvalidParameter(
+            "wb.acceptance_report — периодический отчёт, список документов не предусмотрен".into(),
+        ))
+    }
+
+    async fn download(
+        &self,
+        auth: &dyn mdwf_core::Authenticator,
+        params: &ReportParams,
+        progress: ProgressCallbackRef,
+        cancel: CancelToken,
+    ) -> CoreResult<Vec<DownloadedFile>> {
+        let filter = filter_from_params(params);
+        let from = filter.date_from.ok_or_else(|| {
+            CoreError::InvalidParameter("не указана дата начала периода".into())
+        })?;
+        let to = filter.date_to.unwrap_or(from);
+        let days = (to - from).num_days() + 1;
+        if days > ACCEPTANCE_MAX_RANGE_DAYS {
+            return Err(CoreError::InvalidParameter(format!(
+                "период {days} дн. превышает максимум API WB ({ACCEPTANCE_MAX_RANGE_DAYS} дн.); \
+                 разбейте выгрузку на части (например, по месяцам)"
+            )));
+        }
+
+        // Спека: даты — ГГГГ-ММ-ДД (НЕ RFC3339), метод GET.
+        let q: Vec<(&str, String)> = vec![
+            ("dateFrom", from.format("%Y-%m-%d").to_string()),
+            ("dateTo", to.format("%Y-%m-%d").to_string()),
+        ];
+        let refs: Vec<(&str, &str)> = q.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let create = self
+            .client
+            .get(WbDomain::Analytics, "/api/v1/acceptance_report", &refs, auth)
+            .await?;
+        let task_id = create
+            .pointer("/data/taskId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CoreError::Protocol("WB: в ответе нет data.taskId".into()))?
+            .to_string();
+
+        // Поллинг статуса до done/ошибки/таймаута.
+        let deadline = tokio::time::Instant::now() + ACCEPTANCE_TIMEOUT;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(CoreError::Cancelled);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(CoreError::Protocol(format!(
+                    "WB: отчёт приёмки не сформировался за {} с (taskId {task_id})",
+                    ACCEPTANCE_TIMEOUT.as_secs()
+                )));
+            }
+            let st = self
+                .client
+                .get(
+                    WbDomain::Analytics,
+                    &format!("/api/v1/acceptance_report/tasks/{task_id}/status"),
+                    &[],
+                    auth,
+                )
+                .await?;
+            let status = st
+                .pointer("/data/status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_lowercase();
+            match status.as_str() {
+                "done" => break,
+                "error" | "failed" | "canceled" | "cancelled" => {
+                    return Err(CoreError::Api {
+                        status: 200,
+                        message: format!(
+                            "WB: генерация отчёта приёмки завершилась со статусом «{status}»"
+                        ),
+                        retryable: false,
+                    });
+                }
+                // in progress и прочие промежуточные статусы — ждём.
+                _ => {}
+            }
+            progress.report(mdwf_core::ProgressUpdate::message(format!(
+                "Отчёт приёмки формируется (статус: {status})…"
+            )));
+            tokio::time::sleep(ACCEPTANCE_POLL_INTERVAL).await;
+        }
+
+        // Скачивание результата: прямой массив строк (204 → пустой массив).
+        let rows = self
+            .client
+            .get(
+                WbDomain::Analytics,
+                &format!("/api/v1/acceptance_report/tasks/{task_id}/download"),
+                &[],
+                auth,
+            )
+            .await?;
+        let content = serde_json::to_vec_pretty(&rows)
+            .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
+        let period = params.period.clone().unwrap_or_else(|| "current".into());
+        Ok(vec![DownloadedFile::with_content(
+            format!("wb.acceptance_report_{period}.json"),
+            "json",
+            content,
+        )])
+    }
 }
 
 // =========================================================================
@@ -1072,24 +1438,99 @@ mod tests {
 
     #[test]
     fn extract_entries_array_shape() {
-        let json = json!([
-            {"srid": "S1", "supplierArticle": "A1", "date": "2026-07-01T10:00:00"},
-            {"srid": "S2", "supplierArticle": "A2", "date": "2026-07-02"}
-        ]);
-        let entries = extract_entries(&json, ResponseShape::Array, "wb.orders");
+        let rows = [
+            json!({"srid": "S1", "supplierArticle": "A1", "date": "2026-07-01T10:00:00"}),
+            json!({"srid": "S2", "supplierArticle": "A2", "date": "2026-07-02"})
+        ];
+        let entries: Vec<DocumentEntry> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| entry_from_row(r, i, "wb.orders"))
+            .collect();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, "S1");
         assert_eq!(entries[1].display_name, "A2");
+        assert_eq!(entries[0].date, chrono::NaiveDate::from_ymd_opt(2026, 7, 1));
     }
 
     #[test]
-    fn extract_entries_data_reports_shape() {
-        let json = json!({
-            "data": {"reports": [{"nmId": 123, "brand": "X"}], "total": 1}
+    fn entry_from_row_penalties() {
+        // Удержания: id из nmId (число), display из subjectName, дата из dtBonus
+        // отсутствует — берём rrDate.
+        let row = json!({"nmId": 123, "subjectName": "Футболка", "rrDate": "2026-07-05"});
+        let e = entry_from_row(&row, 0, "wb.deductions");
+        assert_eq!(e.id, "123");
+        assert_eq!(e.display_name, "Футболка");
+        assert_eq!(e.date, chrono::NaiveDate::from_ymd_opt(2026, 7, 5));
+    }
+
+    #[test]
+    fn entry_from_row_claims_prefers_claim_id() {
+        // Заявки возврата: id — UUID заявки (поле id), а не srid продажи.
+        let row = json!({
+            "id": "0e4dd7cd-8b76-11ef-9f8a-000000000001",
+            "srid": "S-777",
+            "imt_name": "Кроссовки",
+            "dt": "2026-08-10T12:00:00"
         });
-        let entries = extract_entries(&json, ResponseShape::DataReports, "wb.deductions");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "123");
+        let e = entry_from_row(&row, 0, "wb.claims");
+        assert_eq!(e.id, "0e4dd7cd-8b76-11ef-9f8a-000000000001");
+        assert_eq!(e.display_name, "Кроссовки");
+        assert_eq!(e.date, chrono::NaiveDate::from_ymd_opt(2026, 8, 10));
+    }
+
+    #[test]
+    fn filter_from_params_month_end() {
+        // Июль: 31 день; февраль 2026 (не високосный): 28 дней.
+        let mut p = ReportParams::new();
+        p.period = Some("2026-07".into());
+        let f = filter_from_params(&p);
+        assert_eq!(f.date_from, chrono::NaiveDate::from_ymd_opt(2026, 7, 1));
+        assert_eq!(f.date_to, chrono::NaiveDate::from_ymd_opt(2026, 7, 31));
+
+        p.period = Some("2026-02".into());
+        let f = filter_from_params(&p);
+        assert_eq!(f.date_to, chrono::NaiveDate::from_ymd_opt(2026, 2, 28));
+    }
+
+    #[test]
+    fn antifraud_row_range_overlap() {
+        // Недельные интервалы строк антифрода: пересечение с периодом.
+        let week = json!({"dateFrom": "2026-07-01", "dateTo": "2026-07-07"});
+        let (rf, rt) = row_date_range(&week).unwrap();
+        assert_eq!(rf, chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap());
+        assert_eq!(rt, chrono::NaiveDate::from_ymd_opt(2026, 7, 7).unwrap());
+        // Период 05.07–11.07 пересекается с неделей 01–07.
+        let from = chrono::NaiveDate::from_ymd_opt(2026, 7, 5).unwrap();
+        let to = chrono::NaiveDate::from_ymd_opt(2026, 7, 11).unwrap();
+        assert!(rf <= to && rt >= from);
+        // Период 08–14.07 — не пересекается.
+        let from2 = chrono::NaiveDate::from_ymd_opt(2026, 7, 8).unwrap();
+        let to2 = chrono::NaiveDate::from_ymd_opt(2026, 7, 14).unwrap();
+        assert!(!(rf <= to2 && rt >= from2));
+    }
+
+    #[test]
+    fn claims_rows_filtered_by_dt() {
+        // Локальный фильтр claims: строка без parsable dt сохраняется.
+        let rows = [
+            json!({"id": "c1", "dt": "2026-07-02T00:00:00"}),
+            json!({"id": "c2", "dt": "2026-08-01"}),
+            json!({"id": "c3"}),
+        ];
+        let from = chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let to = chrono::NaiveDate::from_ymd_opt(2026, 7, 31).unwrap();
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter(|r| {
+                r.get("dt")
+                    .and_then(Value::as_str)
+                    .and_then(parse_flexible_date)
+                    .is_none_or(|d| from <= d && d <= to)
+            })
+            .map(|r| r.get("id").and_then(Value::as_str).unwrap_or("?"))
+            .collect();
+        assert_eq!(ids, vec!["c1", "c3"]);
     }
 
     #[test]
