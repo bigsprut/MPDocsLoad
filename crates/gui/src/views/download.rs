@@ -348,9 +348,20 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let list_btn = Button::builder().label("📋 Список документов").tooltip_text("Для отчётов-списков (Browsable)").build();
     let download_btn = Button::builder().label("⬇ Скачать выбранные").css_classes(["suggested-action"]).tooltip_text("Скачать отмеченные документы").build();
     let period_btn = Button::builder().label("📅 Скачать по периоду").tooltip_text("Сгенерировать отчёт за период").build();
+    let cancel_btn = Button::builder()
+        .label("⏹ Отмена")
+        .tooltip_text("Остановить текущее скачивание (если оно есть)")
+        .build();
+    {
+        let cs_c = cs.clone();
+        cancel_btn.connect_clicked(move |_| {
+            cs_c.cancel_current();
+        });
+    }
     row3.append(&list_btn);
     row3.append(&download_btn);
     row3.append(&period_btn);
+    row3.append(&cancel_btn);
     root.append(&row3);
 
     // --- Список документов (с чекбоксами) ---
@@ -445,11 +456,14 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         if rtype == "wb.documents" && filter.category.is_none() {
             notify("Получаю документы всех категорий. Для фильтра выберите категорию из списка.");
         }
+        let token = mdwf_core::CancelToken::new();
+        cs_list.set_cancel_token(token.clone());
         cs_list.send(crate::channels::UiCommand::ListDocuments {
             provider_id: pid,
             profile_name: pname,
             report_type: rtype,
             filter,
+            cancel: token,
         });
         notify("Запрос списка документов…");
     });
@@ -473,12 +487,15 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             return;
         }
         let n = docs.len();
+        let token = mdwf_core::CancelToken::new();
+        cs_dl.set_cancel_token(token.clone());
         cs_dl.send(crate::channels::UiCommand::Download {
             provider_id: pid,
             profile_name: pname,
             report_type: rtype,
             documents: docs,
             params: ReportParams::new(),
+            cancel: token,
         });
         notify(&format!("Скачивание {n} документов…"));
     });
@@ -502,7 +519,13 @@ pub fn build(cs: &CommandSender) -> GtkBox {
                 return;
             }
             let n = months.len();
+            // Один токен на всю последовательность — «Отмена» прервёт все месяцы.
+            let token = mdwf_core::CancelToken::new();
+            cs_per.set_cancel_token(token.clone());
             for period in &months {
+                if token.is_cancelled() {
+                    break;
+                }
                 let params = ReportParams {
                     period: Some(period.clone()),
                     ..Default::default()
@@ -515,6 +538,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
                     report_type: rtype.clone(),
                     documents: Vec::new(),
                     params,
+                    cancel: token.clone(),
                 });
             }
             let msg = if n == 1 {
@@ -537,12 +561,15 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             }
             .with("date_from", df)
             .with("date_to", dt);
+            let token = mdwf_core::CancelToken::new();
+            cs_per.set_cancel_token(token.clone());
             cs_per.send(crate::channels::UiCommand::Download {
                 provider_id: pid,
                 profile_name: pname,
                 report_type: rtype,
                 documents: Vec::new(),
                 params,
+                cancel: token,
             });
             notify("Генерация отчёта за период…");
         }
@@ -1064,12 +1091,15 @@ fn render_list(docs: &[DocumentEntry]) {
                 let Some(cs) = CMD.with(|c| c.borrow().clone()) else {
                     return;
                 };
+                let token = mdwf_core::CancelToken::new();
+                cs.set_cancel_token(token.clone());
                 cs.send(crate::channels::UiCommand::Download {
                     provider_id: pid,
                     profile_name: pname,
                     report_type: rtype,
                     documents: vec![sel.clone()],
                     params: ReportParams::new(),
+                    cancel: token,
                 });
                 notify("Перекачивание документа…");
             });

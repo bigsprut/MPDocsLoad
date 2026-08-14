@@ -83,6 +83,8 @@ pub enum UiCommand {
         profile_name: String,
         report_type: String,
         filter: DocumentFilter,
+        /// Токен отмены (кнопка «Отмена» во вкладке «Загрузка»).
+        cancel: CancellationToken,
     },
     /// Скачать выбранные документы (Browsable) или сгенерировать отчёт (Period).
     Download {
@@ -93,6 +95,8 @@ pub enum UiCommand {
         /// предпочтительным расширением). Для Period: пусто (params.period).
         documents: Vec<DocumentSel>,
         params: mdwf_core::ReportParams,
+        /// Токен отмены (кнопка «Отмена» во вкладке «Загрузка»).
+        cancel: CancellationToken,
     },
     /// Отмена текущей операции.
     Cancel,

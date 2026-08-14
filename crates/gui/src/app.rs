@@ -345,8 +345,8 @@ async fn run_command_loop(
                 profile_name,
                 report_type,
                 filter,
+                cancel,
             } => {
-                let cancel = CancellationToken::new();
                 domain
                     .registry
                     .list()
@@ -366,8 +366,8 @@ async fn run_command_loop(
                 report_type,
                 documents,
                 params,
+                cancel,
             } => {
-                let cancel = CancellationToken::new();
                 let outcome =
                     do_download(&domain, &provider_id, &profile_name, &report_type, documents, params, cancel, &fwd)
                         .await;
@@ -917,6 +917,9 @@ struct DocMetaItem {
 /// пользователь видит причину и путь восстановления. Применяется в `do_list_*`
 /// и `do_download` — покрывает и UI (notify), и Журнал (текст ошибки идёт туда же).
 fn friendly_error(e: &mdwf_core::CoreError) -> String {
+    if matches!(e, mdwf_core::CoreError::Cancelled) {
+        return "Скачивание отменено.".into();
+    }
     if e.is_auth_failure() {
         return format!(
             "{e}\n\nПричина: ключ или токен недействителен (истёк или отозван). \

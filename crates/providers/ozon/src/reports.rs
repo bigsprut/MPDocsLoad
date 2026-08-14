@@ -896,7 +896,7 @@ impl Report for OzonAsyncReport {
         auth: &dyn mdwf_core::Authenticator,
         params: &ReportParams,
         _progress: ProgressCallbackRef,
-        _cancel: CancelToken,
+        cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
         // Параметры поллинга /v1/report/info (шаг 2): async-отчёты Ozon генерируются
         // не мгновенно — waiting/processing это нормальные промежуточные статусы.
@@ -962,6 +962,10 @@ impl Report for OzonAsyncReport {
         // возвращал ошибку при первом waiting — теперь ждём с интервалом и таймаутом.
         let mut attempts = 0usize;
         let file_url = loop {
+            // Отмена пользователем (кнопка «Отмена») — выходим без долгого ожидания.
+            if cancel.is_cancelled() {
+                return Err(CoreError::Cancelled);
+            }
             attempts += 1;
             let report_info = self.client.post_report_info(code, auth).await?;
             let result = report_info
