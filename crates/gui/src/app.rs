@@ -798,6 +798,7 @@ async fn load_reports(domain: &Domain, provider_id: &str) -> Result<Vec<ReportIn
             provider_id: provider_id.to_string(),
             period_kind: r.period_kind,
             description: r.description.clone(),
+            max_range_days: r.max_range_days,
         })
         .collect();
     Ok(reports)

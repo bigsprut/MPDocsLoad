@@ -87,7 +87,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Выкупы маркетплейсом в ЕАЭС за период (диапазон ≤31 дня).",
             &[param_date_range(true)],
-        ),
+        ).with_max_range_days(31),
         desc_period(
             "ozon.balance",
             "Баланс",
@@ -95,7 +95,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Баланс кошелька за период (диапазон ≤30 дней).",
             &[],
-        ),
+        ).with_max_range_days(30),
         desc_period(
             "ozon.cash_flow",
             "Финансовый отчёт (движение средств)",
@@ -211,7 +211,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Стоимость размещения по товарам за период (диапазон ≤31 дня, async).",
             &[param_date_range(true)],
-        ),
+        ).with_max_range_days(31),
         desc_period(
             "ozon.placement_by_supplies",
             "Стоимость размещения по поставкам",
@@ -219,7 +219,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Стоимость размещения по поставкам за период (диапазон ≤31 дня, async).",
             &[param_date_range(true)],
-        ),
+        ).with_max_range_days(31),
         desc_period(
             "ozon.marked_products_sales",
             "Продажи товаров с маркировкой",
@@ -268,6 +268,7 @@ fn desc_period(
         parameters: parameters.to_vec(),
         period_kind,
         description: Some(description.into()),
+        max_range_days: None,
     }
 }
 

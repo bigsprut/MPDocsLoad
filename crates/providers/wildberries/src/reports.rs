@@ -172,6 +172,7 @@ fn desc_period(
         parameters: vec![param_date_range()],
         period_kind,
         description: Some(description.into()),
+        max_range_days: None,
     }
 }
 
@@ -192,6 +193,7 @@ fn desc_browsable(
         parameters: vec![param_date_range()],
         period_kind,
         description: Some(description.into()),
+        max_range_days: None,
     }
 }
 

@@ -370,6 +370,8 @@ pub struct ReportInfo {
     pub period_kind: mdwf_core::PeriodKind,
     /// Человекочитаемое описание отчёта (для инфо-панели GUI).
     pub description: Option<String>,
+    /// Жёсткий кап диапазона дат API (в днях). GUI режет длинные интервалы на окна.
+    pub max_range_days: Option<u32>,
 }
 
 /// Пара type_id → человекочитаемое имя для combo «Отчёт» в Архиве.

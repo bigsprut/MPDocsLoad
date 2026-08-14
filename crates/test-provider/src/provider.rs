@@ -191,6 +191,7 @@ impl TestProvider {
                 parameters: Vec::new(),
                 period_kind: mdwf_core::PeriodKind::Range,
                 description: Some(format!("Тестовый отчёт «{}» (mock).", r.display_name)),
+                max_range_days: None,
             })
             .collect();
         let capabilities = Capabilities {

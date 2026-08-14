@@ -552,6 +552,47 @@ pub fn build(cs: &CommandSender) -> GtkBox {
                 )
             };
             notify(&msg);
+        } else if let Some(cap) = current_max_range_days() {
+            // Диапазонный отчёт с жёстким капом дат (balance ≤30, buyout/placement
+            // ≤31): длинный интервал API отвергнет 4xx → режем на окна ≤ капа.
+            let windows = windows_in_current_range(cap);
+            if windows.is_empty() {
+                notify("Задайте корректный диапазон дат (начало ≤ конец).");
+                return;
+            }
+            let period = current_month_value();
+            let token = mdwf_core::CancelToken::new();
+            cs_per.set_cancel_token(token.clone());
+            for (wf, wt) in &windows {
+                if token.is_cancelled() {
+                    break;
+                }
+                let params = ReportParams {
+                    period: period.clone(),
+                    ..Default::default()
+                }
+                .with("date_from", wf.clone())
+                .with("date_to", wt.clone());
+                cs_per.send(crate::channels::UiCommand::Download {
+                    provider_id: pid.clone(),
+                    profile_name: pname.clone(),
+                    report_type: rtype.clone(),
+                    documents: Vec::new(),
+                    params,
+                    cancel: token.clone(),
+                });
+            }
+            let msg = if windows.len() == 1 {
+                format!("Генерация за период (окно {}…{})…", windows[0].0, windows[0].1)
+            } else {
+                format!(
+                    "Генерация за {} окон по ≤{cap} дн. ({}…{})…",
+                    windows.len(),
+                    windows.first().map(|w| w.0.as_str()).unwrap_or("?"),
+                    windows.last().map(|w| w.1.as_str()).unwrap_or("?")
+                )
+            };
+            notify(&msg);
         } else {
             // Range/Day/None — один запрос за весь диапазон (период = стартовый
             // месяц для отчётов, которым он нужен).
@@ -603,6 +644,51 @@ fn current_period_kind() -> mdwf_core::PeriodKind {
     rtype
         .and_then(|t| REPORTS.with(|r| r.borrow().iter().find(|x| x.type_id == t).cloned()))
         .map_or(mdwf_core::PeriodKind::Range, |ri| ri.period_kind)
+}
+
+/// Жёсткий кап диапазона дат API выбранного отчёта (None = без ограничения).
+fn current_max_range_days() -> Option<u32> {
+    let rtype = current_report_type()?;
+    REPORTS.with(|r| {
+        r.borrow()
+            .iter()
+            .find(|x| x.type_id == rtype)
+            .and_then(|ri| ri.max_range_days)
+    })
+}
+
+/// Разбивает текущий диапазон полей дат на окна ≤ `cap_days` (включительно),
+/// каждое окно — (from, to) в ISO. Пусто, если даты некорректны или from > to.
+fn windows_in_current_range(cap_days: u32) -> Vec<(String, String)> {
+    let from = W_DATE_FROM
+        .with(|w| w.borrow().as_ref().and_then(|e| super::parse_date_flex(&e.text())));
+    let to = W_DATE_TO
+        .with(|w| w.borrow().as_ref().and_then(|e| super::parse_date_flex(&e.text())));
+    let (Some(from), Some(to)) = (from, to) else {
+        return Vec::new();
+    };
+    if from > to {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut start = from;
+    let step = chrono::Duration::days(i64::from(cap_days.saturating_sub(1)));
+    while start <= to {
+        let end = (start + step).min(to);
+        out.push((
+            start.format("%Y-%m-%d").to_string(),
+            end.format("%Y-%m-%d").to_string(),
+        ));
+        if end == to {
+            break;
+        }
+        // succ_opt None (край календаря) — не зацикливаемся, завершаем.
+        match end.succ_opt() {
+            Some(next) => start = next,
+            None => break,
+        }
+    }
+    out
 }
 
 /// Период `YYYY-MM` из текущего `date_from` (месяц начала диапазона). Источник

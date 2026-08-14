@@ -61,6 +61,11 @@ pub struct ReportDescriptor {
     /// Человекочитаемое описание отчёта (одно-два предложения) для инфо-панели GUI.
     #[serde(default)]
     pub description: Option<String>,
+    /// Жёсткий кап диапазона дат API отчёта (в днях, включительно). None = без
+    /// ограничения. GUI при интервале длиннее капа сам разбивает выгрузку на окна
+    /// ≤ капа (balance ≤30, buyout/placement ≤31 у Ozon — иначе 4xx от API).
+    #[serde(default)]
+    pub max_range_days: Option<u32>,
 }
 
 /// Какой период принимает отчёт по API (для UI и логики «Скачать по периоду»).
@@ -81,6 +86,17 @@ impl Default for PeriodKind {
     /// По умолчанию — диапазонный отчёт (большинство WB + часть Ozon).
     fn default() -> Self {
         Self::Range
+    }
+}
+
+impl ReportDescriptor {
+    /// Устанавливает жёсткий кап диапазона дат API (для отчётов, падающих 4xx
+    /// на интервале длиннее — balance/buyout/placement_* у Ozon). GUI разбивает
+    /// длинные интервалы на окна ≤ капа.
+    #[must_use]
+    pub fn with_max_range_days(mut self, days: u32) -> Self {
+        self.max_range_days = Some(days);
+        self
     }
 }
 
