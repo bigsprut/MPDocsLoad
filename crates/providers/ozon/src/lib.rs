@@ -22,7 +22,6 @@
 mod auth;
 mod client;
 mod date_format;
-mod pagination;
 mod provider;
 mod reports;
 mod xlsx;
@@ -34,6 +33,5 @@ pub use client::{
 pub use date_format::{
     format_date_only, format_iso8601_ms_z, format_year_month, parse_date_only, parse_year_month,
 };
-pub use pagination::{CursorPagination, OffsetPagination, PagesPagination, MAX_PAGE_SIZE};
 pub use provider::OzonProvider;
 pub use reports::out_of_scope;

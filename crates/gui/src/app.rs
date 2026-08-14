@@ -386,9 +386,6 @@ async fn run_command_loop(
                     docs,
                 });
             }
-            UiCommand::Cancel => {
-                fwd.forward(UiEvent::Notify("отмена не реализована в этом каркасе".into()));
-            }
             UiCommand::SaveDownloadState(state) => {
                 if let Some(cat) = domain.catalog.read().as_ref() {
                     let json = serde_json::to_string(&state).unwrap_or_default();
@@ -1278,29 +1275,6 @@ fn report_display_name_map(
         }
     }
     map
-}
-
-/// Преобразует период фильтра Архива (YYYY-MM) в диапазон дат `(from, to)` для
-/// inclusion-фильтра (пересечение): первое число месяца .. последний день месяца.
-/// None для невалидного формата. Используется в обработчике ListArchive.
-fn period_to_range(period: &str) -> Option<(String, String)> {
-    use chrono::Datelike;
-    // Ожидаем «YYYY-MM».
-    let (year_s, month_s) = period.split_once('-')?;
-    let year: i32 = year_s.parse().ok()?;
-    let month: u32 = month_s.parse().ok()?;
-    if !(1..=12).contains(&month) {
-        return None;
-    }
-    let first = chrono::NaiveDate::from_ymd_opt(year, month, 1)?;
-    // Последний день месяца: первое число следующего месяца минус 1 день.
-    let last = first
-        .checked_add_months(chrono::Months::new(1))?
-        .pred_opt()?;
-    Some((
-        first.format("%Y-%m-%d").to_string(),
-        last.format("%Y-%m-%d").to_string(),
-    ))
 }
 
 /// Записывает скачанные файлы на диск через FileStore и регистрирует в каталоге.

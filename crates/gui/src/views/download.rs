@@ -588,8 +588,8 @@ pub fn build(cs: &CommandSender) -> GtkBox {
                 format!(
                     "Генерация за {} окон по ≤{cap} дн. ({}…{})…",
                     windows.len(),
-                    windows.first().map(|w| w.0.as_str()).unwrap_or("?"),
-                    windows.last().map(|w| w.1.as_str()).unwrap_or("?")
+                    windows.first().map_or("?", |w| w.0.as_str()),
+                    windows.last().map_or("?", |w| w.1.as_str())
                 )
             };
             notify(&msg);

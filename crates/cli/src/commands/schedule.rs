@@ -33,9 +33,7 @@ pub async fn run(ctx: &Context, action: ScheduleCmd) -> Result<ExitCode> {
                         s.cron_expr,
                         if s.enabled { "да" } else { "нет" },
                         s.next_run_at
-                            .as_deref()
-                            .map(mdwf_scheduler::fmt_local)
-                            .unwrap_or_else(|| "-".into())
+                            .as_deref().map_or_else(|| "-".into(), mdwf_scheduler::fmt_local)
                     );
                 }
             }

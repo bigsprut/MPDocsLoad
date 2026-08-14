@@ -98,8 +98,6 @@ pub enum UiCommand {
         /// Токен отмены (кнопка «Отмена» во вкладке «Загрузка»).
         cancel: CancellationToken,
     },
-    /// Отмена текущей операции.
-    Cancel,
     /// Сохранить состояние экрана «Загрузка» (автосохранение).
     SaveDownloadState(DownloadState),
     /// Загрузить сохранённое состояние экрана «Загрузка».
@@ -480,13 +478,12 @@ impl EventForwarder {
         let mut ev = event;
         for _ in 0..100 {
             match self.tx.try_send(ev) {
-                Ok(()) => return,
                 Err(async_channel::TrySendError::Full(back)) => {
                     ev = back;
                     std::thread::sleep(std::time::Duration::from_millis(2));
                 }
-                // UI закрыт — доставлять некому.
-                Err(async_channel::TrySendError::Closed(_)) => return,
+                // Доставлено (Ok) или UI закрыт (Closed) — доставлять некому.
+                _ => return,
             }
         }
         tracing::error!("UiEvent потеряно: канал событий переполнен (ретраи исчерпаны)");

@@ -232,8 +232,6 @@ pub(crate) enum ResponseShape {
     DataDocuments,
     /// `{details: [...]}` (antifraud).
     Details,
-    /// `{report: [...]}` (region-sale, goods-return, goods-labeling).
-    Report,
 }
 
 /// Фабрика отчётов: возвращает `ReportRef` по `type_id`.
@@ -547,7 +545,6 @@ fn extract_entries(
             .and_then(|d| d.get("documents"))
             .unwrap_or(json),
         ResponseShape::Details => json.get("details").unwrap_or(json),
-        ResponseShape::Report => json.get("report").unwrap_or(json),
     };
 
     let mut out = Vec::new();

@@ -34,7 +34,6 @@ mod auth;
 mod client;
 mod date_format;
 mod documents;
-mod pagination;
 mod provider;
 mod reports;
 
@@ -42,6 +41,5 @@ pub use auth::{WbAuthenticator, WbTokenType, TOKEN_TTL_DAYS};
 pub use client::{RateLimiter, RetryPolicy, WbDomain, WbHttpClient};
 pub use date_format::{format_date_moscow, format_moscow_rfc3339};
 pub use documents::{DocumentCategory, DocumentsClient, ListDocumentsParams, WbDocument};
-pub use pagination::{DateCursor, OffsetLimit, RrdidCursor, TaskId};
 pub use provider::WildberriesProvider;
 pub use reports::out_of_scope;

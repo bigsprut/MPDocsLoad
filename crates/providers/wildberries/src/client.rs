@@ -170,16 +170,6 @@ impl WbDomain {
         }
     }
 
-    /// Максимально допустимый burst (число запросов подряд) для домена.
-    /// По официальной документации WB.
-    #[must_use]
-    pub fn burst(self) -> u32 {
-        match self {
-            Self::Documents => 5,                                      // док: burst 5
-            Self::Statistics => 10,                                    // док: burst 10
-            Self::Finance | Self::Analytics | Self::Returns => 1,      // burst 1
-        }
-    }
 }
 
 /// HTTP-клиент WB с rate limit по доменам и retry policy.
