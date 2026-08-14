@@ -63,6 +63,23 @@ pub fn fmt_local(rfc: &str) -> String {
     }
 }
 
+/// Период (YYYY-MM) для запуска расписания: текущий месяц + `offset`
+/// (0 = текущий, -1 = прошлый, -2 = позапрошлый). Месяц считается по
+/// ЛОКАЛЬНОМУ времени (расписание и период — понятия пользователя, не UTC).
+/// Единый источник для GUI и CLI-исполнителей расписаний.
+#[must_use]
+pub fn period_for_offset(offset: i32) -> String {
+    let now = Local::now();
+    let months = chrono::Months::new(offset.unsigned_abs());
+    let date = if offset >= 0 {
+        now.checked_add_months(months)
+    } else {
+        now.checked_sub_months(months)
+    }
+    .unwrap_or(now);
+    date.format("%Y-%m").to_string()
+}
+
 /// Нормализует выражение: дополняет до 6 полей (с секундами).
 fn normalize(expr: &str) -> String {
     let fields: Vec<&str> = expr.split_whitespace().collect();

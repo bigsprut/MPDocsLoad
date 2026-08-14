@@ -8,7 +8,7 @@ use chrono::Utc;
 use mdwf_core::{DownloadedFile, NoopProgress, ReportParams};
 use mdwf_storage::FileNameContext;
 
-use crate::commands::Context;
+use crate::commands::{journal_subject, journal_write, Context};
 use crate::exit_code::ExitCode;
 use crate::DownloadArgs;
 
@@ -16,6 +16,14 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
     let profile = ctx.profile_with_secrets(&args.profile).await?;
     let provider = ctx.registry.require(&profile.provider_id)?;
     let auth = provider.authenticator(&profile).await?;
+
+    let origin = mdwf_core::LogOrigin::Cli;
+    let display_names: std::collections::HashMap<String, String> = provider
+        .capabilities()
+        .reports
+        .iter()
+        .map(|r| (r.type_id.clone(), r.display_name.clone()))
+        .collect();
 
     let mut total = 0usize;
     let mut errors = 0usize;
@@ -50,6 +58,17 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
             params = params.with("skus", v);
         }
 
+        let subject = journal_subject(
+            display_names.get(report_type).map(String::as_str),
+            report_type,
+            params.period.as_deref(),
+        );
+        journal_write(
+            ctx,
+            "info",
+            &origin,
+            &format!("Скачивание {subject} — {}", args.profile),
+        );
         let progress = Arc::new(NoopProgress) as Arc<dyn mdwf_core::ProgressCallback>;
         match report
             .download(
@@ -61,12 +80,25 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
             .await
         {
             Ok(files) => {
+                let note = files.iter().find_map(|f| f.note.clone()).unwrap_or_default();
+                let note_suffix = if note.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — внимание: {note}")
+                };
                 let saved = persist(ctx, &files, &profile.provider_id, &args.profile, report_type, &params)?;
                 println!("  скачано файлов: {}; записано: {}", files.len(), saved);
+                journal_write(
+                    ctx,
+                    "success",
+                    &origin,
+                    &format!("{subject}: скачано {} файл(ов){note_suffix}", files.len()),
+                );
                 total += saved;
             }
             Err(e) => {
                 println!("  ошибка выгрузки: {e}");
+                journal_write(ctx, "error", &origin, &format!("{subject}: {e}"));
                 errors += 1;
             }
         }
@@ -83,7 +115,8 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
 }
 
 /// Записывает файлы на диск через FileStore и регистрирует в каталоге.
-fn persist(
+/// pub(crate): переиспользуется исполнителем расписаний (schedule run).
+pub(crate) fn persist(
     ctx: &Context,
     files: &[DownloadedFile],
     provider_id: &str,

@@ -173,6 +173,16 @@ fn make_row(entry: &LogEntry) -> ListBoxRow {
         .build();
     box_.append(&time);
     box_.append(&kind_lbl);
+    // Источник события (вручную/CLI/расписание) — приглушённая пометка перед
+    // сообщением; у старых записей (до появления origin) пусто — не показываем.
+    if !entry.origin.is_empty() {
+        let origin = Label::builder()
+            .label(format!("[{}]", entry.origin))
+            .css_classes(["dim-label"])
+            .xalign(0.0)
+            .build();
+        box_.append(&origin);
+    }
     box_.append(&msg);
     row.set_child(Some(&box_));
     row
@@ -184,6 +194,7 @@ const LOGS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::T("Лента событий: скачивание (успех/ошибка), запуски расписаний, сбои."),
     crate::widgets::tab_help::HelpBlock::B(&[
         "Хранятся последние 500 записей — и в этом сеансе, и между запусками (в БД).",
+        "Каждая запись помечена источником: вручную (GUI), CLI или расписание (и как оно запущено: автозапуск, кнопка, задача Windows).",
         "«Очистить» — удаляет историю целиком (ленту и БД).",
         "Подробные логи-файлы: %APPDATA%\\mdwf\\logs.",
     ]),

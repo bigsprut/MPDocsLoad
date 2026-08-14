@@ -23,6 +23,7 @@ pub mod capabilities;
 pub mod downloader;
 pub mod error;
 pub mod health;
+pub mod journal;
 pub mod pagination;
 pub mod params;
 pub mod profile;
@@ -44,6 +45,7 @@ pub use capabilities::{
 pub use downloader::{DownloadedFile, Downloader, DownloaderKind};
 pub use error::{CoreError, CoreResult};
 pub use health::{HealthLevel, HealthStatus};
+pub use journal::{describe_range, describe_report_period, LogOrigin};
 pub use pagination::{PagePagination, Pagination};
 pub use params::{ReportParameter, ReportParameterKind, ReportParams};
 pub use profile::Profile;

@@ -351,11 +351,13 @@ impl LogKind {
 
 /// Одна запись журнала приложения. `created_at` — момент события в UTC;
 /// отображается локальным временем (сегодня — «ЧЧ:ММ:СС», старше — с датой).
+/// `origin` — источник события (mdwf_core::LogOrigin), '' у старых записей.
 /// Персистится в SQLite (таблица `journal`, кап [`mdwf_storage::JOURNAL_KEEP`]).
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub kind: LogKind,
+    pub origin: String,
     pub message: String,
 }
 

@@ -88,10 +88,13 @@ CREATE TABLE IF NOT EXISTS schedule_runs (
 
 -- Журнал событий приложения (вкладка «Журнал» GUI): переживает перезапуск.
 -- created_at — RFC3339 UTC (хранение в UTC, отображение в локальном времени).
+-- origin — источник события: «вручную (GUI)» / «расписание «X», автозапуск» /
+-- «расписание «X», запуск вручную» / «расписание «X», задача Windows» / «CLI».
 CREATE TABLE IF NOT EXISTS journal (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
     kind        TEXT NOT NULL,                      -- info/success/error
+    origin      TEXT NOT NULL DEFAULT '',
     message     TEXT NOT NULL
 );
 

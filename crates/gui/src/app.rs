@@ -163,6 +163,7 @@ impl App {
             let executor = Arc::new(GuiJobExecutor {
                 domain: sched_domain.clone(),
                 fwd: sched_fwd,
+                manual_run: false,
             }) as Arc<dyn mdwf_scheduler::JobExecutor>;
             let max_parallel = cfg.raw.scheduler.max_parallel_jobs;
             let runner = Arc::new(mdwf_scheduler::Runner::new(catalog, executor, max_parallel));
@@ -374,7 +375,7 @@ async fn run_command_loop(
                 cancel,
             } => {
                 let outcome =
-                    do_download(&domain, &provider_id, &profile_name, &report_type, documents, params, cancel, &fwd)
+                    do_download(&domain, &provider_id, &profile_name, &report_type, documents, params, cancel, &fwd, &mdwf_core::LogOrigin::ManualGui)
                         .await;
                 fwd.forward(UiEvent::DownloadFinished(outcome));
                 // Обновляем значки «уже загружен» после скачивания (cross-session).
@@ -557,12 +558,14 @@ async fn run_command_loop(
                 match outcome {
                     Ok(()) => log_event(
                         &domain,
+                        &mdwf_core::LogOrigin::ManualGui,
                         &fwd,
                         crate::channels::LogKind::Success,
                         format!("Расписание «{name}» добавлено"),
                     ),
                     Err(e) => log_event(
                         &domain,
+                        &mdwf_core::LogOrigin::ManualGui,
                         &fwd,
                         crate::channels::LogKind::Error,
                         format!("Не удалось добавить расписание: {e}"),
@@ -594,12 +597,14 @@ async fn run_command_loop(
                 match outcome {
                     Ok(()) => log_event(
                         &domain,
+                        &mdwf_core::LogOrigin::ManualGui,
                         &fwd,
                         crate::channels::LogKind::Success,
                         format!("Расписание «{name}» изменено"),
                     ),
                     Err(e) => log_event(
                         &domain,
+                        &mdwf_core::LogOrigin::ManualGui,
                         &fwd,
                         crate::channels::LogKind::Error,
                         format!("Не удалось изменить расписание: {e}"),
@@ -616,6 +621,7 @@ async fn run_command_loop(
                 }
                 log_event(
                     &domain,
+                    &mdwf_core::LogOrigin::ManualGui,
                     &fwd,
                     crate::channels::LogKind::Info,
                     format!("Расписание «{name}» удалено"),
@@ -649,6 +655,7 @@ async fn run_command_loop(
                     Ok(()) => {
                         log_event(
                             &domain,
+                            &mdwf_core::LogOrigin::ManualGui,
                             &fwd,
                             crate::channels::LogKind::Info,
                             format!(
@@ -671,6 +678,7 @@ async fn run_command_loop(
                     Ok(()) => {
                         log_event(
                             &domain,
+                            &mdwf_core::LogOrigin::ManualGui,
                             &fwd,
                             crate::channels::LogKind::Info,
                             format!(
@@ -703,6 +711,7 @@ async fn run_command_loop(
                                     .map(|dt| crate::channels::LogEntry {
                                         created_at: dt.with_timezone(&chrono::Utc),
                                         kind: crate::channels::LogKind::from_db_code(&r.kind),
+                                        origin: r.origin,
                                         message: r.message,
                                     })
                             })
@@ -1010,6 +1019,7 @@ async fn do_download(
     mut params: mdwf_core::ReportParams,
     cancel: CancellationToken,
     fwd: &EventForwarder,
+    origin: &mdwf_core::LogOrigin,
 ) -> Result<crate::channels::DownloadResult, String> {
     let profile = read_profile_with_secrets(domain, profile_name).await?;
     let provider = domain
@@ -1054,11 +1064,13 @@ async fn do_download(
         fraction: Some(0.0),
         message: "начало скачивания…".into(),
     });
+    let subject = journal_subject(domain, report_type, &params, !documents.is_empty());
     log_event(
         domain,
+        origin,
         fwd,
         crate::channels::LogKind::Info,
-        format!("Скачивание {report_type} — {profile_name}"),
+        format!("Скачивание {subject} — {profile_name}"),
     );
     let files = report
         .download(auth.as_ref(), &params, progress, cancel)
@@ -1075,9 +1087,10 @@ async fn do_download(
         Err(e) => {
             log_event(
                 domain,
+                origin,
                 fwd,
                 crate::channels::LogKind::Error,
-                format!("{report_type}: {e}"),
+                format!("{subject}: {e}"),
             );
             return Err(e);
         }
@@ -1121,9 +1134,10 @@ async fn do_download(
             };
             log_event(
                 domain,
+                origin,
                 fwd,
                 crate::channels::LogKind::Success,
-                format!("{report_type}: скачано {} файл(ов){note_suffix}", files.len()),
+                format!("{subject}: скачано {} файл(ов){note_suffix}", files.len()),
             );
             Ok(crate::channels::DownloadResult {
                 files,
@@ -1133,9 +1147,10 @@ async fn do_download(
         Err(e) => {
             log_event(
                 domain,
+                origin,
                 fwd,
                 crate::channels::LogKind::Error,
-                format!("{report_type}: запись на диск не удалась: {e}"),
+                format!("{subject}: запись на диск не удалась: {e}"),
             );
             Err(e)
         }
@@ -1145,37 +1160,28 @@ async fn do_download(
 /// Шлёт запись в журнал (вкладка «Журнал») с локальной меткой времени ЧЧ:ММ:СС.
 fn log_event(
     domain: &Domain,
+    origin: &mdwf_core::LogOrigin,
     fwd: &EventForwarder,
     kind: crate::channels::LogKind,
     message: impl Into<String>,
 ) {
     let message = message.into();
-    // Персист: журнал переживает перезапуск (таблица `journal`, кап 500).
+    // Персист: журнал переживает перезапуск (таблица `journal`, кап 500),
+    // вместе с источником события (вручную/CLI/расписание).
     // Best-effort — сбой записи не должен глушить UI-событие.
     let created_at = chrono::Utc::now();
     if let Some(cat) = domain.catalog.read().as_ref() {
-        if let Err(e) = cat.add_journal_entry(created_at, kind.as_str(), &message) {
+        if let Err(e) = cat.add_journal_entry(created_at, kind.as_str(), &origin.as_str(), &message)
+        {
             tracing::warn!(error = %e, "журнал: не удалось записать в БД");
         }
     }
     fwd.forward(crate::channels::UiEvent::Log(crate::channels::LogEntry {
         created_at,
         kind,
+        origin: origin.as_str(),
         message,
     }));
-}
-
-/// Период (YYYY-MM) для запуска расписания: текущий месяц + offset.
-/// offset = 0 → текущий месяц, -1 → прошлый (для отчётов за прошедший месяц).
-fn format_period_offset(offset: i32) -> String {
-    let now = chrono::Local::now();
-    let date = if offset >= 0 {
-        now.checked_add_months(chrono::Months::new(offset as u32))
-    } else {
-        now.checked_sub_months(chrono::Months::new((-offset) as u32))
-    }
-    .unwrap_or(now);
-    date.format("%Y-%m").to_string()
 }
 
 /// Список расписаний с человекочитаемыми именами (профиль, отчёты) для UI.
@@ -1225,6 +1231,10 @@ fn list_schedule_views(domain: &Domain) -> Result<Vec<crate::channels::ScheduleV
 struct GuiJobExecutor {
     domain: Arc<Domain>,
     fwd: EventForwarder,
+    /// true — запуск кнопкой «▶ Выполнить сейчас» (run_schedule_by_name);
+    /// false — фоновый цикл планировщика (автозапуск по cron). Влияет на
+    /// источник (origin) записей журнала.
+    manual_run: bool,
 }
 
 #[async_trait::async_trait]
@@ -1249,7 +1259,12 @@ impl mdwf_scheduler::JobExecutor for GuiJobExecutor {
                 })?;
             (p.name, p.provider_id)
         };
-        let period = format_period_offset(req.period_offset);
+        let period = mdwf_scheduler::period_for_offset(req.period_offset);
+        let origin = if self.manual_run {
+            mdwf_core::LogOrigin::ScheduleManualRun(req.schedule_name.clone())
+        } else {
+            mdwf_core::LogOrigin::ScheduleGuiLoop(req.schedule_name.clone())
+        };
         let mut total = 0usize;
         let mut failed = 0usize;
         for report_type in &req.reports {
@@ -1266,6 +1281,7 @@ impl mdwf_scheduler::JobExecutor for GuiJobExecutor {
                 params,
                 CancellationToken::new(),
                 &self.fwd,
+                &origin,
             )
             .await
             {
@@ -1290,11 +1306,18 @@ impl mdwf_scheduler::JobExecutor for GuiJobExecutor {
         } else {
             String::new()
         };
+        // Период расписания — человекочитаемо (offset → месяц).
+        let period_desc = mdwf_core::describe_report_period(Some(period.as_str()))
+            .map_or_else(String::new, |p| format!(" ({p})"));
         log_event(
             &self.domain,
+            &origin,
             &self.fwd,
             kind,
-            format!("Расписание «{}»: {} файл(ов){detail}", req.schedule_name, total),
+            format!(
+                "Расписание «{}»{period_desc}: {} файл(ов){detail}",
+                req.schedule_name, total
+            ),
         );
         Ok(JobResult {
             files_count: total,
@@ -1312,7 +1335,7 @@ async fn run_schedule_by_name(domain: Arc<Domain>, fwd: EventForwarder, name: St
         match cat.as_ref().and_then(|c| c.get_schedule(&name).ok().flatten()) {
             Some(s) => s,
             None => {
-                log_event(&domain, &fwd, crate::channels::LogKind::Error, format!("Расписание «{name}» не найдено"));
+                log_event(&domain, &mdwf_core::LogOrigin::ManualGui, &fwd, crate::channels::LogKind::Error, format!("Расписание «{name}» не найдено"));
                 return;
             }
         }
@@ -1320,6 +1343,7 @@ async fn run_schedule_by_name(domain: Arc<Domain>, fwd: EventForwarder, name: St
     let executor = GuiJobExecutor {
         domain: domain.clone(),
         fwd: fwd.clone(),
+        manual_run: true,
     };
     let req = mdwf_scheduler::JobRequest {
         schedule_id: schedule.id,
@@ -1359,6 +1383,56 @@ fn report_display_name_map(
         }
     }
     map
+}
+
+/// «Субъект» события журнала: человекочитаемое название отчёта + период
+/// выгрузки (урок #54: пользователь видит имена, не type_id). Browsable-
+/// документы — без периода (он к ним не относится); Month-отчёты — месяц из
+/// `period` (цикл по месяцам шлёт полный диапазон в date_from/date_to, а
+/// качает конкретный месяц); прочие — фактический диапазон дат с fallback
+/// на `period`.
+fn journal_subject(
+    domain: &Domain,
+    report_type: &str,
+    params: &mdwf_core::ReportParams,
+    has_documents: bool,
+) -> String {
+    let name = report_display_name_map(domain)
+        .get(report_type)
+        .cloned()
+        .unwrap_or_else(|| report_type.to_string());
+    if has_documents {
+        return format!("«{name}»");
+    }
+    let mut kind = mdwf_core::PeriodKind::Range;
+    for p in domain.registry.list() {
+        if let Some(r) = p
+            .capabilities()
+            .reports
+            .iter()
+            .find(|r| r.type_id == report_type)
+        {
+            kind = r.period_kind;
+            break;
+        }
+    }
+    let parse = |v: Option<&String>| {
+        v.and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+    };
+    let period_desc = match kind {
+        mdwf_core::PeriodKind::Month => {
+            crate::views::describe_report_period(params.period.as_deref())
+        }
+        _ => crate::views::describe_range(
+            parse(params.values.get("date_from")),
+            parse(params.values.get("date_to")),
+        )
+        .or_else(|| crate::views::describe_report_period(params.period.as_deref())),
+    };
+    match period_desc {
+        Some(p) => format!("«{name}» ({p})"),
+        None => format!("«{name}»"),
+    }
 }
 
 /// Записывает скачанные файлы на диск через FileStore и регистрирует в каталоге.
