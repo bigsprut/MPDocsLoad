@@ -103,10 +103,15 @@ impl RateLimiter {
     /// Дополнительно к этому acquire() всё равно контролирует min_interval.
     pub async fn backoff(&self, penalty: Duration) {
         let mut last = self.last_request.lock();
-        // Сдвигаем "последний запрос" в будущее на величину штрафа,
-        // чтобы acquire() следующего запроса подождал.
+        // Сдвигаем "последний запрос" в будущее на величину штрафа, НО не
+        // назад: два штрафа подряд (или штраф поверх уже отложенного слота)
+        // должны удлинять ожидание, а не сокращать его (max, как в P0-3).
         let now = std::time::Instant::now();
-        *last = Some(now + penalty);
+        let target = now + penalty;
+        // max с текущим слотом (None = слота нет — просто ставим target).
+        if last.map_or(true, |cur| target > cur) {
+            *last = Some(target);
+        }
     }
 }
 
@@ -496,6 +501,24 @@ mod tests {
         // 409 — логический конфликт, не transient: не ретраим.
         assert!(RetryPolicy::is_non_retryable(StatusCode::CONFLICT));
         assert!(!RetryPolicy::is_non_retryable(StatusCode::INTERNAL_SERVER_ERROR));
+    }
+
+    #[tokio::test]
+    async fn backoff_takes_max_not_overwrite() {
+        // Два штрафа подряд: 30с, затем 1с. Второй НЕ должен сокращать
+        // ожидание до 1с — слот остаётся ~30с (max, как в P0-3 у Ozon).
+        let limiter = RateLimiter::new(Duration::from_secs(10));
+        limiter.backoff(Duration::from_secs(30)).await;
+        limiter.backoff(Duration::from_secs(1)).await;
+        let wait = {
+            let last = limiter.last_request.lock();
+            let last = last.expect("slot set");
+            last.saturating_duration_since(std::time::Instant::now())
+        };
+        assert!(
+            wait >= Duration::from_secs(25),
+            "малый штраф срезал большой: wait={wait:?}"
+        );
     }
 
     #[test]

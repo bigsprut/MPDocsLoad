@@ -31,6 +31,13 @@ pub enum CoreError {
     #[error("протокольная ошибка API: {0}")]
     Protocol(String),
 
+    /// Временная недоступность из-за защиты самого клиента: circuit breaker
+    /// разомкнут после серии отказов подряд. Повтор после cooldown
+    /// (≈5 минут) может помочь — это transient, НЕ баг кода (в отличие от
+    /// `Internal`, которым breaker ошибочно представляли прежде).
+    #[error("временно недоступно: {0}")]
+    Unavailable(String),
+
     #[error("operation cancelled")]
     Cancelled,
 
@@ -64,13 +71,16 @@ impl CoreError {
         matches!(self, CoreError::Api { status: 429, .. })
     }
 
-    /// True для transient-ошибок (429, 5xx) — повтор запроса может помочь.
-    /// Используется health_check для классификации как Degraded (не Down).
+    /// True для transient-ошибок (429, 5xx, недоступность из-за breaker) —
+    /// повтор запроса может помочь. Используется health_check для
+    /// классификации как Degraded (не Down).
     #[must_use]
     pub fn is_transient(&self) -> bool {
         matches!(
             self,
-            CoreError::Api { status: 429 | 500..=599, .. } | CoreError::Network(_)
+            CoreError::Api { status: 429 | 500..=599, .. }
+                | CoreError::Network(_)
+                | CoreError::Unavailable(_)
         )
     }
 }
@@ -108,6 +118,17 @@ mod tests {
         assert!(CoreError::Internal("boom".into())
             .to_string()
             .contains("boom"));
+    }
+
+    #[test]
+    fn unavailable_is_transient() {
+        // Breaker-open — временная недоступность: retry после cooldown поможет.
+        let e = CoreError::Unavailable("circuit breaker open".into());
+        assert!(e.is_transient());
+        assert!(!e.is_auth_failure());
+        assert!(!e.is_rate_limited());
+        // Internal (баг кода) — НЕ transient.
+        assert!(!CoreError::Internal("x".into()).is_transient());
     }
 
     #[test]

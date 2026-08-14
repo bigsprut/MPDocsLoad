@@ -103,7 +103,7 @@ impl CircuitBreaker {
         if state.is_open {
             if let Some(opened) = state.opened_at {
                 if opened.elapsed() < self.cooldown {
-                    return Err(CoreError::Internal(format!(
+                    return Err(CoreError::Unavailable(format!(
                         "circuit breaker open (осталось {:?})",
                         self.cooldown - opened.elapsed()
                     )));

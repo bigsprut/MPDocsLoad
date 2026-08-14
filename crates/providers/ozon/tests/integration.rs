@@ -168,11 +168,14 @@ async fn breaker_blocks_after_threshold() {
 
     // health_check дёргает client.post(/v1/finance/balance) — там всегда 500.
     // Без фикса: 20 ретраев 500 → Api(500) → Degraded «server error».
-    // С фиксом: после 5 отказов breaker открывается → Internal «circuit breaker open».
+    // С фиксом: после 5 отказов breaker открывается → Unavailable
+    // «временно недоступно: circuit breaker open …» → Degraded (transient).
     let status = provider.health_check(auth.as_ref()).await.unwrap();
     assert!(
         status.message.contains("circuit breaker open"),
         "ожидали «circuit breaker open», получили: {}",
         status.message
     );
+    // Unavailable — transient: health_check классифицирует как Degraded, не Down.
+    assert_eq!(status.level, mdwf_core::HealthLevel::Degraded);
 }
