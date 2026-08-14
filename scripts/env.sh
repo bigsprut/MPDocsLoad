@@ -21,6 +21,10 @@ if [ ! -d "$MDWF_MSYS2_MINGW_BIN" ]; then
   exit 1
 fi
 
+# cygpath: в PATH работает ТОЛЬКО POSIX-формат (/d/...); Windows-вид «D:/...»
+# bash не распознаёт (инструменты не находились при запуске из чистого cmd).
+MDWF_MSYS2_MINGW_BIN="$(cygpath -u "$MDWF_MSYS2_MINGW_BIN")"
+
 export PATH="$MDWF_MSYS2_MINGW_BIN:$PATH"
 export PKG_CONFIG_PATH="${MDWF_MSYS2_MINGW_BIN%/bin}/lib/pkgconfig"
 # gnu-тулчейн нужен для линковки с MinGW-сборкой GTK.

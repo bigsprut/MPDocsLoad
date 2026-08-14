@@ -19,6 +19,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MSYS2_MINGW_BIN="${MSYS2_MINGW_BIN:-D:/msys64/mingw64/bin}"
+# cygpath: в PATH работает ТОЛЬКО POSIX-формат (/d/...), Windows-вид «D:/...»
+# bash не распознаёт (pkg-config не находился при запуске из чистого cmd).
+MSYS2_MINGW_BIN="$(cygpath -u "$MSYS2_MINGW_BIN")"
 MSYS_ROOT="${MSYS2_MINGW_BIN%/bin}"
 DIST="$REPO_ROOT/dist"
 DIST_APP="$DIST/mdwf"

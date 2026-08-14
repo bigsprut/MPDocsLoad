@@ -45,6 +45,17 @@ if not defined BASH (
 echo bash: %BASH%
 echo.
 
+rem --- make MSYS2 core utilities visible: bash.exe launched from cmd runs a
+rem --- NON-LOGIN shell which does NOT add its own /usr/bin to PATH, so the
+rem --- script would fail with "dirname: command not found" / "bash: command
+rem --- not found". Prepending the bash directory fixes both. (MinGW/GTK paths
+rem --- are set later by scripts/env.sh itself.) ---
+for %%i in ("%BASH%") do set "PATH=%%~dpi;%PATH%"
+
+rem --- cargo/rustup live in %USERPROFILE%\.cargo\bin (rustup default); add it
+rem --- so the build also works from a double-click (PATH without cargo). ---
+if exist "%USERPROFILE%\.cargo\bin" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+
 rem --- run the build ---
 "%BASH%" scripts/build-setup.sh
 set "RC=%ERRORLEVEL%"
