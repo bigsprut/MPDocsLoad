@@ -240,7 +240,7 @@ impl WbHttpClient {
                     if status.is_success() {
                         // 2xx, но не JSON — ошибка протокола, не сеть.
                         return resp.json::<Value>().await.map_err(|e| {
-                            CoreError::Internal(format!("WB: некорректный JSON-ответ ({e})"))
+                            CoreError::Protocol(format!("WB: некорректный JSON-ответ ({e})"))
                         });
                     }
                     // 429 Too Many Requests: WB отдаёт X-Ratelimit-Retry (секунды).
@@ -314,7 +314,7 @@ impl WbHttpClient {
                     if status.is_success() {
                         // 2xx, но не JSON — ошибка протокола, не сеть.
                         return resp.json::<Value>().await.map_err(|e| {
-                            CoreError::Internal(format!("WB: некорректный JSON-ответ ({e})"))
+                            CoreError::Protocol(format!("WB: некорректный JSON-ответ ({e})"))
                         });
                     }
                     // 429 Too Many Requests (см. комментарий в GET).

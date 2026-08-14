@@ -265,7 +265,7 @@ impl OzonHttpClient {
                         self.breaker.on_success();
                         // 2xx, но не JSON — это ошибка протокола, не сеть.
                         return resp.json::<Value>().await.map_err(|e| {
-                            CoreError::Internal(format!(
+                            CoreError::Protocol(format!(
                                 "Ozon {url}: некорректный JSON-ответ ({e})"
                             ))
                         });

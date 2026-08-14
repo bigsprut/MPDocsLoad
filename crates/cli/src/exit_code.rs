@@ -49,6 +49,8 @@ pub fn from_core_error(e: &mdwf_core::CoreError) -> ExitCode {
         mdwf_core::CoreError::SecretNotFound(_) => ExitCode::AuthError,
         mdwf_core::CoreError::Network(_) => ExitCode::NetworkError,
         mdwf_core::CoreError::Cancelled => ExitCode::Cancelled,
+        // Протокольная ошибка (2xx с некорректным JSON и т.п.) — ApiError.
+        mdwf_core::CoreError::Protocol(_) => ExitCode::ApiError,
         // API-ошибки: классифицируем по HTTP-статусу.
         mdwf_core::CoreError::Api { status, .. } => match *status {
             401 | 403 => ExitCode::AuthError,

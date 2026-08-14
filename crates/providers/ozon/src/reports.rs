@@ -971,7 +971,7 @@ impl Report for OzonAsyncReport {
             let report_info = self.client.post_report_info(code, auth).await?;
             let result = report_info
                 .get("result")
-                .ok_or_else(|| CoreError::Internal("report/info: нет result".into()))?;
+                .ok_or_else(|| CoreError::Protocol("report/info: нет result".into()))?;
             let status = result
                 .get("status")
                 .and_then(|s| s.as_str())

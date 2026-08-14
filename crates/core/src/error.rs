@@ -25,6 +25,12 @@ pub enum CoreError {
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
 
+    /// Протокольная ошибка: API ответил не так, как ожидает спецификация
+    /// (2xx с некорректным JSON, отсутствие ожидаемого поля result/code и т.п.).
+    /// Отличается от `Internal` (= баг в коде) — это рассинхрон с докой API.
+    #[error("протокольная ошибка API: {0}")]
+    Protocol(String),
+
     #[error("operation cancelled")]
     Cancelled,
 
