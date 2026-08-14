@@ -432,7 +432,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         schedule_save();
     });
 
-    // «↻ Обновить» — запросить отчёты активного провайдера (из вкладки «Магазин»).
+    // «Обновить» — запросить отчёты активного провайдера (из вкладки «Магазин»).
     let cs_rep = cs.clone();
     load_reports_btn.connect_clicked(move |_| {
         if let Some(pid) = active_provider_id() {

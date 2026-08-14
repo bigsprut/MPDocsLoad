@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Button, Label, ListBox, Orientation};
+use gtk4::{Box as GtkBox, Label, ListBox, Orientation};
 
 use crate::channels::{CommandSender, ReportInfo};
 
@@ -16,7 +16,7 @@ thread_local! {
     static REPORTS: Rc<RefCell<Vec<ReportInfo>>> = Rc::new(RefCell::new(Vec::new()));
     static LIST_WIDGET: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
     static W_SHOP_LABEL: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
-    /// Активный провайдер (для reload по кнопке «↻ Обновить»).
+    /// Активный провайдер (для reload по кнопке «Обновить»).
     static ACTIVE_PROVIDER: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
 }
@@ -49,10 +49,8 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .halign(gtk4::Align::Start)
         .wrap(true)
         .build();
-    let load_btn = Button::builder()
-        .label("↻ Обновить")
-        .tooltip_text("Перезагрузить список отчётов активного маркетплейса")
-        .build();
+    let load_btn = super::icon_button("Обновить", "view-refresh-symbolic");
+    load_btn.set_tooltip_text(Some("Перезагрузить список отчётов активного маркетплейса"));
     row.append(&shop_label);
     row.append(&load_btn);
     root.append(&row);
@@ -67,7 +65,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     LIST_WIDGET.with(|lw| *lw.borrow_mut() = Some(list_box.clone()));
     CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
 
-    // «↻ Обновить» — перезагрузить отчёты активного провайдера.
+    // «Обновить» — перезагрузить отчёты активного провайдера.
     let cs1 = cs.clone();
     load_btn.connect_clicked(move |_| {
         let pid = ACTIVE_PROVIDER.with(|p| p.borrow().clone());
