@@ -70,6 +70,38 @@ pub(crate) fn ext_label(ext: &str) -> String {
     }
 }
 
+/// Дата для UI: ISO «2026-07-15» → «15.07.2026», месяц «2026-07» → «07.2026»;
+/// прочее — как есть. Российский формат привычнее ISO для бухгалтера.
+pub(crate) fn disp_date(iso: &str) -> String {
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(iso, "%Y-%m-%d") {
+        return d.format("%d.%m.%Y").to_string();
+    }
+    let t = iso.trim();
+    if t.len() == 7 {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(&format!("{t}-01"), "%Y-%m-%d") {
+            return d.format("%m.%Y").to_string();
+        }
+    }
+    iso.to_string()
+}
+
+/// Парсит дату из поля ввода: принимает «ДД.ММ.ГГГГ» и (для совместимости) «YYYY-MM-DD».
+pub(crate) fn parse_date_flex(s: &str) -> Option<chrono::NaiveDate> {
+    let t = s.trim();
+    chrono::NaiveDate::parse_from_str(t, "%d.%m.%Y")
+        .or_else(|_| chrono::NaiveDate::parse_from_str(t, "%Y-%m-%d"))
+        .ok()
+}
+
+/// Дата из поля ввода → ISO «YYYY-MM-DD» для API. При ошибке парсинга — исходная
+/// строка (провайдер/валидация сообщит о некорректности).
+pub(crate) fn to_iso(s: &str) -> String {
+    match parse_date_flex(s) {
+        Some(d) => d.format("%Y-%m-%d").to_string(),
+        None => s.trim().to_string(),
+    }
+}
+
 // ===== Кнопка-календарь для выбора дат (общая для «Загрузка» и «Архив») =====
 
 /// Создаёт кнопку с иконкой календаря (MenuButton + Calendar в Popover).
@@ -149,15 +181,16 @@ pub(crate) fn make_date_picker(entry: &gtk4::Entry, date_format: &str) -> gtk4::
 }
 
 /// Парсит текст из Entry в glib::DateTime для предустановки календаря.
-/// Поддерживает форматы YYYY-MM-DD и YYYY-MM.
+/// Поддерживает ДД.ММ.ГГГГ, YYYY-MM-DD (совместимость) и YYYY-MM.
 fn parse_date_for_calendar(s: &str) -> Option<glib::DateTime> {
-    let naive = if s.len() >= 10 {
-        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?
-    } else if s.len() == 7 {
-        chrono::NaiveDate::parse_from_str(&format!("{s}-01"), "%Y-%m-%d").ok()?
-    } else {
-        return None;
-    };
+    let naive = parse_date_flex(s).or_else(|| {
+        let t = s.trim();
+        if t.len() == 7 {
+            chrono::NaiveDate::parse_from_str(&format!("{t}-01"), "%Y-%m-%d").ok()
+        } else {
+            None
+        }
+    })?;
     let dt = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
         naive.and_hms_opt(12, 0, 0)?,
         chrono::Utc,

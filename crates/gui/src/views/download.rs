@@ -293,15 +293,15 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     // Период по умолчанию: последний год (диапазон) + прошлый месяц (для period-отчётов).
     let today = chrono::Local::now().date_naive();
     let year_ago = today - chrono::Duration::days(365);
-    let default_from = year_ago.format("%Y-%m-%d").to_string();
-    let default_to = today.format("%Y-%m-%d").to_string();
+    let default_from = year_ago.format("%d.%m.%Y").to_string();
+    let default_to = today.format("%d.%m.%Y").to_string();
     let row2 = GtkBox::new(Orientation::Horizontal, 8);
     let category_combo = ComboBoxText::new();
     category_combo.append_text("(все)");
     category_combo.set_active(Some(0));
     category_combo.set_tooltip_text(Some("Категория документа (загружается автоматически из WB)"));
-    let date_from = Entry::builder().placeholder_text("с YYYY-MM-DD").width_chars(12).text(&default_from).build();
-    let date_to = Entry::builder().placeholder_text("по YYYY-MM-DD").width_chars(12).text(&default_to).build();
+    let date_from = Entry::builder().placeholder_text("с ДД.ММ.ГГГГ").width_chars(12).text(&default_from).build();
+    let date_to = Entry::builder().placeholder_text("по ДД.ММ.ГГГГ").width_chars(12).text(&default_to).build();
     let limit_entry = Entry::builder().placeholder_text("лимит").width_chars(6).build();
 
     // Кнопка «📅 Интервал» — выбор стандартного интервала (неделя/месяц/квартал/год)
@@ -332,11 +332,11 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     row2.append(&Label::new(Some("Диапазон:")));
     row2.append(&date_from);
     // Кнопка-календарь для date_from
-    row2.append(&super::make_date_picker(&date_from, "%Y-%m-%d"));
+    row2.append(&super::make_date_picker(&date_from, "%d.%m.%Y"));
     row2.append(&Label::new(Some("..")));
     row2.append(&date_to);
     // Кнопка-календарь для date_to
-    row2.append(&super::make_date_picker(&date_to, "%Y-%m-%d"));
+    row2.append(&super::make_date_picker(&date_to, "%d.%m.%Y"));
     // Кнопка выбора стандартного интервала
     row2.append(&interval_btn);
     row2.append(&Label::new(Some("Лимит:")));
@@ -510,12 +510,13 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             notify("Выберите профиль и отчёт.");
             return;
         };
-        let df = df_per.text().to_string();
-        let dt = dt_per.text().to_string();
+        // Поля показывают ДД.ММ.ГГГГ → в API уходит ISO.
+        let df = super::to_iso(&df_per.text());
+        let dt = super::to_iso(&dt_per.text());
         if current_period_kind() == mdwf_core::PeriodKind::Month {
             let months = months_in_current_range();
             if months.is_empty() {
-                notify("Задайте корректный диапазон дат (date_from ≤ date_to).");
+                notify("Задайте корректный диапазон дат (начало ≤ конец).");
                 return;
             }
             let n = months.len();
@@ -609,7 +610,7 @@ fn current_period_kind() -> mdwf_core::PeriodKind {
 /// `date_from` не парсится как дата.
 fn current_month_value() -> Option<String> {
     let s = W_DATE_FROM.with(|w| w.borrow().as_ref().map(|e| e.text().to_string()))?;
-    let d = NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()?;
+    let d = super::parse_date_flex(&s)?;
     Some(d.format("%Y-%m").to_string())
 }
 
@@ -619,16 +620,8 @@ fn current_month_value() -> Option<String> {
 /// месяцев отдельной выгрузкой (чтобы `date_to` не терялась). Также число
 /// элементов используется в инфо-панели («соберём по месяцам: N мес.»).
 fn months_in_current_range() -> Vec<String> {
-    let from = W_DATE_FROM.with(|w| {
-        w.borrow()
-            .as_ref()
-            .and_then(|e| NaiveDate::parse_from_str(&e.text(), "%Y-%m-%d").ok())
-    });
-    let to = W_DATE_TO.with(|w| {
-        w.borrow()
-            .as_ref()
-            .and_then(|e| NaiveDate::parse_from_str(&e.text(), "%Y-%m-%d").ok())
-    });
+    let from = W_DATE_FROM.with(|w| w.borrow().as_ref().and_then(|e| super::parse_date_flex(&e.text())));
+    let to = W_DATE_TO.with(|w| w.borrow().as_ref().and_then(|e| super::parse_date_flex(&e.text())));
     let (Some(from), Some(to)) = (from, to) else {
         return Vec::new();
     };
@@ -703,7 +696,7 @@ fn update_mode_hint() {
                     mdwf_core::PeriodKind::Month => {
                         let months = months_in_current_range();
                         match months.len() {
-                            0 => "📅 Задайте корректный диапазон дат (date_from ≤ date_to).".to_string(),
+                            0 => "📅 Задайте корректный диапазон дат (начало ≤ конец).".to_string(),
                             // Интервал ровно один месяц → обычная выгрузка за этот месяц.
                             1 => format!(
                                 "📅 Месячный отчёт за {} — обычная выгрузка за месяц (кнопка «Скачать по периоду»).",
@@ -770,10 +763,10 @@ fn build_filter(category: &ComboBoxText, date_from: &Entry, date_to: &Entry, lim
             f.category = resolved;
         }
     }
-    if let Ok(d) = NaiveDate::parse_from_str(&date_from.text(), "%Y-%m-%d") {
+    if let Some(d) = super::parse_date_flex(&date_from.text()) {
         f.date_from = Some(d);
     }
-    if let Ok(d) = NaiveDate::parse_from_str(&date_to.text(), "%Y-%m-%d") {
+    if let Some(d) = super::parse_date_flex(&date_to.text()) {
         f.date_to = Some(d);
     }
     if let Ok(n) = limit.text().parse::<u32>() {
@@ -847,10 +840,10 @@ pub fn on_download_state_loaded(state: Option<&DownloadState>) {
         });
     }
     if let Some(v) = &state.date_from {
-        W_DATE_FROM.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
+        W_DATE_FROM.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(&super::disp_date(v)); } });
     }
     if let Some(v) = &state.date_to {
-        W_DATE_TO.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(v); } });
+        W_DATE_TO.with(|w| { if let Some(e) = w.borrow().as_ref() { e.set_text(&super::disp_date(v)); } });
     }
     // Поле month НЕ восстанавливаем: combos месяца/года удалены, период теперь
     // выводится из date_from (восстановленного выше) — current_month_value().
@@ -1045,7 +1038,10 @@ fn render_list(docs: &[DocumentEntry]) {
                     .build(),
             );
             row.append(&name_box);
-            let date_str = doc.date.map(|d| d.to_string()).unwrap_or_default();
+            let date_str = doc
+                .date
+                .map(|d| super::disp_date(&d.to_string()))
+                .unwrap_or_default();
             row.append(&Label::builder().label(&date_str).width_chars(12).xalign(0.0).build());
             let exts = doc
                 .extensions

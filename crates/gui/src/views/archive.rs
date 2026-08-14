@@ -116,12 +116,12 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     // Совпадение: дата НАЧАЛА или КОНЦА отчёта внутри интервала
     // (см. Catalog::list_downloads_filtered).
     let date_from = gtk4::Entry::builder()
-        .placeholder_text("с YYYY-MM-DD")
+        .placeholder_text("с ДД.ММ.ГГГГ")
         .width_chars(11)
         .tooltip_text("Начало интервала отбора (дата начала/конца отчёта попадает сюда)")
         .build();
     let date_to = gtk4::Entry::builder()
-        .placeholder_text("по YYYY-MM-DD")
+        .placeholder_text("по ДД.ММ.ГГГГ")
         .width_chars(11)
         .tooltip_text("Конец интервала отбора")
         .build();
@@ -165,10 +165,10 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     filters.append(&interval_btn);
     filters.append(&Label::new(Some("С:")));
     filters.append(&date_from);
-    filters.append(&super::make_date_picker(&date_from, "%Y-%m-%d"));
+    filters.append(&super::make_date_picker(&date_from, "%d.%m.%Y"));
     filters.append(&Label::new(Some("—")));
     filters.append(&date_to);
-    filters.append(&super::make_date_picker(&date_to, "%Y-%m-%d"));
+    filters.append(&super::make_date_picker(&date_to, "%d.%m.%Y"));
     filters.append(&reset_btn);
 
     let apply_btn = Button::builder()
@@ -340,10 +340,10 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
             // их connect_changed пересоберёт DATE_RANGE (автосейв блокирован RESTORING).
             if let Some((f, t)) = &st.date_range {
                 if let Some(e) = W_DATE_FROM.with(|w| w.borrow().clone()) {
-                    e.set_text(f);
+                    e.set_text(&super::disp_date(f));
                 }
                 if let Some(e) = W_DATE_TO.with(|w| w.borrow().clone()) {
-                    e.set_text(t);
+                    e.set_text(&super::disp_date(t));
                 }
             }
             // Применяем восстановленный фильтр к списку.
@@ -426,7 +426,10 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
                     .build(),
             );
-            let period_str = e.period.clone().unwrap_or_else(|| "—".to_string());
+            let period_str = e
+                .period
+                .as_deref()
+                .map_or_else(|| "—".to_string(), super::disp_date);
             row.append(
                 &Label::builder()
                     .label(&period_str)
@@ -449,7 +452,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .xalign(0.0)
                     .build(),
             );
-            let dt_str = e.downloaded_at.format("%Y-%m-%d %H:%M").to_string();
+            let dt_str = e.downloaded_at.format("%d.%m.%Y %H:%M").to_string();
             row.append(
                 &Label::builder()
                     .label(&dt_str)
@@ -573,11 +576,11 @@ fn sync_date_range_from_entries() {
     let from = W_DATE_FROM.with(|w| w.borrow().as_ref().map(|e| e.text().to_string()));
     let to = W_DATE_TO.with(|w| w.borrow().as_ref().map(|e| e.text().to_string()));
     let range = match (from, to) {
-        (Some(f), Some(t)) => match (
-            chrono::NaiveDate::parse_from_str(&f, "%Y-%m-%d"),
-            chrono::NaiveDate::parse_from_str(&t, "%Y-%m-%d"),
-        ) {
-            (Ok(fd), Ok(td)) if fd <= td => Some((f, t)),
+        (Some(f), Some(t)) => match (super::parse_date_flex(&f), super::parse_date_flex(&t)) {
+            (Some(fd), Some(td)) if fd <= td => Some((
+                fd.format("%Y-%m-%d").to_string(),
+                td.format("%Y-%m-%d").to_string(),
+            )),
             _ => None,
         },
         _ => None,
