@@ -6,7 +6,9 @@
 
 ## 0. Снимок состояния (для быстрого старта)
 
-- **HEAD:** `2ab6af9` (master = origin/master, рабочее дерево чистое).
+- **HEAD:** последний коммит `master` = origin/master, рабочее дерево
+  чистое (кодовый HEAD `2ab6af9`; поверх — только docs-коммиты этого
+  файла). Неотслеживаемые `MDWF/downloads/**` — артефакты живых прогонов.
 - **Зелёное состояние:** `cargo test --workspace` exit=0 (23 сюита);
   clippy `-D warnings`=0 по всем крейтам.
 - **Инсталлер актуален:** `installer/Output/MDWFSetup-1.4.0.exe`
