@@ -83,7 +83,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&crate::widgets::tab_help::title_row_with_help(
         "Архив скачанных документов",
         "title-2",
-        &ARCHIVE_HELP,
+        ARCHIVE_HELP,
     ));
     root.append(
         &Label::builder()
@@ -436,7 +436,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
             );
             row.append(
                 &Label::builder()
-                    .label(&super::ext_label(&e.file_format))
+                    .label(super::ext_label(&e.file_format))
                     .width_chars(8)
                     .xalign(0.0)
                     .build(),
@@ -653,10 +653,9 @@ fn send_list_archive(profile: Option<String>, report: Option<String>) {
     });
 }
 
-/// Восстанавливать combo периода больше не нужно: month/year combos удалены,
-/// фильтр архива теперь — интервал дат (DATE_RANGE), восстанавливаемый в
-/// on_archive_state_loaded напрямую из st.date_range.
-
+// Восстанавливать combo периода больше не нужно: month/year combos удалены,
+// фильтр архива теперь — интервал дат (DATE_RANGE), восстанавливаемый в
+// on_archive_state_loaded напрямую из st.date_range.
 
 /// Ищет текст в combo и делает его активным. Возвращает true если найден.
 fn set_combo_active_by_text(combo: &ComboBoxText, text: &str) -> bool {

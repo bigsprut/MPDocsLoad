@@ -177,7 +177,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&crate::widgets::tab_help::title_row_with_help(
         "Магазин",
         "title-2",
-        &SHOP_HELP,
+        SHOP_HELP,
     ));
 
     root.append(&Label::builder()
@@ -609,9 +609,7 @@ fn save_profile_from_dialog(state: &Rc<AddDialogState>) {
     let name = state.name_entry.text().to_string();
     let provider_id = state
         .provider_combo
-        .active_id()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "test".into());
+        .active_id().map_or_else(|| "test".into(), |s| s.to_string());
 
     if name.is_empty() {
         return;

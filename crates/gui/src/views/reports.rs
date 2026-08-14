@@ -31,7 +31,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&crate::widgets::tab_help::title_row_with_help(
         "Доступные отчёты",
         "title-2",
-        &REPORTS_HELP,
+        REPORTS_HELP,
     ));
 
     root.append(&Label::builder()

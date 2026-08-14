@@ -47,7 +47,7 @@ pub fn build(cs: &CommandSender) -> gtk4::Box {
     root.append(&crate::widgets::tab_help::title_row_with_help(
         "Расписания",
         "title-2",
-        &SCHEDULER_HELP,
+        SCHEDULER_HELP,
     ));
     root.append(
         &Label::builder()

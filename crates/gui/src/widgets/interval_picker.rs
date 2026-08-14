@@ -35,12 +35,15 @@ const MONTH_NAMES: [&str; 12] = [
     "Декабрь",
 ];
 
+/// Колбэк выбора интервала: (from, to) строками `"YYYY-MM-DD"`.
+type SelectFn = Rc<dyn Fn(&str, &str)>;
+
 /// Строит виджет выбора стандартного интервала.
 /// `on_select(from, to)` вызывается со строками `"YYYY-MM-DD"` при клике на конкретный
 /// интервал (неделя/месяц/квартал/год) в активной вкладке.
 #[must_use]
 pub fn make_interval_picker<F: Fn(&str, &str) + 'static>(on_select: F) -> gtk4::Widget {
-    let on_select: Rc<dyn Fn(&str, &str)> = Rc::new(on_select);
+    let on_select: SelectFn = Rc::new(on_select);
     let cur_year = chrono::Local::now().date_naive().year();
 
     let root = gtk4::Box::builder()
@@ -124,7 +127,7 @@ fn grid_of(items: &[(String, u32)], on_idx: Rc<dyn Fn(u32)>, max_per_line: u32) 
     fb
 }
 
-fn grid_of_months(on_select: &Rc<dyn Fn(&str, &str)>, spin: &SpinButton) -> FlowBox {
+fn grid_of_months(on_select: &SelectFn, spin: &SpinButton) -> FlowBox {
     let items: Vec<(String, u32)> = MONTH_NAMES
         .iter()
         .enumerate()
@@ -143,7 +146,7 @@ fn grid_of_months(on_select: &Rc<dyn Fn(&str, &str)>, spin: &SpinButton) -> Flow
     )
 }
 
-fn grid_of_quarters(on_select: &Rc<dyn Fn(&str, &str)>, spin: &SpinButton) -> FlowBox {
+fn grid_of_quarters(on_select: &SelectFn, spin: &SpinButton) -> FlowBox {
     let items: Vec<(String, u32)> = (1..=4).map(|q| (format!("{q} кв."), q)).collect();
     let spin = spin.clone();
     let on_select = Rc::clone(on_select);
@@ -158,7 +161,7 @@ fn grid_of_quarters(on_select: &Rc<dyn Fn(&str, &str)>, spin: &SpinButton) -> Fl
     )
 }
 
-fn grid_of_years(on_select: &Rc<dyn Fn(&str, &str)>, spin: &SpinButton, cur_year: i32) -> FlowBox {
+fn grid_of_years(on_select: &SelectFn, spin: &SpinButton, cur_year: i32) -> FlowBox {
     let items: Vec<(String, u32)> = ((cur_year - YEAR_RANGE)..=(cur_year + YEAR_RANGE))
         .map(|y| (y.to_string(), y as u32))
         .collect();
@@ -181,7 +184,7 @@ fn grid_of_years(on_select: &Rc<dyn Fn(&str, &str)>, spin: &SpinButton, cur_year
 fn rebuild_weeks(
     fb: &FlowBox,
     year: i32,
-    on_select: &Rc<dyn Fn(&str, &str)>,
+    on_select: &SelectFn,
     _spin: &SpinButton,
 ) {
     // FlowBox не имеет remove_all — чистим итеративно через first_child()/remove().
@@ -221,8 +224,7 @@ fn month_range(year: i32, month: u32) -> (NaiveDate, NaiveDate) {
     });
     let last = first
         .checked_add_months(chrono::Months::new(1))
-        .map(|d| d.pred_opt().unwrap_or(d))
-        .unwrap_or(first);
+        .map_or(first, |d| d.pred_opt().unwrap_or(d));
     (first, last)
 }
 
@@ -255,8 +257,7 @@ fn week_range(year: i32, week: u32) -> (NaiveDate, NaiveDate) {
 /// Число ISO-недель в году (52 или 53). 28 декабря всегда в последней ISO-недели.
 fn iso_weeks_in_year(year: i32) -> u32 {
     NaiveDate::from_ymd_opt(year, 12, 28)
-        .map(|d| d.iso_week().week())
-        .unwrap_or(52)
+        .map_or(52, |d| d.iso_week().week())
 }
 
 // Подавление неиспользуемого импорта glib (нужен для trait-ов виджетов косвенно).

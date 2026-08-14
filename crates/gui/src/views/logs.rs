@@ -35,7 +35,7 @@ pub fn build(_cs: &crate::channels::CommandSender) -> GtkBox {
     // Заголовок + кнопка «Очистить».
     let header = GtkBox::new(Orientation::Horizontal, 12);
     header.append(
-        &crate::widgets::tab_help::title_row_with_help("Журнал", "title-2", &LOGS_HELP),
+        &crate::widgets::tab_help::title_row_with_help("Журнал", "title-2", LOGS_HELP),
     );
     let clear_btn = Button::with_label("Очистить");
     clear_btn.add_css_class("destructive-action");

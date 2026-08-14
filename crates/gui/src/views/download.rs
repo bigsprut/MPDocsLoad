@@ -249,7 +249,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&crate::widgets::tab_help::title_row_with_help(
         "Загрузка документов",
         "title-2",
-        &DOWNLOAD_HELP,
+        DOWNLOAD_HELP,
     ));
 
     root.append(&Label::builder()
@@ -546,8 +546,8 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             } else {
                 format!(
                     "Генерация за {n} мес. ({}…{})…",
-                    months.first().map(String::as_str).unwrap_or("?"),
-                    months.last().map(String::as_str).unwrap_or("?")
+                    months.first().map_or("?", String::as_str),
+                    months.last().map_or("?", String::as_str)
                 )
             };
             notify(&msg);
@@ -601,8 +601,7 @@ fn current_period_kind() -> mdwf_core::PeriodKind {
     let rtype = current_report_type();
     rtype
         .and_then(|t| REPORTS.with(|r| r.borrow().iter().find(|x| x.type_id == t).cloned()))
-        .map(|ri| ri.period_kind)
-        .unwrap_or(mdwf_core::PeriodKind::Range)
+        .map_or(mdwf_core::PeriodKind::Range, |ri| ri.period_kind)
 }
 
 /// Период `YYYY-MM` из текущего `date_from` (месяц начала диапазона). Источник
@@ -699,8 +698,7 @@ fn update_mode_hint() {
                 // Период-нота: как «Скачать по периоду» трактовать интервал.
                 let kind = info
                     .as_ref()
-                    .map(|r| r.period_kind)
-                    .unwrap_or(mdwf_core::PeriodKind::Range);
+                    .map_or(mdwf_core::PeriodKind::Range, |r| r.period_kind);
                 let note = match kind {
                     mdwf_core::PeriodKind::Month => {
                         let months = months_in_current_range();

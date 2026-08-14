@@ -112,9 +112,9 @@ fn main() -> Result<ExitCode> {
     // на «primary» и сразу выходит — при битом single-instance выглядело мёртвым
     // окном; см. урок #37). Имя mutex = SINGLE_INSTANCE_NAME = AppMutex в .iss →
     // Inno не даст поставить инсталлер поверх запущенного MDWF.
-    // `_instance` держит mutex до конца main (дропнуть раньше нельзя — отпустит).
-    let _instance = single_instance::SingleInstance::new(SINGLE_INSTANCE_NAME)?;
-    if !_instance.is_single() {
+    // `instance` держит mutex до конца main (дропнуть раньше нельзя — отпустит).
+    let instance = single_instance::SingleInstance::new(SINGLE_INSTANCE_NAME)?;
+    if !instance.is_single() {
         // Второй экземпляр: осмысленное сообщение + чистый выход (без форвардинга).
         show_already_running_dialog();
         return Ok(ExitCode::SUCCESS);

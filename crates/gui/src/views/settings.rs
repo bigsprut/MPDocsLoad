@@ -26,7 +26,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&crate::widgets::tab_help::title_row_with_help(
         "Настройки",
         "title-2",
-        &SETTINGS_HELP,
+        SETTINGS_HELP,
     ));
 
     // Загружаем текущий конфиг (по стандартному пути).
