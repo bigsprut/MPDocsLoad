@@ -287,5 +287,6 @@ const SETTINGS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
         "Структура папок — например, по маркетплейсу и году.",
         "SHA-256 — дедупликация повторных выгрузок.",
     ]),
-    crate::widgets::tab_help::HelpBlock::T("Файлы складываются в <папку>\\{маркетплейс}\\{год}\\. Полный конфиг: %APPDATA%\\mdwf\\config.toml."),
+    // &lt;/&gt; — экранированные скобки: HelpBlock::T рендерится через set_markup.
+    crate::widgets::tab_help::HelpBlock::T("Файлы складываются в &lt;папку&gt;\\{маркетплейс}\\{год}\\. Полный конфиг: %APPDATA%\\mdwf\\config.toml."),
 ];

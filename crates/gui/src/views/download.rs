@@ -190,9 +190,22 @@ pub fn on_reports_loaded(reports: &[ReportInfo]) {
         }
     }
 
-    // Восстанавливаем выбранный отчёт из сохранённого состояния (если есть).
+    // Восстанавливаем выбранный отчёт из сохранённого состояния/предвыбора.
+    // Провайдер-guard: pending от ДРУГОГО провайдера (напр., состояние было
+    // сохранено за test/ozon, а загружаются отчёты WB) не восстанавливаем —
+    // иначе выберется несуществующий индекс (stale state, §11-5).
+    let pending_provider = PENDING_PROVIDER.with(|p| p.borrow_mut().take());
+    let stale = pending_provider.is_some_and(|pv| {
+        reports.first().is_some_and(|r| r.provider_id != pv)
+    });
     let pending = PENDING_REPORT.with(|p| p.borrow_mut().take());
-    if let Some(rtype) = pending {
+    if stale {
+        tracing::debug!(
+            "on_reports_loaded: pending отчёта другого провайдера — отброшен ({:?})",
+            pending
+        );
+        combo.set_active(Some(0));
+    } else if let Some(rtype) = pending {
         // Combo хранит только display_name — по тексту type_id не найти. Индексы
         // combo и REPORTS совпадают (заполняются одним циклом), ищем по REPORTS.
         let idx = REPORTS.with(|r| r.borrow().iter().position(|rep| rep.type_id == rtype));
@@ -218,6 +231,8 @@ pub fn on_reports_loaded(reports: &[ReportInfo]) {
 /// при клике по отчёту (предвыбор + переход на «Загрузка»).
 pub fn set_pending_report(type_id: &str) {
     PENDING_REPORT.with(|p| *p.borrow_mut() = Some(type_id.to_string()));
+    // Предвыбор всегда для текущего активного магазина.
+    PENDING_PROVIDER.with(|p| *p.borrow_mut() = active_provider_id());
     // Если combo уже заполнен — выберем немедленно; иначе выберется при
     // следующей загрузке списка отчётов (on_reports_loaded возьмёт PENDING_REPORT).
     select_report_by_type(type_id);
@@ -951,12 +966,25 @@ pub fn on_download_state_loaded(state: Option<&DownloadState>) {
         // Отложим восстановление: combo отчётов заполнится после LoadReports.
         // Запоминаем желаемый report_type для on_reports_loaded.
         PENDING_REPORT.with(|p| *p.borrow_mut() = Some(rtype.clone()));
+        // Guard: состояние могло быть сохранено за другим провайдером.
+        if let Some(pid) = &state.provider_id {
+            PENDING_PROVIDER.with(|p| *p.borrow_mut() = Some(pid.clone()));
+        }
+        // Гонка порядка событий: список отчётов мог уже прийти (LoadReports
+        // быстрее LoadDownloadState) — тогда PENDING_REPORT никто не consum-нет.
+        // Выбираем сразу; если список ещё пуст, select_report_by_type — no-op,
+        // выбор сделает on_reports_loaded по pending.
+        select_report_by_type(rtype);
     }
 }
 
 thread_local! {
     /// Желаемый report_type, который нужно выбрать после загрузки списка отчётов.
     static PENDING_REPORT: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    /// Провайдер, для которого установлен PENDING_REPORT (guard от stale state:
+    /// не восстанавливать отчёт другого провайдера — напр., сохранённое
+    /// состояние за test/ozon при загрузке отчётов WB).
+    static PENDING_PROVIDER: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     /// Handler id сигнала connect_changed у report_combo — чтобы блокировать
     /// его на время программной перестройки combo.
     static REPORT_CHANGED_HANDLER: Rc<RefCell<Option<glib::SignalHandlerId>>> =
