@@ -65,22 +65,6 @@ pub fn build_and_present(
         .build();
     sidebar.set_selection_mode(SelectionMode::Single);
 
-    // Явное выделение активного пункта: жирный текст + акцентная подложка.
-    // (Штатная selection-подложка navigation-sidebar едва заметна.)
-    {
-        let css = gtk4::CssProvider::new();
-        css.load_from_data(
-            "navigation-sidebar row { border-radius: 6px; }              navigation-sidebar row:selected { background-color: alpha(@accent_color, 0.25); }              navigation-sidebar row:selected:hover { background-color: alpha(@accent_color, 0.32); }              navigation-sidebar row:selected label { font-weight: 700; }              navigation-sidebar row:hover { background-color: alpha(currentColor, 0.06); }",
-        );
-        if let Some(disp) = gtk4::gdk::Display::default() {
-            gtk4::style_context_add_provider_for_display(
-                &disp,
-                &css,
-                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-        }
-    }
-
     let rows_by_name: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<String, ListBoxRow>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
@@ -146,6 +130,26 @@ pub fn build_and_present(
         ],
     );
 
+    // Явное выделение активного пункта: БЕЗ CssProvider (в GTK 4.20 deprecated
+    // style_context-провайдеры не применяются — проверено пиксель-тестами),
+    // напрямую css-классами лейбла: активный → heading (жирный) + accent
+    // (фирменный цвет), остальные — обычные. Заголовки секций — dim-label,
+    // иерархия «секция тише пункта».
+    let mark_active: std::rc::Rc<dyn Fn(&str)> = {
+        let rows = std::rc::Rc::clone(&rows_by_name);
+        std::rc::Rc::new(move |active: &str| {
+            for (id, row) in rows.borrow().iter() {
+                if let Some(label) = row.child().and_downcast_ref::<Label>() {
+                    if id == active {
+                        label.set_css_classes(&["heading", "accent"]);
+                    } else {
+                        label.set_css_classes(&[]);
+                    }
+                }
+            }
+        })
+    };
+
     // Клик по вкладке → показываем её в стеке (если ещё не активна — без циклов).
     let stack_for_sel = stack.clone();
     sidebar.connect_selected_rows_changed(move |lb| {
@@ -162,24 +166,28 @@ pub fn build_and_present(
     });
 
     // Программное переключение (напр. клик по отчёту → «Загрузка») → подсветить
-    // нужную строку (если ещё не выделена — selection-обработчик увидит совпадение).
+    // нужную строку (selection + жирный/accent лейбл).
     let sidebar_for_sync = sidebar.clone();
     let rows_for_sync = std::rc::Rc::clone(&rows_by_name);
+    let mark_for_sync = std::rc::Rc::clone(&mark_active);
     stack.connect_notify_local(Some("visible-child"), move |stk: &gtk4::Stack, _| {
         let Some(name) = stk.visible_child_name() else {
             return;
         };
+        let name = name.to_string();
         if let Some(row) = rows_for_sync.borrow().get(name.as_str()) {
             if sidebar_for_sync.selected_row().as_ref() != Some(row) {
                 sidebar_for_sync.select_row(Some(row));
             }
         }
+        mark_for_sync(&name);
     });
 
     // Начальная подсветка — «Магазин» (стек стартует на первой добавленной вкладке).
     if let Some(row) = rows_by_name.borrow().get("shop") {
         sidebar.select_row(Some(row));
     }
+    mark_active("shop");
 
     root.append(&sidebar);
     root.append(&Separator::new(Orientation::Vertical));
