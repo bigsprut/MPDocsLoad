@@ -65,6 +65,22 @@ pub fn build_and_present(
         .build();
     sidebar.set_selection_mode(SelectionMode::Single);
 
+    // Явное выделение активного пункта: жирный текст + акцентная подложка.
+    // (Штатная selection-подложка navigation-sidebar едва заметна.)
+    {
+        let css = gtk4::CssProvider::new();
+        css.load_from_data(
+            "navigation-sidebar row { border-radius: 6px; }              navigation-sidebar row:selected { background-color: alpha(@accent_color, 0.25); }              navigation-sidebar row:selected:hover { background-color: alpha(@accent_color, 0.32); }              navigation-sidebar row:selected label { font-weight: 700; }              navigation-sidebar row:hover { background-color: alpha(currentColor, 0.06); }",
+        );
+        if let Some(disp) = gtk4::gdk::Display::default() {
+            gtk4::style_context_add_provider_for_display(
+                &disp,
+                &css,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    }
+
     let rows_by_name: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<String, ListBoxRow>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
@@ -78,10 +94,11 @@ pub fn build_and_present(
             hdr.set_child(Some(
                 &Label::builder()
                     .label(title)
-                    .css_classes(["heading"])
+                    .css_classes(["dim-label"])
                     .halign(gtk4::Align::Start)
                     .margin_start(10)
                     .margin_top(10)
+                    .margin_bottom(2)
                     .build(),
             ));
             sidebar.append(&hdr);

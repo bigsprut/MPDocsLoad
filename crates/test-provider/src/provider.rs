@@ -77,7 +77,7 @@ impl Report for TestReport {
         &self.display_name
     }
     fn category(&self) -> ReportCategory {
-        self.category.clone()
+        self.category
     }
     fn acquisition_mode(&self) -> AcquisitionMode {
         self.mode
@@ -185,7 +185,7 @@ impl TestProvider {
             .map(|r| ReportDescriptor {
                 type_id: r.type_id.clone(),
                 display_name: r.display_name.clone(),
-                category: r.category.clone(),
+                category: r.category,
                 acquisition_mode: r.mode,
                 downloader_kind: DownloaderKind::Api,
                 parameters: Vec::new(),
