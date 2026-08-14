@@ -325,6 +325,19 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         STATE.with(|s| s.borrow_mut().selected = idx as usize);
     }));
 
+    // Двойной клик по строке профиля → диалог редактирования (то же, что
+    // «✎ Изменить»). single_click_activate не включаем: одиночный клик лишь
+    // выделяет строку (выбор для «Удалить»/«Проверить»), activate в ListView
+    // по умолчанию срабатывает по двойному клику.
+    let cs_row = cs.clone();
+    list.connect_activate(move |_, position| {
+        let idx = position as usize;
+        let profile = PROFILES.with(|p| p.borrow().get(idx).cloned());
+        if let Some(profile) = profile {
+            show_edit_dialog(&cs_row, &profile);
+        }
+    });
+
     // Кнопка «Добавить».
     let cs_add = cs.clone();
     add_btn.connect_clicked(move |_| {
