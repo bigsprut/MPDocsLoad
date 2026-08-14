@@ -1,16 +1,17 @@
-//! Виджет выбора стандартного интервала: неделя / месяц / квартал / год.
+//! Виджет выбора стандартного интервала: месяц / квартал / полугодие / год.
 //!
 //! Layout: сверху выбор года (SpinButton — текст + стрелки ±1), ниже StackSwitcher
-//! с ярлычками «Неделя / Месяц / Квартал / Год» и Stack; каждая вкладка — сетка
+//! с ярлычками «Месяц / Квартал / Полугодие / Год» и Stack; каждая вкладка — сетка
 //! (FlowBox) кнопок выбираемых значений. Один клик по значению → расчёт диапазона
 //! `[date_from, date_to]` и вызов `on_select`.
 //!
 //! Кнопка «📅 Интервал» в download.rs открывает этот виджет в popover; on_select
-//! проставляет date_from/date_to.
+//! проставляет date_from/date_to. («Неделя» убрана: недельные интервалы не
+//! соответствуют отчётным периодам маркетплейсов.)
 
 use std::rc::Rc;
 
-use chrono::{Datelike, NaiveDate, Weekday};
+use chrono::{Datelike, NaiveDate};
 
 use gtk4::glib;
 use gtk4::prelude::*;
@@ -79,26 +80,12 @@ pub fn make_interval_picker<F: Fn(&str, &str) + 'static>(on_select: F) -> gtk4::
     let stack = Stack::builder().build();
     let month_grid = grid_of_months(&on_select, &spin);
     let quarter_grid = grid_of_quarters(&on_select, &spin);
+    let half_grid = grid_of_halves(&on_select, &spin);
     let year_grid = grid_of_years(&on_select, &spin, cur_year);
-    // Неделя — пересобирается при смене года (число недель 52 или 53).
-    let week_grid = FlowBox::builder()
-        .selection_mode(SelectionMode::None)
-        .max_children_per_line(7)
-        .build();
-    rebuild_weeks(&week_grid, cur_year, &on_select, &spin);
-    {
-        let week_grid_w = week_grid.clone();
-        let spin_w = spin.clone();
-        let on_select_w = Rc::clone(&on_select);
-        spin.connect_value_changed(move |_| {
-            let y = spin_w.value() as i32;
-            rebuild_weeks(&week_grid_w, y, &on_select_w, &spin_w);
-        });
-    }
 
-    stack.add_titled(&week_grid, Some("week"), "Неделя");
     stack.add_titled(&month_grid, Some("month"), "Месяц");
     stack.add_titled(&quarter_grid, Some("quarter"), "Квартал");
+    stack.add_titled(&half_grid, Some("half"), "Полугодие");
     stack.add_titled(&year_grid, Some("year"), "Год");
 
     let switcher = StackSwitcher::builder().stack(&stack).build();
@@ -180,35 +167,22 @@ fn grid_of_years(on_select: &SelectFn, spin: &SpinButton, cur_year: i32) -> Flow
     )
 }
 
-/// Пересобирает сетку недель для указанного года (52 или 53 ISO-недели).
-fn rebuild_weeks(
-    fb: &FlowBox,
-    year: i32,
-    on_select: &SelectFn,
-    _spin: &SpinButton,
-) {
-    // FlowBox не имеет remove_all — чистим итеративно через first_child()/remove().
-    while let Some(child) = fb.first_child() {
-        fb.remove(&child);
-    }
-    let n = iso_weeks_in_year(year);
-    for w in 1..=n {
-        // Диапазон дат недели — в tooltip, чтобы «Н37» было понятно без гадания.
-        let (wf, wt) = week_range(year, w);
-        let btn = Button::builder()
-            .label(format!("Н{w}"))
-            .tooltip_text(format!(
-                "Неделя {w} ({}–{})",
-                wf.format("%d.%m"),
-                wt.format("%d.%m")
-            ))
-            .build();
-        let on_select = Rc::clone(on_select);
-        btn.connect_clicked(move |_| {
-            on_select(&fmt(wf), &fmt(wt));
-        });
-        fb.insert(&btn, -1);
-    }
+fn grid_of_halves(on_select: &SelectFn, spin: &SpinButton) -> FlowBox {
+    let items: Vec<(String, u32)> = vec![
+        ("1-е полугодие".to_string(), 1),
+        ("2-е полугодие".to_string(), 2),
+    ];
+    let spin = spin.clone();
+    let on_select = Rc::clone(on_select);
+    grid_of(
+        &items,
+        Rc::new(move |h| {
+            let y = spin.value() as i32;
+            let (f, t) = half_range(y, h);
+            on_select(&fmt(f), &fmt(t));
+        }),
+        2,
+    )
 }
 
 // ============ Математика дат (chrono) ============
@@ -238,27 +212,19 @@ fn quarter_range(year: i32, q: u32) -> (NaiveDate, NaiveDate) {
     (f, t)
 }
 
+/// Диапазон полугодия `h` (1|2) в году `year`: янв–июнь / июл–дек.
+fn half_range(year: i32, h: u32) -> (NaiveDate, NaiveDate) {
+    let (start_m, end_m) = if h == 1 { (1, 6) } else { (7, 12) };
+    let (f, _) = month_range(year, start_m);
+    let (_, t) = month_range(year, end_m);
+    (f, t)
+}
+
 /// Весь год: 1 января .. 31 декабря.
 fn year_range(year: i32) -> (NaiveDate, NaiveDate) {
     let f = NaiveDate::from_ymd_opt(year, 1, 1).expect("valid year");
     let t = NaiveDate::from_ymd_opt(year, 12, 31).expect("valid year");
     (f, t)
-}
-
-/// Понедельник .. воскресенье ISO-недели `week` в году `year`.
-fn week_range(year: i32, week: u32) -> (NaiveDate, NaiveDate) {
-    // from_isoywd_opt требует i32-неделю; недействительную неделю «прижимаем» к 1.
-    let mon = NaiveDate::from_isoywd_opt(year, week, Weekday::Mon)
-        .or_else(|| NaiveDate::from_isoywd_opt(year, 1, Weekday::Mon))
-        .expect("valid ISO week");
-    let sun = mon + chrono::Duration::days(6);
-    (mon, sun)
-}
-
-/// Число ISO-недель в году (52 или 53). 28 декабря всегда в последней ISO-недели.
-fn iso_weeks_in_year(year: i32) -> u32 {
-    NaiveDate::from_ymd_opt(year, 12, 28)
-        .map_or(52, |d| d.iso_week().week())
 }
 
 // Подавление неиспользуемого импорта glib (нужен для trait-ов виджетов косвенно).

@@ -130,6 +130,86 @@ pub(crate) fn to_iso(s: &str) -> String {
     }
 }
 
+/// Месяцы, именительный падеж (полный месяц: «январь 2025»).
+const MONTHS_NOM: [&str; 12] = [
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+];
+
+/// Месяцы, родительный падеж (один день: «23 января 2026»).
+const MONTHS_GEN: [&str; 12] = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+];
+
+/// Человекочитаемое описание диапазона дат — ЧИСТАЯ функция от [from, to],
+/// независимо от того, как даты заданы (виджет интервала, ручной ввод, restore):
+/// ровно год → «2024 год»; ровно полугодие → «первое/второе полугодие 2024»;
+/// ровно квартал → «3 квартал 2025»; ровно месяц → «январь 2025»;
+/// один день (from == to) → «23 января 2026»; прочее → «с 04.03.2025 по 06.03.2025».
+/// None — одна из дат не задана/не парсится.
+pub(crate) fn describe_range(
+    from: Option<chrono::NaiveDate>,
+    to: Option<chrono::NaiveDate>,
+) -> Option<String> {
+    use chrono::Datelike;
+    let f = from?;
+    let t = to?;
+
+    // Один день.
+    if f == t {
+        return Some(format!(
+            "{} {} {}",
+            f.day(),
+            MONTHS_GEN[f.month0() as usize],
+            f.year()
+        ));
+    }
+    // Стандартные интервалы проверяем только внутри одного года (границы
+    // календарных периодов не пересекают годы).
+    if f.year() == t.year() {
+        let y = f.year();
+        // Последний день месяца t (для проверок «ровно …»).
+        let last_of = |m: u32| {
+            chrono::NaiveDate::from_ymd_opt(y, m + 1, 1)
+                .and_then(|d| d.pred_opt())
+                .or_else(|| chrono::NaiveDate::from_ymd_opt(y, 12, 31))
+        };
+        // Ровно год: 1 января .. 31 декабря.
+        if (f.month(), f.day()) == (1, 1) && (t.month(), t.day()) == (12, 31) {
+            return Some(format!("{y} год"));
+        }
+        // Ровно полугодие: 01.01–30.06 или 01.07–31.12.
+        if (f.month(), f.day()) == (1, 1) && (t.month(), t.day()) == (6, 30) {
+            return Some(format!("первое полугодие {y}"));
+        }
+        if (f.month(), f.day()) == (7, 1) && (t.month(), t.day()) == (12, 31) {
+            return Some(format!("второе полугодие {y}"));
+        }
+        // Ровно месяц: первое число .. последнее число того же месяца.
+        if f.day() == 1 && t.month() == f.month() && last_of(f.month()) == Some(t) {
+            return Some(format!("{} {}", MONTHS_NOM[f.month0() as usize], y));
+        }
+        // Ровно квартал: первый месяц квартала (1/4/7/10), день 1, до конца
+        // третьего месяца. (Проверка после месяца — диапазоны не пересекаются.)
+        if f.day() == 1 && matches!(f.month(), 1 | 4 | 7 | 10) && t.month() == f.month() + 2 {
+            if let Some(last) = last_of(t.month()) {
+                if last == t {
+                    let q = (f.month() - 1) / 3 + 1;
+                    return Some(format!("{q} квартал {y}"));
+                }
+            }
+        }
+    }
+    // Произвольный диапазон.
+    Some(format!(
+        "с {} по {}",
+        f.format("%d.%m.%Y"),
+        t.format("%d.%m.%Y")
+    ))
+}
+
+
 // ===== Кнопка-календарь для выбора дат (общая для «Загрузка» и «Архив») =====
 
 /// Создаёт кнопку с иконкой календаря (MenuButton + Calendar в Popover).
@@ -224,4 +304,92 @@ fn parse_date_for_calendar(s: &str) -> Option<glib::DateTime> {
         chrono::Utc,
     );
     glib::DateTime::from_iso8601(&dt.format("%+").to_string(), None).ok()
+}
+
+#[cfg(test)]
+mod describe_range_tests {
+    use super::describe_range;
+    use chrono::NaiveDate;
+
+    fn d(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn full_year() {
+        assert_eq!(
+            describe_range(Some(d("2024-01-01")), Some(d("2024-12-31"))),
+            Some("2024 год".into())
+        );
+    }
+
+    #[test]
+    fn halves() {
+        assert_eq!(
+            describe_range(Some(d("2024-01-01")), Some(d("2024-06-30"))),
+            Some("первое полугодие 2024".into())
+        );
+        assert_eq!(
+            describe_range(Some(d("2024-07-01")), Some(d("2024-12-31"))),
+            Some("второе полугодие 2024".into())
+        );
+    }
+
+    #[test]
+    fn quarters() {
+        assert_eq!(
+            describe_range(Some(d("2025-07-01")), Some(d("2025-09-30"))),
+            Some("3 квартал 2025".into())
+        );
+        assert_eq!(
+            describe_range(Some(d("2025-01-01")), Some(d("2025-03-31"))),
+            Some("1 квартал 2025".into())
+        );
+    }
+
+    #[test]
+    fn months() {
+        // Через границы месяцев (то же, что выбор «Месяц» в виджете).
+        assert_eq!(
+            describe_range(Some(d("2025-01-01")), Some(d("2025-01-31"))),
+            Some("январь 2025".into())
+        );
+        // Февраль невисокосного года.
+        assert_eq!(
+            describe_range(Some(d("2025-02-01")), Some(d("2025-02-28"))),
+            Some("февраль 2025".into())
+        );
+    }
+
+    #[test]
+    fn single_day() {
+        assert_eq!(
+            describe_range(Some(d("2026-01-23")), Some(d("2026-01-23"))),
+            Some("23 января 2026".into())
+        );
+    }
+
+    #[test]
+    fn arbitrary_range() {
+        assert_eq!(
+            describe_range(Some(d("2025-03-04")), Some(d("2025-03-06"))),
+            Some("с 04.03.2025 по 06.03.2025".into())
+        );
+        // Почти месяц (не до конца) — произвольный диапазон.
+        assert_eq!(
+            describe_range(Some(d("2025-01-01")), Some(d("2025-01-30"))),
+            Some("с 01.01.2025 по 30.01.2025".into())
+        );
+        // Межгодовой диапазон.
+        assert_eq!(
+            describe_range(Some(d("2024-11-01")), Some(d("2025-02-28"))),
+            Some("с 01.11.2024 по 28.02.2025".into())
+        );
+    }
+
+    #[test]
+    fn missing_dates() {
+        assert_eq!(describe_range(None, Some(d("2025-01-01"))), None);
+        assert_eq!(describe_range(Some(d("2025-01-01")), None), None);
+    }
 }

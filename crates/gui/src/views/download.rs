@@ -51,6 +51,8 @@ thread_local! {
     static W_DATE_FROM: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_DATE_TO: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
     static W_LIMIT: Rc<RefCell<Option<Entry>>> = Rc::new(RefCell::new(None));
+    /// Описание выбранного периода («январь 2025», «3 квартал 2025», «с … по …»).
+    static W_RANGE_DESC: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     /// Карта: отображаемое имя категории → технический идентификатор (для WB API).
     /// Заполняется при загрузке категорий, используется в build_filter.
     static CATEGORIES: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
@@ -324,7 +326,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     // через виджет widgets::interval_picker. Проставляет date_from/date_to.
     let interval_btn = gtk4::MenuButton::new();
     interval_btn.set_child(Some(&super::icon_label_child("Интервал", "x-office-calendar-symbolic")));
-    interval_btn.set_tooltip_text(Some("Выбрать стандартный интервал: неделя / месяц / квартал / год"));
+    interval_btn.set_tooltip_text(Some("Выбрать стандартный интервал: месяц / квартал / полугодие / год"));
     let interval_popover = gtk4::Popover::new();
     {
         let df = date_from.clone();
@@ -357,6 +359,22 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     row2.append(&Label::new(Some("Лимит:")));
     row2.append(&limit_entry);
     root.append(&row2);
+
+    // Описание выбранного периода («январь 2025» / «3 квартал 2025» /
+    // «второе полугодие 2024» / «23 января 2026» / «с 04.03.2025 по…») —
+    // вычисляется ИЗ ПОЛЕЙ ДАТ, как бы они ни были заданы: виджет интервала,
+    // ручной ввод, календарь, восстановление состояния.
+    let range_desc = Label::builder()
+        .label("")
+        .halign(gtk4::Align::Start)
+        .wrap(true)
+        .css_classes(["dim-label"])
+        .build();
+    root.append(&range_desc);
+    W_RANGE_DESC.with(|w| *w.borrow_mut() = Some(range_desc.clone()));
+    date_from.connect_changed(|_| refresh_range_desc());
+    date_to.connect_changed(|_| refresh_range_desc());
+    refresh_range_desc();
 
     // --- Кнопки действий ---
     let row3 = GtkBox::new(Orientation::Horizontal, 8);
@@ -774,6 +792,28 @@ fn maybe_request_categories() {
 }
 
 /// Обновить подсказку режима и доступность кнопок для выбранного отчёта.
+/// Обновляет метку описания периода по текущим значениям полей дат.
+/// Вызывается при любом изменении date_from/date_to (ввод, виджет интервала,
+/// календарь, restore — все они меняют текст полей).
+fn refresh_range_desc() {
+    let from = W_DATE_FROM.with(|w| {
+        w.borrow()
+            .as_ref()
+            .and_then(|e| super::parse_date_flex(&e.text()))
+    });
+    let to = W_DATE_TO.with(|w| {
+        w.borrow()
+            .as_ref()
+            .and_then(|e| super::parse_date_flex(&e.text()))
+    });
+    let text = super::describe_range(from, to).unwrap_or_default();
+    W_RANGE_DESC.with(|w| {
+        if let Some(l) = w.borrow().as_ref() {
+            l.set_text(&text);
+        }
+    });
+}
+
 fn update_mode_hint() {
     let rtype = current_report_type();
     let info = rtype
