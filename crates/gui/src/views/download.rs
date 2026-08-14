@@ -949,6 +949,32 @@ fn render_list(docs: &[DocumentEntry]) {
         header.append(&Label::builder().label("Действия").width_chars(16).xalign(0.0).build());
         list_box.append(&header);
 
+        // Тулбар массового выделения (удобно для пакетной выгрузки многих документов).
+        let toolbar = GtkBox::new(Orientation::Horizontal, 8);
+        toolbar.set_margin_start(8);
+        toolbar.set_margin_end(8);
+        toolbar.set_margin_top(2);
+        toolbar.set_margin_bottom(4);
+        let all_btn = Button::builder().label("☑ Выбрать всё").build();
+        all_btn.connect_clicked(|_| {
+            CHECKS.with(|c| {
+                for (_, cb) in c.borrow().iter() {
+                    cb.set_active(true);
+                }
+            });
+        });
+        let none_btn = Button::builder().label("☐ Снять выделение").build();
+        none_btn.connect_clicked(|_| {
+            CHECKS.with(|c| {
+                for (_, cb) in c.borrow().iter() {
+                    cb.set_active(false);
+                }
+            });
+        });
+        toolbar.append(&all_btn);
+        toolbar.append(&none_btn);
+        list_box.append(&toolbar);
+
         for doc in docs {
             let row = GtkBox::new(Orientation::Horizontal, 12);
             row.set_margin_start(8);

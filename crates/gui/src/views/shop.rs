@@ -48,6 +48,8 @@ thread_local! {
     static CMD: Rc<RefCell<Option<CommandSender>>> = Rc::new(RefCell::new(None));
     // --- CRUD профилей ---
     static STATE: Rc<RefCell<ProfilesState>> = Rc::new(RefCell::new(ProfilesState::new()));
+    /// Empty-state: призыв создать первый профиль (когда профилей нет).
+    static W_EMPTY: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     /// Один «активный» диалог добавления (чтобы получать его поля по событию).
     static ACTIVE_DIALOG: Rc<RefCell<Option<Rc<AddDialogState>>>> = Rc::new(RefCell::new(None));
     /// Список провайдеров для диалога добавления (передаётся из on_providers_loaded).
@@ -81,6 +83,13 @@ pub fn on_profiles_loaded(profiles: &[Profile]) {
     PROFILES.with(|p| *p.borrow_mut() = profiles.to_vec());
     STATE.with(|s| s.borrow_mut().set_profiles(profiles));
     refresh_profile_combo();
+    // Empty-state: показываем призыв, пока профилей нет.
+    let empty = profiles.is_empty();
+    W_EMPTY.with(|w| {
+        if let Some(lbl) = w.borrow().as_ref() {
+            lbl.set_visible(empty);
+        }
+    });
 }
 
 /// Хук: активный магазин загружен из ui_state (при старте).
@@ -235,6 +244,18 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .css_classes(["dim-label"])
         .halign(gtk4::Align::Start)
         .build());
+
+    // Empty-state: призыв создать первый профиль (виден, пока профилей нет).
+    let empty_state = Label::builder()
+        .label("📋 Профилей пока нет. Нажмите «＋ Добавить» выше — создайте первый профиль (магазин + API-ключ); без него выгрузка отчётов недоступна.")
+        .wrap(true)
+        .xalign(0.0)
+        .halign(gtk4::Align::Start)
+        .margin_top(10)
+        .css_classes(["heading"])
+        .build();
+    root.append(&empty_state);
+    W_EMPTY.with(|w| *w.borrow_mut() = Some(empty_state.clone()));
 
     // Список профилей через gio.ListStore.
     let store = STATE.with(|s| s.borrow().store.clone());

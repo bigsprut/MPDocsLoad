@@ -112,15 +112,24 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     // --- Секция Network ---
     root.append(&section_header("Сеть"));
 
-    let timeout = labeled_spin("Таймаут запроса (с):", f64::from(cfg.network.request_timeout_seconds));
+    let timeout = labeled_spin(
+        "Таймаут запроса (с):",
+        f64::from(cfg.network.request_timeout_seconds),
+        5.0,
+        300.0,
+        1.0,
+    );
     root.append(&timeout.row);
 
-    let retries = labeled_spin("Макс. повторов:", f64::from(cfg.network.max_retries));
+    let retries = labeled_spin("Макс. повторов:", f64::from(cfg.network.max_retries), 0.0, 20.0, 1.0);
     root.append(&retries.row);
 
     let concurrency = labeled_spin(
         "Макс. параллельных запросов на провайдера:",
         f64::from(cfg.network.max_concurrency_per_provider),
+        1.0,
+        20.0,
+        1.0,
     );
     root.append(&concurrency.row);
 
@@ -130,6 +139,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let parallel_jobs = labeled_spin(
         "Макс. параллельных задач:",
         f64::from(cfg.scheduler.max_parallel_jobs),
+        1.0,
+        20.0,
+        1.0,
     );
     root.append(&parallel_jobs.row);
 
@@ -153,6 +165,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let log_retention = labeled_spin(
         "Хранить логи (дней):",
         f64::from(cfg.security.log_retention_days),
+        1.0,
+        365.0,
+        1.0,
     );
     root.append(&log_retention.row);
 
@@ -187,9 +202,14 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let log_retention_s = log_retention.spin.clone();
     let status_lbl = status_label.clone();
     save_btn.connect_clicked(move |_| {
+        let template_text = template_e.text().to_string();
+        if template_text.trim().is_empty() {
+            status_lbl.set_text("Шаблон имени файла не может быть пустым — оставьте плейсхолдеры (напр. {report}_{period}.{ext}).");
+            return;
+        }
         let mut config = CFG.with(|c| c.borrow().clone()).unwrap_or_default();
         config.storage.output_dir = output_dir_e.text().to_string();
-        config.storage.file_name_template = template_e.text().to_string();
+        config.storage.file_name_template = template_text;
         config.storage.compute_hash = compute_hash_cb.is_active();
         config.network.request_timeout_seconds = timeout_s.value() as u32;
         config.network.max_retries = retries_s.value() as u32;
@@ -200,9 +220,15 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         config.security.log_retention_days = log_retention_s.value() as u32;
 
         let path = mdwf_config::data_dir().join("config.toml");
+        // Предупредим, если в шаблоне нет {ext} — файлы могут остаться без расширения.
+        let has_ext = config.storage.file_name_template.contains("{ext}");
         match config.save(&path) {
             Ok(()) => {
-                status_lbl.set_text("Настройки сохранены. Изменения применятся при перезапуске.");
+                status_lbl.set_text(if has_ext {
+                    "Настройки сохранены. Изменения применятся при перезапуске."
+                } else {
+                    "Сохранено. Внимание: в шаблоне нет {ext} — файлы могут остаться без расширения. Применится при перезапуске."
+                });
                 CFG.with(|c| *c.borrow_mut() = Some(config));
             }
             Err(e) => status_lbl.set_text(&format!("Ошибка сохранения: {e}")),
@@ -241,10 +267,10 @@ struct LabeledSpin {
     spin: SpinButton,
 }
 
-fn labeled_spin(label: &str, value: f64) -> LabeledSpin {
+fn labeled_spin(label: &str, value: f64, min: f64, max: f64, step: f64) -> LabeledSpin {
     let row = GtkBox::new(Orientation::Horizontal, 8);
     row.append(&Label::builder().label(label).width_chars(34).xalign(0.0).hexpand(true).build());
-    let spin = SpinButton::with_range(1.0, 100_000.0, 1.0);
+    let spin = SpinButton::with_range(min, max, step);
     spin.set_value(value);
     row.append(&spin);
     LabeledSpin { row, spin }
