@@ -111,7 +111,8 @@ struct ReportDef {
     /// разделов ЛК (сверено по скриншотам продавца 2026-08-15: Финансы→Документы,
     /// Финансы→Начисления и документы→Баланс, Товары, FBO, FBS, Аналитика;
     /// docs.ozon.ru называет разделы по-старому). Остались по доке: placement_*
-    /// (FBO → Стоимость размещения), returns. None — путь не установлен.
+    /// Все пути сверены: живой ЛК (урок #60) либо база знаний продавцов
+    /// seller-edu.ozon.ru (placement_*/returns, 2026-08-15). None — не установлен.
     cabinet: Option<&'static str>,
     params: DefParams,
     max_range_days: Option<u32>,
@@ -294,7 +295,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Отчёт о возвратах за период (диапазон дат).",
-        cabinet: Some("Возвраты"),
+        cabinet: Some("Аналитика → Отчёты → Возвраты"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Paginated("/v1/returns/list", PaginationKind::ReturnsList),
@@ -343,7 +344,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Стоимость размещения по товарам за период (диапазон ≤31 дня, async).",
-        cabinet: Some("FBO → Стоимость размещения (по товарам)"),
+        cabinet: Some("Финансы → Стоимость размещения (по товарам)"),
         params: DefParams::DateRange,
         max_range_days: Some(31),
         dispatch: Dispatch::Async("/v1/report/placement/by-products/create"),
@@ -354,7 +355,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Стоимость размещения по поставкам за период (диапазон ≤31 дня, async).",
-        cabinet: Some("FBO → Стоимость размещения (по поставкам)"),
+        cabinet: Some("Финансы → Стоимость размещения (по поставкам)"),
         params: DefParams::DateRange,
         max_range_days: Some(31),
         dispatch: Dispatch::Async("/v1/report/placement/by-supplies/create"),
