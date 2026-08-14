@@ -1186,6 +1186,33 @@ event-channel, record_download id, версионирование миграци
   интервал-пикер, списки документов, колонки архива, restore; DATE_RANGE хранит ISO.
 - ⚠️ Инсталлер не пересобран с UX-пакетом — перед выдачей build-setup.cmd.
 
+**Чат 2026-08-14 (закрытие P1 + P2 целиком; после клик-теста):**
+- **P1-a потеря UiEvent**: forward() жертвует только Progress при переполнении
+  bounded(256); терминальные — ретрай 100×2мс (раньше DownloadFinished мог
+  молча пропасть → «вечное скачивание…»).
+- **P1-b stale-id upsert**: record_download → RETURNING id (bundled SQLite≥3.35).
+- **P1-c ReturnsList**: защита от зависшего курсора (id непарсим → останов,
+  а не 200 страниц дублей).
+- **P1-d оконная разбивка**: ReportDescriptor.max_range_days (balance=30,
+  buyout/placement_*=31) + GUI режет длинные интервалы на окна ≤ капа
+  (цикл с общим cancel-токеном). Год ≈ 12-13 окон.
+- **P1-e FBS auto-fill**: /v4/posting/fbs/list (v3 отключается 31.08.2026!),
+  cursor-пагинация, сверен с докой. auto-fill = FBO + FBS объединённо.
+- **P2-1**: PRAGMA user_version (=4, warn при БД>код); 4 Runner-теста
+  (claim-атомарность, due-фильтры, NULL→pending, failed→status+next) — прежде 0.
+- **P2-2 мёртвый код удалён**: pagination.rs ×2 (Ozon Pages/Cursor/Offset +
+  WB TaskId/RrdidCursor/DateCursor/OffsetLimit), WbDomain::burst(),
+  ResponseShape::Report, UiCommand::Cancel (+arm), period_to_range.
+- **P2-3**: CoreError::Protocol (2xx-не-JSON, нет result/code) ≠ Internal(=баг);
+  CLI: Protocol→ApiError.
+- **P2-4**: xlsx числа ЧИСЛАМИ (write_cell parse f64) + интернер вместо Box::leak;
+  file_store атомарно (tmp+rename); TestProvider только debug; warehouse cap 200.
+- **P2-5**: keyring в spawn_blocking (tokio из dev→deps в secrets); вместо
+  мега-рефакторинга «таблица 4→1» — тест-страж descriptors_and_dispatch_are_in_sync
+  (дрейф таблиц ловится тестом). Полная унификация таблиц — осознанно отложена.
+- cargo test --workspace exit=0; clippy -D warnings exit=0 по ВСЕМ крейтам.
+  Уроки #56 (cargo test ≠ build).
+
 **Чат 2026-08-13 (фикс чёрного окна + брендовая иконка запущенного окна) — PROD-качество:**
 Жалоба юзера: «чёрное окно после запуска» + «вижу только дефолтную иконку» + «мне
 нужен прод». Диагностика ОБЪЕКТИВНАЯ (пиксель-анализ скриншота через PowerShell
