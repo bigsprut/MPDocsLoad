@@ -83,11 +83,24 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         }
     });
 
-    // Клик по отчёту -> подсказка перейти во вкладку «Загрузка».
+    // Клик по отчёту → предвыбрать его в «Загрузке» и переключиться на эту вкладку
+    // (как обещает строка помощи). Индекс строки совпадает с индексом в REPORTS.
     list_box.connect_selected_rows_changed(move |lb| {
-        if let Some(row) = lb.selected_row() {
-            if let Some(label) = row.child().and_then(|c| c.downcast::<Label>().ok()) {
-                label.set_tooltip_text(Some("Перейдите во вкладку «Загрузка» для выгрузки"));
+        let Some(row) = lb.selected_row() else { return };
+        let idx = row.index();
+        if idx < 0 {
+            return;
+        }
+        let Some(rtype) =
+            REPORTS.with(|r| r.borrow().get(idx as usize).map(|ri| ri.type_id.clone()))
+        else {
+            return;
+        };
+        crate::views::download::set_pending_report(&rtype);
+        // Переключаем вкладку: поднимаемся по дереву до Stack и меняем видимый ребёнок.
+        if let Some(stack_w) = lb.ancestor(gtk4::Stack::static_type()) {
+            if let Ok(stack) = stack_w.downcast::<gtk4::Stack>() {
+                stack.set_visible_child_name(crate::channels::ViewId::Download.as_str());
             }
         }
     });

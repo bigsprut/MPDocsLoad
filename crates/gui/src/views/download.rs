@@ -193,21 +193,10 @@ pub fn on_reports_loaded(reports: &[ReportInfo]) {
     // Восстанавливаем выбранный отчёт из сохранённого состояния (если есть).
     let pending = PENDING_REPORT.with(|p| p.borrow_mut().take());
     if let Some(rtype) = pending {
-        // Ищем индекс отчёта с совпадающим type_id.
-        let n = combo.model().map_or(0, |m| m.iter_n_children(None));
-        let mut found = false;
-        for i in 0..n {
-            combo.set_active(Some(i as u32));
-            if let Some(text) = combo.active_text() {
-                if text.to_string().starts_with(&format!("{rtype} —")) {
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if !found {
-            combo.set_active(Some(0));
-        }
+        // Combo хранит только display_name — по тексту type_id не найти. Индексы
+        // combo и REPORTS совпадают (заполняются одним циклом), ищем по REPORTS.
+        let idx = REPORTS.with(|r| r.borrow().iter().position(|rep| rep.type_id == rtype));
+        combo.set_active(Some(idx.unwrap_or(0) as u32));
     } else {
         combo.set_active(Some(0));
     }
@@ -222,6 +211,32 @@ pub fn on_reports_loaded(reports: &[ReportInfo]) {
     // Явно запрашиваем категории, т.к. set_active при заблокированном сигнале
     // не вызовет connect_changed.
     maybe_request_categories();
+}
+
+/// Запоминает отчёт (`type_id`), который нужно выбрать в combo «Загрузки», и
+/// выбирает его сразу, если combo уже заполнен. Вызывается из вкладки «Отчёты»
+/// при клике по отчёту (предвыбор + переход на «Загрузка»).
+pub fn set_pending_report(type_id: &str) {
+    PENDING_REPORT.with(|p| *p.borrow_mut() = Some(type_id.to_string()));
+    // Если combo уже заполнен — выберем немедленно; иначе выберется при
+    // следующей загрузке списка отчётов (on_reports_loaded возьмёт PENDING_REPORT).
+    select_report_by_type(type_id);
+}
+
+/// Выбирает в combo отчёт с заданным `type_id` (по индексу в REPORTS). Сигнал
+/// connect_changed НЕ блокируется — штатно срабатывают обновление подсказки и
+/// загрузка категорий выбранного отчёта. `true`, если отчёт найден и выбран.
+fn select_report_by_type(type_id: &str) -> bool {
+    let Some(combo) = W_REPORT.with(|w| w.borrow().clone()) else {
+        return false;
+    };
+    let idx = REPORTS.with(|r| r.borrow().iter().position(|rep| rep.type_id == type_id));
+    if let Some(i) = idx {
+        combo.set_active(Some(i as u32));
+        true
+    } else {
+        false
+    }
 }
 
 pub fn build(cs: &CommandSender) -> GtkBox {
