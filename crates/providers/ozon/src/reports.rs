@@ -61,216 +61,321 @@ pub fn capabilities() -> Capabilities {
 /// НЕ включены (deprecated, отключаются 8 сент 2026 / заменены):
 /// transaction_list, transaction_totals, stock_on_warehouses.
 #[must_use]
+/// Как строится отчёт: единственная точка правды для ФАБРИКИ. Раньше
+/// дескрипторы и make_report были двумя раздельными списками по 21 arm с
+/// дословно дублированными строками (type_id/display/category) — дрейф
+/// ловился только тестом (случай «Декомпенсации» vs «Декомпенсации (штрафы)»).
+#[derive(Clone, Copy)]
+enum Dispatch {
+    /// Прямой POST → JSON (OzonReport::period).
+    Direct(&'static str),
+    /// Async: create → code → /v1/report/info → файл (OzonAsyncReport).
+    Async(&'static str),
+    /// Inline sweep с пагинацией (OzonPaginatedReport).
+    Paginated(&'static str, PaginationKind),
+}
+
+/// Форма параметров дескриптора (в таблице — данные, не код).
+enum DefParams {
+    None,
+    DateRange,
+    /// param_period_month("period", "Месяц (YYYY-MM)").
+    MonthField,
+    /// param_period_month("period", "День (YYYY-MM)").
+    DayField,
+    Text { id: &'static str, label: &'static str },
+}
+
+impl DefParams {
+    fn build(&self) -> Vec<ReportParameter> {
+        match self {
+            Self::None => Vec::new(),
+            Self::DateRange => vec![param_date_range(true)],
+            Self::MonthField => vec![param_period_month("period", "Месяц (YYYY-MM)", true)],
+            Self::DayField => vec![param_period_month("period", "День (YYYY-MM)", true)],
+            Self::Text { id, label } => vec![param_text(id, label, true)],
+        }
+    }
+}
+
+/// ОПРЕДЕЛЕНИЕ ОТЧЁТА: дескриптор (данные для UI) + диспетчеризация (как
+/// скачивать). Единая таблица: all_report_descriptors() и make_report()
+/// генерируются из неё — 21 определение вместо 2x21 дублированных arm.
+struct ReportDef {
+    type_id: &'static str,
+    display_name: &'static str,
+    category: ReportCategory,
+    period_kind: PeriodKind,
+    description: &'static str,
+    params: DefParams,
+    max_range_days: Option<u32>,
+    dispatch: Dispatch,
+}
+
+impl ReportDef {
+    fn descriptor(&self) -> ReportDescriptor {
+        ReportDescriptor {
+            type_id: self.type_id.into(),
+            display_name: self.display_name.into(),
+            category: self.category,
+            acquisition_mode: AcquisitionMode::Period,
+            downloader_kind: DownloaderKind::Api,
+            parameters: self.params.build(),
+            period_kind: self.period_kind,
+            description: Some(self.description.into()),
+            max_range_days: self.max_range_days,
+        }
+    }
+}
+
+/// Единая таблица всех 21 отчётов Ozon (сверено с docs.ozon.ru).
+static REPORT_DEFS: &[ReportDef] = &[
+    // --- Финансовые (Period, прямой JSON) ---
+    ReportDef {
+        type_id: "ozon.realization",
+        display_name: "Отчёт о реализации (месячный)",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::Month,
+        description: "Финансовый отчёт о реализации за месяц. Строго месячный — за интервал соберём по месяцам.",
+        params: DefParams::MonthField,
+        max_range_days: None,
+        dispatch: Dispatch::Direct("/v2/finance/realization"),
+    },
+    // Серверный Excel от Ozon (create→code→info→.xlsx), тело {month, year} —
+    // готовый xlsx с шапкой «Отчет о реализации №…» (как в личном кабинете).
+    ReportDef {
+        type_id: "ozon.realization_posting",
+        display_name: "Отчёт о реализации (позаказный)",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::Month,
+        description: "Позаказный отчёт о реализации за месяц (async). Строго месячный.",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/report/realization/posting/create"),
+    },
+    ReportDef {
+        type_id: "ozon.buyout",
+        display_name: "Выкупы маркетплейсом (ЕАЭС)",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::Range,
+        description: "Выкупы маркетплейсом в ЕАЭС за период (диапазон ≤31 дня).",
+        params: DefParams::DateRange,
+        max_range_days: Some(31),
+        dispatch: Dispatch::Direct("/v1/finance/products/buyout"),
+    },
+    ReportDef {
+        type_id: "ozon.balance",
+        display_name: "Баланс",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::Range,
+        description: "Баланс кошелька за период (диапазон ≤30 дней).",
+        params: DefParams::None,
+        max_range_days: Some(30),
+        dispatch: Dispatch::Direct("/v1/finance/balance"),
+    },
+    ReportDef {
+        type_id: "ozon.cash_flow",
+        display_name: "Финансовый отчёт (движение средств)",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::Range,
+        description: "Движение средств по датам за период (диапазон, без жёсткого лимита дней).",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Paginated(
+            "/v1/finance/cash-flow-statement/list",
+            PaginationKind::CashFlow,
+        ),
+    },
+    // accrual — бета-методы начислений (замена deprecated transaction-list).
+    ReportDef {
+        type_id: "ozon.accrual_by_day",
+        display_name: "Начисления за день",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::Day,
+        description: "Начисления по дням выбранного месяца (цикл по всем дням месяца).",
+        params: DefParams::DayField,
+        max_range_days: None,
+        dispatch: Dispatch::Paginated("/v1/finance/accrual/by-day", PaginationKind::LastId),
+    },
+    // posting_numbers[] (1–200); auto-fill FBO+FBS, затем батчинг ≤200.
+    ReportDef {
+        type_id: "ozon.accrual_postings",
+        display_name: "Начисления по отправлениям",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::None,
+        description: "Начисления по отправлениям (номера подставляются автоматически за период).",
+        params: DefParams::Text {
+            id: "posting_numbers",
+            label: "Номера отправлений (через запятую, 1–200)",
+        },
+        max_range_days: None,
+        dispatch: Dispatch::Paginated(
+            "/v1/finance/accrual/postings",
+            PaginationKind::AccrualPostings,
+        ),
+    },
+    // --- Штрафы/компенсации (async) ---
+    ReportDef {
+        type_id: "ozon.compensation",
+        display_name: "Компенсации",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::Month,
+        description: "Компенсации за месяц (async). Строго месячный.",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/finance/compensation"),
+    },
+    ReportDef {
+        type_id: "ozon.decompensation",
+        display_name: "Декомпенсации (штрафы/антифрод)",
+        category: ReportCategory::Penalties,
+        period_kind: PeriodKind::Month,
+        description: "Декомпенсации и штрафы за месяц (async). Строго месячный.",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/finance/decompensation"),
+    },
+    // --- Реестры/документы (async) ---
+    ReportDef {
+        type_id: "ozon.b2b_sales",
+        display_name: "Продажи юрлицам (PDF)",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::Month,
+        description: "Реестр продаж юрлицам за месяц, PDF (async). Строго месячный.",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/finance/document-b2b-sales"),
+    },
+    ReportDef {
+        type_id: "ozon.mutual_settlement",
+        display_name: "Отчёт о взаиморасчётах",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::Month,
+        description: "Отчёт о взаиморасчётах за месяц (async). Строго месячный.",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/finance/mutual-settlement"),
+    },
+    // --- Seller-отчёты (async: create→code→/v1/report/info→файл) ---
+    ReportDef {
+        type_id: "ozon.products",
+        display_name: "Отчёт по товарам",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::None,
+        description: "Отчёт по товарам (без привязки к периоду, async).",
+        params: DefParams::None,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/report/products/create"),
+    },
+    // /v1/returns/list — возвраты FBO+FBS одним списком (все статусы),
+    // без обязательного filter.status; пагинация last_id + has_next, limit≤500.
+    ReportDef {
+        type_id: "ozon.returns",
+        display_name: "Отчёт о возвратах",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::Range,
+        description: "Отчёт о возвратах за период (диапазон дат).",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Paginated("/v1/returns/list", PaginationKind::ReturnsList),
+    },
+    ReportDef {
+        type_id: "ozon.postings",
+        display_name: "Отчёт об отправлениях",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::Range,
+        description: "Отчёт об отправлениях за период (диапазон дат, async).",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/report/postings/create"),
+    },
+    ReportDef {
+        type_id: "ozon.discounted",
+        display_name: "Отчёт об уценённых товарах",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::None,
+        description: "Отчёт об уценённых товарах (без привязки к периоду, async).",
+        params: DefParams::None,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/report/discounted/create"),
+    },
+    // ID складов — auto-fill через /v2/warehouse/list, если не переданы.
+    ReportDef {
+        type_id: "ozon.warehouse_stock",
+        display_name: "Остатки на FBS-складе",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::None,
+        description: "Остатки на FBS-складе (ID складов подставляются автоматически).",
+        params: DefParams::Text {
+            id: "warehouse_ids",
+            label: "ID складов (через запятую)",
+        },
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/report/warehouse/stock"),
+    },
+    ReportDef {
+        type_id: "ozon.placement_by_products",
+        display_name: "Стоимость размещения по товарам",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::Range,
+        description: "Стоимость размещения по товарам за период (диапазон ≤31 дня, async).",
+        params: DefParams::DateRange,
+        max_range_days: Some(31),
+        dispatch: Dispatch::Async("/v1/report/placement/by-products/create"),
+    },
+    ReportDef {
+        type_id: "ozon.placement_by_supplies",
+        display_name: "Стоимость размещения по поставкам",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::Range,
+        description: "Стоимость размещения по поставкам за период (диапазон ≤31 дня, async).",
+        params: DefParams::DateRange,
+        max_range_days: Some(31),
+        dispatch: Dispatch::Async("/v1/report/placement/by-supplies/create"),
+    },
+    ReportDef {
+        type_id: "ozon.marked_products_sales",
+        display_name: "Продажи товаров с маркировкой",
+        category: ReportCategory::Documents,
+        period_kind: PeriodKind::Range,
+        description: "Продажи маркированных товаров за период (диапазон дат, async).",
+        params: DefParams::DateRange,
+        max_range_days: None,
+        dispatch: Dispatch::Async("/v1/report/marked-products-sales/create"),
+    },
+    // --- Аналитика остатков ---
+    // skus[] обязательны ≤100; auto-fill /v3/product/list + батчинг + pacing.
+    ReportDef {
+        type_id: "ozon.analytics_stocks",
+        display_name: "Аналитика по остаткам",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::None,
+        description: "Аналитика по остаткам (SKU подставляются автоматически, без даты — срез).",
+        params: DefParams::Text {
+            id: "skus",
+            label: "SKU (через запятую, ≤100)",
+        },
+        max_range_days: None,
+        dispatch: Dispatch::Paginated("/v1/analytics/stocks", PaginationKind::Skus),
+    },
+    ReportDef {
+        type_id: "ozon.analytics_turnover",
+        display_name: "Оборачиваемость товара",
+        category: ReportCategory::Finance,
+        period_kind: PeriodKind::None,
+        description: "Оборачиваемость товара (без привязки к периоду — срез).",
+        params: DefParams::None,
+        max_range_days: None,
+        dispatch: Dispatch::Paginated("/v1/analytics/turnover/stocks", PaginationKind::Offset),
+    },
+];
+
+#[must_use]
 pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
-    vec![
-        // --- Финансовые отчёты (Period, прямой JSON) ---
-        desc_period(
-            "ozon.realization",
-            "Отчёт о реализации (месячный)",
-            ReportCategory::Finance,
-            PeriodKind::Month,
-            "Финансовый отчёт о реализации за месяц. Строго месячный — за интервал соберём по месяцам.",
-            &[param_period_month("period", "Месяц (YYYY-MM)", true)],
-        ),
-        desc_period(
-            "ozon.realization_posting",
-            "Отчёт о реализации (позаказный)",
-            ReportCategory::Finance,
-            PeriodKind::Month,
-            "Позаказный отчёт о реализации за месяц (async). Строго месячный.",
-            &[param_date_range(true)],
-        ),
-        desc_period(
-            "ozon.buyout",
-            "Выкупы маркетплейсом (ЕАЭС)",
-            ReportCategory::Finance,
-            PeriodKind::Range,
-            "Выкупы маркетплейсом в ЕАЭС за период (диапазон ≤31 дня).",
-            &[param_date_range(true)],
-        ).with_max_range_days(31),
-        desc_period(
-            "ozon.balance",
-            "Баланс",
-            ReportCategory::Finance,
-            PeriodKind::Range,
-            "Баланс кошелька за период (диапазон ≤30 дней).",
-            &[],
-        ).with_max_range_days(30),
-        desc_period(
-            "ozon.cash_flow",
-            "Финансовый отчёт (движение средств)",
-            ReportCategory::Finance,
-            PeriodKind::Range,
-            "Движение средств по датам за период (диапазон, без жёсткого лимита дней).",
-            &[param_date_range(true)],
-        ),
-        // accrual — новые бета-методы начислений (замена deprecated transaction-list).
-        desc_period(
-            "ozon.accrual_by_day",
-            "Начисления за день",
-            ReportCategory::Finance,
-            PeriodKind::Day,
-            "Начисления по дням выбранного месяца (цикл по всем дням месяца).",
-            &[param_period_month("period", "День (YYYY-MM)", true)],
-        ),
-        desc_period(
-            "ozon.accrual_postings",
-            "Начисления по отправлениям",
-            ReportCategory::Finance,
-            PeriodKind::None,
-            "Начисления по отправлениям (номера подставляются автоматически за период).",
-            &[param_text(
-                "posting_numbers",
-                "Номера отправлений (через запятую, 1–200)",
-                true,
-            )],
-        ),
-        // --- Штрафы/компенсации (async) ---
-        desc_period(
-            "ozon.compensation",
-            "Компенсации",
-            ReportCategory::Finance,
-            PeriodKind::Month,
-            "Компенсации за месяц (async). Строго месячный.",
-            &[param_date_range(true)],
-        ),
-        desc_period(
-            "ozon.decompensation",
-            "Декомпенсации (штрафы/антифрод)",
-            ReportCategory::Penalties,
-            PeriodKind::Month,
-            "Декомпенсации и штрафы за месяц (async). Строго месячный.",
-            &[param_date_range(true)],
-        ),
-        // --- Реестры/документы (async) ---
-        desc_period(
-            "ozon.b2b_sales",
-            "Продажи юрлицам (PDF)",
-            ReportCategory::Documents,
-            PeriodKind::Month,
-            "Реестр продаж юрлицам за месяц, PDF (async). Строго месячный.",
-            &[param_date_range(true)],
-        ),
-        desc_period(
-            "ozon.mutual_settlement",
-            "Отчёт о взаиморасчётах",
-            ReportCategory::Finance,
-            PeriodKind::Month,
-            "Отчёт о взаиморасчётах за месяц (async). Строго месячный.",
-            &[param_date_range(true)],
-        ),
-        // --- Отчёты seller (async: create→code→/v1/report/info→файл) ---
-        desc_period(
-            "ozon.products",
-            "Отчёт по товарам",
-            ReportCategory::Documents,
-            PeriodKind::None,
-            "Отчёт по товарам (без привязки к периоду, async).",
-            &[],
-        ),
-        desc_period(
-            "ozon.returns",
-            "Отчёт о возвратах",
-            ReportCategory::Documents,
-            PeriodKind::Range,
-            "Отчёт о возвратах за период (диапазон дат).",
-            &[param_date_range(true)],
-        ),
-        desc_period(
-            "ozon.postings",
-            "Отчёт об отправлениях",
-            ReportCategory::Documents,
-            PeriodKind::Range,
-            "Отчёт об отправлениях за период (диапазон дат, async).",
-            &[param_date_range(true)],
-        ),
-        desc_period(
-            "ozon.discounted",
-            "Отчёт об уценённых товарах",
-            ReportCategory::Documents,
-            PeriodKind::None,
-            "Отчёт об уценённых товарах (без привязки к периоду, async).",
-            &[],
-        ),
-        desc_period(
-            "ozon.warehouse_stock",
-            "Остатки на FBS-складе",
-            ReportCategory::Documents,
-            PeriodKind::None,
-            "Остатки на FBS-складе (ID складов подставляются автоматически).",
-            &[param_text(
-                "warehouse_ids",
-                "ID складов (через запятую)",
-                true,
-            )],
-        ),
-        desc_period(
-            "ozon.placement_by_products",
-            "Стоимость размещения по товарам",
-            ReportCategory::Documents,
-            PeriodKind::Range,
-            "Стоимость размещения по товарам за период (диапазон ≤31 дня, async).",
-            &[param_date_range(true)],
-        ).with_max_range_days(31),
-        desc_period(
-            "ozon.placement_by_supplies",
-            "Стоимость размещения по поставкам",
-            ReportCategory::Documents,
-            PeriodKind::Range,
-            "Стоимость размещения по поставкам за период (диапазон ≤31 дня, async).",
-            &[param_date_range(true)],
-        ).with_max_range_days(31),
-        desc_period(
-            "ozon.marked_products_sales",
-            "Продажи товаров с маркировкой",
-            ReportCategory::Documents,
-            PeriodKind::Range,
-            "Продажи маркированных товаров за период (диапазон дат, async).",
-            &[param_date_range(true)],
-        ),
-        // --- Аналитика остатков ---
-        desc_period(
-            "ozon.analytics_stocks",
-            "Аналитика по остаткам",
-            ReportCategory::Finance,
-            PeriodKind::None,
-            "Аналитика по остаткам (SKU подставляются автоматически, без даты — срез).",
-            &[param_text("skus", "SKU (через запятую, ≤100)", true)],
-        ),
-        desc_period(
-            "ozon.analytics_turnover",
-            "Оборачиваемость товара",
-            ReportCategory::Finance,
-            PeriodKind::None,
-            "Оборачиваемость товара (без привязки к периоду — срез).",
-            &[],
-        ),
-    ]
+    REPORT_DEFS.iter().map(ReportDef::descriptor).collect()
 }
 
 // --- Хелперы для построения дескрипторов ---
-
-#[allow(clippy::needless_pass_by_value)]
-fn desc_period(
-    type_id: &str,
-    display_name: &str,
-    category: ReportCategory,
-    period_kind: PeriodKind,
-    description: &str,
-    parameters: &[ReportParameter],
-) -> ReportDescriptor {
-    ReportDescriptor {
-        type_id: type_id.into(),
-        display_name: display_name.into(),
-        category,
-        acquisition_mode: AcquisitionMode::Period,
-        downloader_kind: DownloaderKind::Api,
-        parameters: parameters.to_vec(),
-        period_kind,
-        description: Some(description.into()),
-        max_range_days: None,
-    }
-}
 
 fn param_period_month(id: &str, label: &str, required: bool) -> ReportParameter {
     ReportParameter {
@@ -309,176 +414,33 @@ fn param_text(id: &str, label: &str, required: bool) -> ReportParameter {
 /// Каждая реализация делегирует HTTP-вызовы в `OzonHttpClient`. Парсинг
 /// специфичных полей отчётов будет уточняться по мере интеграции с реальным API.
 pub fn make_report(type_id: &str, client: OzonHttpClient) -> CoreResult<ReportRef> {
-    let report: ReportRef = match type_id {
-        "ozon.realization" => Arc::new(OzonReport::period(
-            "ozon.realization",
-            "Отчёт о реализации (месячный)",
-            ReportCategory::Finance,
+    // Фабрика генерируется из ЕДИНОЙ таблицы REPORT_DEFS: type_id → impl+эндпоинт.
+    let Some(def) = REPORT_DEFS.iter().find(|d| d.type_id == type_id) else {
+        return Err(CoreError::ReportTypeNotSupported(type_id.to_string()));
+    };
+    let report: ReportRef = match def.dispatch {
+        Dispatch::Direct(ep) => Arc::new(OzonReport::period(
+            def.type_id,
+            def.display_name,
+            def.category,
             client,
-            "/v2/finance/realization",
+            ep,
         )),
-        "ozon.realization_posting" => Arc::new(OzonAsyncReport::new(
-            "ozon.realization_posting",
-            "Отчёт о реализации (позаказный)",
-            ReportCategory::Finance,
+        Dispatch::Async(ep) => Arc::new(OzonAsyncReport::new(
+            def.type_id,
+            def.display_name,
+            def.category,
             client,
-            // Серверный Excel от Ozon (create→code→/v1/report/info→.xlsx).
-            // Тело {month, year} — см. build_download_body. Даёт готовый
-            // xlsx с шапкой «Отчет о реализации №...» (как в личном кабинете).
-            "/v1/report/realization/posting/create",
+            ep,
         )),
-        "ozon.buyout" => Arc::new(OzonReport::period(
-            "ozon.buyout",
-            "Выкупы маркетплейсом (ЕАЭС)",
-            ReportCategory::Finance,
+        Dispatch::Paginated(ep, kind) => Arc::new(OzonPaginatedReport::new(
+            def.type_id,
+            def.display_name,
+            def.category,
             client,
-            "/v1/finance/products/buyout",
+            ep,
+            kind,
         )),
-        "ozon.balance" => Arc::new(OzonReport::period(
-            "ozon.balance",
-            "Баланс",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/balance",
-        )),
-        "ozon.compensation" => Arc::new(OzonAsyncReport::new(
-            "ozon.compensation",
-            "Компенсации",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/compensation",
-        )),
-        "ozon.decompensation" => Arc::new(OzonAsyncReport::new(
-            "ozon.decompensation",
-            "Декомпенсации",
-            ReportCategory::Penalties,
-            client,
-            "/v1/finance/decompensation",
-        )),
-        "ozon.b2b_sales" => Arc::new(OzonAsyncReport::new(
-            "ozon.b2b_sales",
-            "Продажи юрлицам (PDF)",
-            ReportCategory::Documents,
-            client,
-            "/v1/finance/document-b2b-sales",
-        )),
-        "ozon.mutual_settlement" => Arc::new(OzonAsyncReport::new(
-            "ozon.mutual_settlement",
-            "Отчёт о взаиморасчётах",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/mutual-settlement",
-        )),
-        // --- Seller-отчёты (async: create→code→/v1/report/info→файл) ---
-        "ozon.products" => Arc::new(OzonAsyncReport::new(
-            "ozon.products",
-            "Отчёт по товарам",
-            ReportCategory::Documents,
-            client,
-            "/v1/report/products/create",
-        )),
-        "ozon.returns" => Arc::new(OzonPaginatedReport::new(
-            "ozon.returns",
-            "Отчёт о возвратах",
-            ReportCategory::Documents,
-            client,
-            // /v1/returns/list — возвраты FBO+FBS одним списком (все статусы),
-            // без обязательного filter.status (в отличие от /v2/report/returns/create).
-            // Пагинация: last_id (int64) + has_next, limit≤500.
-            "/v1/returns/list",
-            PaginationKind::ReturnsList,
-        )),
-        "ozon.postings" => Arc::new(OzonAsyncReport::new(
-            "ozon.postings",
-            "Отчёт об отправлениях",
-            ReportCategory::Documents,
-            client,
-            "/v1/report/postings/create",
-        )),
-        "ozon.discounted" => Arc::new(OzonAsyncReport::new(
-            "ozon.discounted",
-            "Отчёт об уценённых товарах",
-            ReportCategory::Documents,
-            client,
-            "/v1/report/discounted/create",
-        )),
-        "ozon.warehouse_stock" => Arc::new(OzonAsyncReport::new(
-            "ozon.warehouse_stock",
-            "Остатки на FBS-складе",
-            ReportCategory::Documents,
-            client,
-            "/v1/report/warehouse/stock",
-        )),
-        "ozon.placement_by_products" => Arc::new(OzonAsyncReport::new(
-            "ozon.placement_by_products",
-            "Стоимость размещения по товарам",
-            ReportCategory::Documents,
-            client,
-            "/v1/report/placement/by-products/create",
-        )),
-        "ozon.placement_by_supplies" => Arc::new(OzonAsyncReport::new(
-            "ozon.placement_by_supplies",
-            "Стоимость размещения по поставкам",
-            ReportCategory::Documents,
-            client,
-            "/v1/report/placement/by-supplies/create",
-        )),
-        "ozon.marked_products_sales" => Arc::new(OzonAsyncReport::new(
-            "ozon.marked_products_sales",
-            "Продажи товаров с маркировкой",
-            ReportCategory::Documents,
-            client,
-            "/v1/report/marked-products-sales/create",
-        )),
-        // --- Inline-отчёты со списками и пагинацией (sweep → один JSON) ---
-        "ozon.cash_flow" => Arc::new(OzonPaginatedReport::new(
-            "ozon.cash_flow",
-            "Финансовый отчёт (движение средств)",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/cash-flow-statement/list",
-            PaginationKind::CashFlow,
-        )),
-        "ozon.analytics_stocks" => Arc::new(OzonPaginatedReport::new(
-            "ozon.analytics_stocks",
-            "Аналитика по остаткам",
-            ReportCategory::Finance,
-            client,
-            "/v1/analytics/stocks",
-            // skus[] обязательны, ≤100 за запрос. Если не переданы — auto-fill
-            // через /v3/product/list, затем батчинг. Ответ: {items:[...]}.
-            PaginationKind::Skus,
-        )),
-        "ozon.analytics_turnover" => Arc::new(OzonPaginatedReport::new(
-            "ozon.analytics_turnover",
-            "Оборачиваемость товара",
-            ReportCategory::Finance,
-            client,
-            "/v1/analytics/turnover/stocks",
-            PaginationKind::Offset,
-        )),
-        // --- Начисления (замена deprecated transaction-list) ---
-        "ozon.accrual_postings" => Arc::new(OzonPaginatedReport::new(
-            "ozon.accrual_postings",
-            "Начисления по отправлениям",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/accrual/postings",
-            // posting_numbers[] обязательны (1–200). Если не переданы — auto-fill
-            // через /v2/posting/fbo/list, затем батчинг ≤200. Ответ: {posting_accruals:[...]}.
-            PaginationKind::AccrualPostings,
-        )),
-        "ozon.accrual_by_day" => Arc::new(OzonPaginatedReport::new(
-            "ozon.accrual_by_day",
-            "Начисления за день",
-            ReportCategory::Finance,
-            client,
-            "/v1/finance/accrual/by-day",
-            PaginationKind::LastId,
-        )),
-        _ => {
-            return Err(CoreError::ReportTypeNotSupported(type_id.to_string()));
-        }
     };
     Ok(report)
 }
@@ -524,7 +486,7 @@ impl Report for OzonReport {
         &self.display_name
     }
     fn category(&self) -> ReportCategory {
-        self.category.clone()
+        self.category
     }
     fn acquisition_mode(&self) -> AcquisitionMode {
         AcquisitionMode::Period
@@ -880,7 +842,7 @@ impl Report for OzonAsyncReport {
         &self.display_name
     }
     fn category(&self) -> ReportCategory {
-        self.category.clone()
+        self.category
     }
     fn acquisition_mode(&self) -> AcquisitionMode {
         AcquisitionMode::Period
@@ -1048,6 +1010,7 @@ impl Report for OzonAsyncReport {
 // =========================================================================
 
 /// Стратегия пагинации эндпоинта (сверено с докой каждого метода).
+#[derive(Clone, Copy)]
 enum PaginationKind {
     /// /v1/finance/cash-flow-statement/list: `{result:{cash_flows:[...], page_count:N}}`.
     /// Запрос: `{date, page, page_size}`. Цикл по page=1..=page_count.
@@ -1120,7 +1083,7 @@ impl Report for OzonPaginatedReport {
         &self.display_name
     }
     fn category(&self) -> ReportCategory {
-        self.category.clone()
+        self.category
     }
     fn acquisition_mode(&self) -> AcquisitionMode {
         AcquisitionMode::Period

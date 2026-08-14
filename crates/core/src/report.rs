@@ -16,7 +16,7 @@ use crate::params::{ReportParams, ReportParameter};
 use crate::progress::ProgressCallbackRef;
 
 /// Категория отчёта (для группировки в UI).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReportCategory {
     /// Финансовые отчёты (реализация, взаиморасчёты, баланс, ДДС).
     Finance,
