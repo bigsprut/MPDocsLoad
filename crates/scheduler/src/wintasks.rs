@@ -22,7 +22,7 @@ const POLL_MINUTES: u32 = 5;
 pub fn enable_windows_scheduler() -> CoreResult<()> {
     let cli = cli_exe_path()?;
     // /TR-действие: "<cli>" schedule run  (exe в кавычках на случай пробелов в пути).
-    let action = format!("\"{}\" schedule run", cli.display());
+    let action = format!("\"{}\" schedule run --by-task", cli.display());
     let out = Command::new("schtasks")
         .args(["/Create", "/TN", TASK_NAME, "/TR"])
         .arg(&action)

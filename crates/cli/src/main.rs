@@ -113,7 +113,12 @@ enum ScheduleCmd {
     /// Удалить расписание.
     Delete { name: String },
     /// Запустить все просроченные расписания.
-    Run,
+    Run {
+        /// Запуск фоновой задачей Windows Task Scheduler (ставится самой
+        /// задачей; помечает записи журнала источником «задача Windows»).
+        #[arg(long)]
+        by_task: bool,
+    },
     /// Управление автозапуском с Windows.
     Autostart {
         #[arg(long)]
