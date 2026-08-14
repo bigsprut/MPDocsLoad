@@ -6,7 +6,8 @@
 ; Результат: installer\Output\MDWFSetup-<version>.exe
 ;
 ; Что делает инсталлятор:
-;   - Копирует relocatable-бандл в {autopf}\MDWF (Program Files).
+;   - Копирует relocatable-бандл в {autopf}\MDWF: при per-user установке
+;     (по умолчанию, без прав админа) — %LOCALAPPDATA%\Programs\MDWF.
 ;   - ПОСЛЕ копирования запускает postinstall.bat — пересобирает loaders.cache
 ;     и gsettings-схемы под абсолютный путь установки (бандл relocatable).
 ;   - Ярлык в меню Пуск (и опционально на рабочем столе).
@@ -37,7 +38,17 @@ UninstallDisplayName={#MyAppName}
 OutputDir=Output
 OutputBaseFilename=MDWFSetup-{#MyAppVersion}
 ; Файлы берём из собранного бандла (build-release.sh → dist/mdwf/).
-PrivilegesRequiredOverridesAllowed=dialog
+;
+; Per-user установка БЕЗ прав админа (UAC не запрашивается):
+;   - у MDWF нет системных компонентов (keyring/config/scheduler — все per-user);
+;   - PrivilegesRequired=lowest → {autopf} = %LOCALAPPDATA%\Programs;
+;   - /ALLUSERS в командной строке — явная машинная установка, если когда-либо
+;     понадобится (overrides allowed=commandline).
+; ⚠️ Апгрейд поверх СТАРОЙ админ-установки (Program Files) не подхватится
+; автоматически (uninstall-ключ в HKLM, а per-user смотрит HKCU) — старую
+; копию удалить вручную.
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=commandline
 ; AppMutex: НЕ дать ставить поверх запущенного MDWF. Имя mutex ДОЛЖНО совпадать
 ; с SINGLE_INSTANCE_NAME в crates/gui/src/main.rs (захватывается на старте GUI).
 ; Inno проверяет наличие mutex — если MDWF запущен, попросит его закрыть.
