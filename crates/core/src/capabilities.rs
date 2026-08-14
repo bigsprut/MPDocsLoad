@@ -66,6 +66,13 @@ pub struct ReportDescriptor {
     /// ≤ капа (balance ≤30, buyout/placement ≤31 у Ozon — иначе 4xx от API).
     #[serde(default)]
     pub max_range_days: Option<u32>,
+    /// Где отчёт находится в личном кабинете маркетплейса (например,
+    /// «Финансы → Документы → Реестр продаж юр. лицам»). Источник — официальная
+    /// документация («Соответствует разделу… в личном кабинете»). GUI показывает
+    /// в списке отчётов и инфо-панели «Загрузки». None — путь неизвестен
+    /// (документация не указывает) — НЕ выдумывать.
+    #[serde(default)]
+    pub cabinet_path: Option<String>,
 }
 
 /// Какой период принимает отчёт по API (для UI и логики «Скачать по периоду»).
@@ -96,6 +103,13 @@ impl ReportDescriptor {
     #[must_use]
     pub fn with_max_range_days(mut self, days: u32) -> Self {
         self.max_range_days = Some(days);
+        self
+    }
+
+    /// Устанавливает путь в личном кабинете маркетплейса (для списков GUI).
+    #[must_use]
+    pub fn with_cabinet_path(mut self, path: &str) -> Self {
+        self.cabinet_path = Some(path.to_string());
         self
     }
 }

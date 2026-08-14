@@ -42,6 +42,11 @@ pub struct DownloadedFile {
     /// `None` если файл уже записан провайдером или контент не возвращается.
     #[serde(skip)]
     pub content: Option<Vec<u8>>,
+    /// Примечание к файлу для пользователя (GUI показывает в Журнале, CLI —
+    /// в выводе). Пример: отчёт собран программой, т.к. серверная генерация
+    /// маркетплейса не удалась. `None` — обычное скачивание без особенностей.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 impl DownloadedFile {
@@ -58,6 +63,7 @@ impl DownloadedFile {
             source_url: None,
             document_date: None,
             content: None,
+            note: None,
         }
     }
 

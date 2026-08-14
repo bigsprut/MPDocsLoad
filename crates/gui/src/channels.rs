@@ -370,6 +370,8 @@ pub struct ReportInfo {
     pub description: Option<String>,
     /// Жёсткий кап диапазона дат API (в днях). GUI режет длинные интервалы на окна.
     pub max_range_days: Option<u32>,
+    /// Где отчёт находится в ЛК маркетплейса (для списка «Отчёты» и инфо-панели).
+    pub cabinet_path: Option<String>,
 }
 
 /// Пара type_id → человекочитаемое имя для combo «Отчёт» в Архиве.

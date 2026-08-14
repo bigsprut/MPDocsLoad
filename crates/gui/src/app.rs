@@ -799,6 +799,7 @@ async fn load_reports(domain: &Domain, provider_id: &str) -> Result<Vec<ReportIn
             period_kind: r.period_kind,
             description: r.description.clone(),
             max_range_days: r.max_range_days,
+            cabinet_path: r.cabinet_path.clone(),
         })
         .collect();
     Ok(reports)
@@ -1058,10 +1059,22 @@ async fn do_download(
 
     match saved {
         Ok(paths) => {
+            // Особые пометки файлов (напр., отчёт собран программой — серверная
+            // генерация Ozon не удалась) попадают в Журнал, чтобы было видно
+            // происхождение файла.
+            let note = files
+                .iter()
+                .find_map(|f| f.note.clone())
+                .unwrap_or_default();
+            let note_suffix = if note.is_empty() {
+                String::new()
+            } else {
+                format!(" — внимание: {note}")
+            };
             log_event(
                 fwd,
                 crate::channels::LogKind::Success,
-                format!("{report_type}: скачано {} файл(ов)", files.len()),
+                format!("{report_type}: скачано {} файл(ов){note_suffix}", files.len()),
             );
             Ok(crate::channels::DownloadResult {
                 files,

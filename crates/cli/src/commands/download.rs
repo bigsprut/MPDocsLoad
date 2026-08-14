@@ -117,6 +117,9 @@ fn persist(
         let (stored, dir) = ctx.file_store.save_with_dir(content, &ctx_file)?;
         let full_path = dir.join(&stored.file_name);
         println!("    → {} ({} байт)", stored.file_name, stored.size);
+        if let Some(note) = &f.note {
+            println!("    примечание: {note}");
+        }
 
         let new_dl = mdwf_storage::NewDownload {
             profile_id,

@@ -158,20 +158,44 @@ pub fn on_reports_loaded(res: &Result<Vec<ReportInfo>, String>) {
             for r in reports {
                 // Показываем только человекочитаемое имя; технический type_id —
                 // в tooltip для справки (не в основном тексте).
+                let row = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
                 let label = Label::builder()
                     .label(&r.display_name)
                     .halign(gtk4::Align::Start)
                     .build();
+                row.append(&label);
+                if let Some(cab) = &r.cabinet_path {
+                    let cab_label = Label::builder()
+                        .label(format!("ЛК: {cab}"))
+                        .halign(gtk4::Align::Start)
+                        .css_classes(["dim-label"])
+                        .build();
+                    row.append(&cab_label);
+                }
                 let mode = if r.is_browsable {
                     "список документов"
                 } else {
                     "по периоду"
                 };
-                label.set_tooltip_text(Some(&format!(
-                    "{}\nКатегория: {}\nРежим: {}\nИдентификатор: {}",
-                    r.display_name, r.category, mode, r.type_id
-                )));
-                list_box.append(&label);
+                let tooltip = match &r.cabinet_path {
+                    Some(cab) => format!(
+                        "{}
+Категория: {}
+Режим: {}
+Идентификатор: {}
+В ЛК: {}",
+                        r.display_name, r.category, mode, r.type_id, cab
+                    ),
+                    None => format!(
+                        "{}
+Категория: {}
+Режим: {}
+Идентификатор: {}",
+                        r.display_name, r.category, mode, r.type_id
+                    ),
+                };
+                label.set_tooltip_text(Some(&tooltip));
+                list_box.append(&row);
             }
         }
     }

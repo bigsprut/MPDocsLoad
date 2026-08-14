@@ -107,6 +107,9 @@ struct ReportDef {
     category: ReportCategory,
     period_kind: PeriodKind,
     description: &'static str,
+    /// Раздел личного кабинета продавца (из docs.ozon.ru «Соответствует
+    /// разделу… в личном кабинете»). None — документация путь не указывает.
+    cabinet: Option<&'static str>,
     params: DefParams,
     max_range_days: Option<u32>,
     dispatch: Dispatch,
@@ -124,6 +127,7 @@ impl ReportDef {
             period_kind: self.period_kind,
             description: Some(self.description.into()),
             max_range_days: self.max_range_days,
+            cabinet_path: self.cabinet.map(Into::into),
         }
     }
 }
@@ -137,6 +141,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Month,
         description: "Финансовый отчёт о реализации за месяц. Строго месячный — за интервал соберём по месяцам.",
+        cabinet: Some("Финансы → Документы → Отчёты о реализации → Отчёт о реализации товара"),
         params: DefParams::MonthField,
         max_range_days: None,
         dispatch: Dispatch::Direct("/v2/finance/realization"),
@@ -149,6 +154,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Month,
         description: "Позаказный отчёт о реализации за месяц (async). Строго месячный.",
+        cabinet: Some("Финансы → Документы → Отчёты о реализации → Позаказный отчёт о реализации"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/report/realization/posting/create"),
@@ -159,6 +165,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Range,
         description: "Выкупы маркетплейсом в ЕАЭС за период (диапазон ≤31 дня).",
+        cabinet: Some("Финансы → Документы → УПД по сделкам с юр. лицами → УПД по выкупленным товарам"),
         params: DefParams::DateRange,
         max_range_days: Some(31),
         dispatch: Dispatch::Direct("/v1/finance/products/buyout"),
@@ -169,6 +176,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Range,
         description: "Баланс кошелька за период (диапазон ≤30 дней).",
+        cabinet: Some("Финансы → Баланс"),
         params: DefParams::None,
         max_range_days: Some(30),
         dispatch: Dispatch::Direct("/v1/finance/balance"),
@@ -179,6 +187,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Range,
         description: "Движение средств по датам за период (диапазон, без жёсткого лимита дней).",
+        cabinet: Some("Финансы → Баланс → Доходы и расходы"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Paginated(
@@ -193,6 +202,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Day,
         description: "Начисления по дням выбранного месяца (цикл по всем дням месяца).",
+        cabinet: None,
         params: DefParams::DayField,
         max_range_days: None,
         dispatch: Dispatch::Paginated("/v1/finance/accrual/by-day", PaginationKind::LastId),
@@ -204,6 +214,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::None,
         description: "Начисления по отправлениям (номера подставляются автоматически за период).",
+        cabinet: None,
         params: DefParams::Text {
             id: "posting_numbers",
             label: "Номера отправлений (через запятую, 1–200)",
@@ -221,6 +232,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Month,
         description: "Компенсации за месяц (async). Строго месячный.",
+        cabinet: Some("Финансы → Документы → Отчёты о компенсациях"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/finance/compensation"),
@@ -231,6 +243,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Penalties,
         period_kind: PeriodKind::Month,
         description: "Декомпенсации и штрафы за месяц (async). Строго месячный.",
+        cabinet: Some("Финансы → Документы → Отчёты о декомпенсациях"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/finance/decompensation"),
@@ -242,6 +255,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Month,
         description: "Реестр продаж юрлицам за месяц, PDF (async). Строго месячный.",
+        cabinet: Some("Финансы → Документы → Реестр продаж юр. лицам"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/finance/document-b2b-sales"),
@@ -252,6 +266,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Month,
         description: "Отчёт о взаиморасчётах за месяц (async). Строго месячный.",
+        cabinet: Some("Финансы → Документы → Аналитические отчёты → Отчёт о взаиморасчётах"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/finance/mutual-settlement"),
@@ -263,6 +278,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::None,
         description: "Отчёт по товарам (без привязки к периоду, async).",
+        cabinet: Some("Товары и цены → Список товаров → Скачать → Товары CSV"),
         params: DefParams::None,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/report/products/create"),
@@ -275,6 +291,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Отчёт о возвратах за период (диапазон дат).",
+        cabinet: Some("Возвраты"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Paginated("/v1/returns/list", PaginationKind::ReturnsList),
@@ -285,6 +302,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Отчёт об отправлениях за период (диапазон дат, async).",
+        cabinet: Some("FBO → Заказы со склада Ozon / FBS → Заказы с моих складов (CSV)"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/report/postings/create"),
@@ -295,6 +313,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::None,
         description: "Отчёт об уценённых товарах (без привязки к периоду, async).",
+        cabinet: Some("Аналитика → Отчёты → Товары, уценённые Ozon"),
         params: DefParams::None,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/report/discounted/create"),
@@ -307,6 +326,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         period_kind: PeriodKind::None,
         description: "Остатки на FBS-складе (ID складов подставляются автоматически). \
              Для схемы FBO складов нет — используйте отчёт «Аналитика по остаткам».",
+        cabinet: Some("FBS → Управление логистикой → Управление остатками (XLS)"),
         params: DefParams::Text {
             id: "warehouse_ids",
             label: "ID складов (через запятую)",
@@ -320,6 +340,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Стоимость размещения по товарам за период (диапазон ≤31 дня, async).",
+        cabinet: Some("FBO → Стоимость размещения (по товарам)"),
         params: DefParams::DateRange,
         max_range_days: Some(31),
         dispatch: Dispatch::Async("/v1/report/placement/by-products/create"),
@@ -330,6 +351,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Стоимость размещения по поставкам за период (диапазон ≤31 дня, async).",
+        cabinet: Some("FBO → Стоимость размещения (по поставкам)"),
         params: DefParams::DateRange,
         max_range_days: Some(31),
         dispatch: Dispatch::Async("/v1/report/placement/by-supplies/create"),
@@ -340,6 +362,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Продажи маркированных товаров за период (диапазон дат, async).",
+        cabinet: None,
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Async("/v1/report/marked-products-sales/create"),
@@ -352,6 +375,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::None,
         description: "Аналитика по остаткам (SKU подставляются автоматически, без даты — срез).",
+        cabinet: Some("FBO → Управление остатками (аналитика)"),
         params: DefParams::Text {
             id: "skus",
             label: "SKU (через запятую, ≤100)",
@@ -365,6 +389,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Finance,
         period_kind: PeriodKind::None,
         description: "Оборачиваемость товара (без привязки к периоду — срез).",
+        cabinet: Some("FBO → Управление остатками (аналитика)"),
         params: DefParams::None,
         max_range_days: None,
         dispatch: Dispatch::Paginated("/v1/analytics/turnover/stocks", PaginationKind::Offset),
@@ -1105,11 +1130,21 @@ impl OzonAsyncReport {
             .save_to_buffer()
             .map_err(|e| CoreError::Internal(format!("xlsx write: {e}")))?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
-        Ok(vec![DownloadedFile::with_content(
+        let mut file = DownloadedFile::with_content(
             format!("{}_{}.xlsx", self.type_id, period),
             "xlsx",
             bytes,
-        )])
+        );
+        // Пометка для пользователя (GUI — в Журнал, CLI — в вывод): файл собран
+        // программой, а не сгенерирован сервером Ozon.
+        file.note = Some(format!(
+            "Ozon не смог сформировать отчёт на своей стороне (3 попытки) —              программа собрала его сама из данных отправлений: {} шт.",
+            postings.len()
+        ));
+        progress.report(mdwf_core::ProgressUpdate::message(
+            "Отчёт собран программой из данных отправлений (серверная генерация Ozon не удалась)",
+        ));
+        Ok(vec![file])
     }
 }
 

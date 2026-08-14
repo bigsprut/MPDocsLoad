@@ -70,7 +70,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             ReportCategory::Finance,
             PeriodKind::None,
             "Текущий баланс продавца (срез на момент запроса, без периода).",
-        ),
+        ).with_cabinet_path("WB → Финансы → Баланс"),
         // --- Финансы (finance-api, POST) ---
         desc_period(
             "wb.sales_reports_list",
@@ -78,28 +78,28 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             ReportCategory::Finance,
             PeriodKind::Range,
             "Реестр отчётов реализации за период.",
-        ),
+        ).with_cabinet_path("WB → Финансы → Отчёты о реализации (реестр)"),
         desc_period(
             "wb.sales_reports_detailed",
             "Детализация реализации (за период)",
             ReportCategory::Finance,
             PeriodKind::Range,
             "Детализация реализации за период.",
-        ),
+        ).with_cabinet_path("WB → Финансы → Отчёты о реализации (детализация)"),
         desc_period(
             "wb.acquiring_list",
             "Эквайринг (список)",
             ReportCategory::Finance,
             PeriodKind::Range,
             "Эквайринг — список операций за период.",
-        ),
+        ).with_cabinet_path("WB → Финансы → Эквайринг"),
         desc_period(
             "wb.acquiring_detailed",
             "Эквайринг (детализация)",
             ReportCategory::Finance,
             PeriodKind::Range,
             "Эквайринг — детализация операций за период.",
-        ),
+        ).with_cabinet_path("WB → Финансы → Эквайринг (детализация)"),
         // --- Документы (documents-api, GET) ---
         desc_browsable(
             "wb.documents",
@@ -107,7 +107,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             ReportCategory::Documents,
             PeriodKind::Range,
             "Документы (УПД/УКД/акты) по категории за период.",
-        ),
+        ).with_cabinet_path("WB → Документы (УПД/акты)"),
         // --- Статистика (statistics-api, GET) ---
         desc_browsable(
             "wb.orders",
@@ -116,7 +116,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Заказы, изменёншиеся с начала периода (API фильтрует по дате изменения; \
              WB хранит данные 90 дней).",
-        ),
+        ).with_cabinet_path("WB → Отчёты → Заказы"),
         desc_browsable(
             "wb.sales",
             "Продажи",
@@ -124,7 +124,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Продажи, изменявшиеся с начала периода (API фильтрует по дате изменения; \
              WB хранит данные 90 дней).",
-        ),
+        ).with_cabinet_path("WB → Отчёты → Продажи"),
         // --- Удержания (seller-analytics-api, GET) ---
         desc_browsable(
             "wb.deductions",
@@ -132,14 +132,14 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             ReportCategory::Penalties,
             PeriodKind::Range,
             "Штрафы за подмены и неверные вложения за период.",
-        ),
+        ).with_cabinet_path("WB → Аналитика → Удержания (штрафы за подмены)"),
         desc_browsable(
             "wb.measurement_penalties",
             "Штрафы за габариты",
             ReportCategory::Penalties,
             PeriodKind::Range,
             "Штрафы за занижение габаритов за период.",
-        ),
+        ).with_cabinet_path("WB → Аналитика → Штрафы за габариты"),
         desc_browsable(
             "wb.antifraud",
             "Самовыкупы (антифрод)",
@@ -147,7 +147,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Отчёт по самовыкупам (антифрод), еженедельный. Выгружаются все данные, \
              фильтрация по периоду выполняется локально.",
-        ),
+        ).with_cabinet_path("WB → Аналитика → Самовыкупы (антифрод)"),
         // --- Возвраты (claims) — спека 09-communications.yaml ---
         desc_browsable(
             "wb.claims",
@@ -156,7 +156,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Заявки на возврат товаров. API WB отдаёт заявки только за последние \
              14 дней; выгружаются и активные, и архивные.",
-        ),
+        ).with_cabinet_path("WB → Возвраты → Заявки покупателей"),
         // --- Async-отчёт приёмки (спека 12-reports.yaml) ---
         desc_period(
             "wb.acceptance_report",
@@ -165,7 +165,7 @@ pub fn all_report_descriptors() -> Vec<ReportDescriptor> {
             PeriodKind::Range,
             "Аналитический отчёт приёмки за период (до 31 дня). Формируется на \
              стороне WB — выгрузка может занять несколько минут.",
-        )
+        ).with_cabinet_path("WB → Аналитика → Отчёт приёмки")
         .with_max_range_days(31),
     ]
 }
@@ -189,6 +189,7 @@ fn desc_period(
         parameters: vec![param_date_range()],
         period_kind,
         description: Some(description.into()),
+        cabinet_path: None,
         max_range_days: None,
     }
 }
@@ -210,6 +211,7 @@ fn desc_browsable(
         parameters: vec![param_date_range()],
         period_kind,
         description: Some(description.into()),
+        cabinet_path: None,
         max_range_days: None,
     }
 }

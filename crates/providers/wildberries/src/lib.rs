@@ -43,4 +43,4 @@ pub use client::{RateLimiter, RetryPolicy, WbDomain, WbHttpClient};
 pub use date_format::{format_date_moscow, format_moscow_rfc3339};
 pub use documents::{DocumentCategory, DocumentsClient, ListDocumentsParams, WbDocument};
 pub use provider::WildberriesProvider;
-pub use reports::out_of_scope;
+pub use reports::{all_report_descriptors, out_of_scope};

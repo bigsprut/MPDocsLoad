@@ -192,6 +192,7 @@ impl TestProvider {
                 period_kind: mdwf_core::PeriodKind::Range,
                 description: Some(format!("Тестовый отчёт «{}» (mock).", r.display_name)),
                 max_range_days: None,
+                cabinet_path: None,
             })
             .collect();
         let capabilities = Capabilities {

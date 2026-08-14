@@ -166,6 +166,19 @@ pub fn build() -> gtk4::Widget {
         ],
     );
 
+    // --- 8b. Отчёты и их расположение в ЛК (динамически из дескрипторов
+    // провайдеров — список всегда актуален, без ручной синхронизации) ---
+    h2(&col, "8a. Отчёты и их расположение в личном кабинете");
+    let intro = mlabel(
+        "Полный список отчётов, доступных для скачивания, и раздел личного кабинета маркетплейса, где этот отчёт находится (по официальной документации API). «—» — документация путь не указывает.",
+    );
+    col.append(&intro);
+    for (mp_name, lines) in reports_lk_sections() {
+        h3(&col, mp_name);
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        bullets(&col, &refs);
+    }
+
     // --- 9. FAQ ---
     h2(&col, "9. Частые вопросы и проблемы");
     faq(
@@ -243,6 +256,31 @@ fn h2(col: &gtk4::Box, text: &str) {
     col.append(&l);
 }
 
+/// Строки раздела «Отчёты и их расположение в ЛК» по маркетплейсам:
+/// «Имя — путь в ЛК» («—» = документация путь не указывает). Чистая функция
+/// от дескрипторов провайдеров — раздел всегда актуален, тест сверяет полноту.
+pub(crate) fn reports_lk_sections() -> Vec<(&'static str, Vec<String>)> {
+    [
+        ("Ozon", mdwf_providers_ozon::all_report_descriptors()),
+        ("Wildberries", mdwf_providers_wildberries::all_report_descriptors()),
+    ]
+    .into_iter()
+    .map(|(mp, descs)| {
+        let lines = descs
+            .iter()
+            .map(|d| {
+                format!(
+                    "{} — {}",
+                    d.display_name,
+                    d.cabinet_path.as_deref().unwrap_or("—")
+                )
+            })
+            .collect();
+        (mp, lines)
+    })
+    .collect()
+}
+
 /// Под-подзаголовок.
 fn h3(col: &gtk4::Box, text: &str) {
     let l = mlabel(&format!("<b>{text}</b>"));
@@ -286,3 +324,30 @@ fn faq(col: &gtk4::Box, q: &str, a: &str) {
 // Подавление unused-import предупреждения для glib (нужен trait-ам виджетов).
 #[allow(unused_imports)]
 use glib as _glib;
+
+#[cfg(test)]
+mod lk_tests {
+    use super::reports_lk_sections;
+
+    #[test]
+    fn help_lists_all_reports_with_cabinet() {
+        let sections = reports_lk_sections();
+        // Оба маркетплейса, все отчёты (21 Ozon + 13 WB), у каждой строки
+        // формат «Имя — путь» (путь может быть «—»).
+        let counts: Vec<(usize, usize)> = sections
+            .iter()
+            .map(|(mp, lines)| {
+                assert!(!lines.is_empty(), "{mp}: пусто");
+                for l in lines {
+                    assert!(l.contains(" — "), "нет разделителя: {l}");
+                }
+                (lines.len(), lines.iter().filter(|l| !l.ends_with('—')).count())
+            })
+            .collect();
+        assert_eq!(counts[0].0, 21, "Ozon: должно быть 21 отчёт");
+        assert_eq!(counts[1].0, 13, "WB: должно быть 13 отчётов");
+        // У большинства путь известен (None только у 3 Ozon-отчётов).
+        assert!(counts[0].1 >= 18, "Ozon: ЛК-пути менее 18: {}", counts[0].1);
+        assert!(counts[1].1 >= 13, "WB: ЛК-пути менее 13: {}", counts[1].1);
+    }
+}

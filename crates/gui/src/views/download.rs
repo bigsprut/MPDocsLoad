@@ -866,7 +866,14 @@ fn update_mode_hint() {
                         "🔹 Без привязки к периоду (срез/справочник).".to_string()
                     }
                 };
-                format!("{head} {note}")
+                // Где отчёт находится в ЛК маркетплейса (путь из официальной
+                // документации) — тем же приглушённым текстом в конец панели.
+                let cab = info
+                    .as_ref()
+                    .and_then(|r| r.cabinet_path.as_deref())
+                    .map(|c| format!(" В ЛК: {c}."))
+                    .unwrap_or_default();
+                format!("{head} {note}{cab}")
             };
             l.set_text(&text);
         }

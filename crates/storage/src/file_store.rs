@@ -112,6 +112,7 @@ impl FileStore {
                 downloaded_at: Utc::now(),
                 source_id: ctx.document_id.map(str::to_string),
                 source_url: None,
+                note: None,
                 document_date: ctx.document_date.map(str::to_string),
                 content: None,
             },

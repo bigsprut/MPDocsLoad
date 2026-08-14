@@ -287,5 +287,8 @@ async fn postings_build_failure_falls_back_to_fbo_list() {
     assert_eq!(files[0].extension, "xlsx");
     let bytes = files[0].content.as_ref().unwrap();
     assert_eq!(&bytes[..2], b"PK", "xlsx = ZIP");
+    // Пометка пользователю: файл собран программой (сервер не смог).
+    let note = files[0].note.as_deref().unwrap_or_default();
+    assert!(note.contains("собрала его сама"), "note: {note}");
     std::env::remove_var("MDWF_OZON_BUILD_RETRY_MS");
 }
