@@ -6,26 +6,31 @@
 
 ## 0. Снимок состояния (для быстрого старта)
 
-- **HEAD:** `9ee0e62` (master = origin/master, рабочее дерево чистое; все наработки
-  2026-08-14 запушены: UX-пакет чата, P0-P2 фиксы, symbolic-иконки, REPORT_DEFS
-  4→1, выделение активного пункта sidebar).
-- **Зелёное состояние:** `cargo test --workspace` exit=0; clippy `-D warnings`=0
-  по всем крейтам.
+- **HEAD:** `06b04cc` (master = origin/master, рабочее дерево чистое; наработки
+  2026-08-14 запушены: UX-пакет, P0-P2 фиксы, symbolic-иконки, REPORT_DEFS 4→1,
+  sidebar, **живой WB-аудит**).
+- **Зелёное состояние:** `cargo test --workspace` exit=0 (23 сюита);
+  clippy `-D warnings`=0 по всем крейтам.
+- **Сделано этим чатом (2026-08-14, вечер):**
+  1. **Инсталлер пересобран** после UX-пакета (`MDWFSetup-1.4.0.exe`, 16:05);
+     ПЕРЕСОБРАН СНОВА после WB-фиксов (см. ниже) — выдача пользователю актуальна.
+  2. **Живой WB-аудит ЗАВЕРШЁН** (главный фронт §0 закрыт): сверка всех
+     эндпоинтов с официальной OpenAPI-спекой (зеркало eslazarev/wildberries-sdk,
+     specs/*.yaml) + baseline-прогон + фиксы + повторный живой прогон —
+     **12/12 отчётов OK**. Ключевое: detailed-финансы молча обрезались на
+     1000 строк (теперь rrdId-курсор: 3217 строк за июль); claims без
+     обязательного is_archive (400); acceptance_report переписан на
+     GET create→poll→download. Коммит `06b04cc`.
 - **Ближайшие задачи (в порядке приоритета):**
-  1. **Пересобрать инсталлер** перед выдачей пользователю (`build-setup.cmd` /
-     `bash scripts/build-setup.sh`) — текущий setup.exe собран ДО UX-пакета
-     (устаревший UI).
-  2. **Живой WB-аудит** (13 отчётов WB никогда не тестировались живьём; claims
-     эндпоинт не подтверждён докой; acceptance_report только create-фаза;
-     finance offset:0 без пагинации).
-  3. Опционально/отложено: типизация ошибки breaker-open (сейчас Internal);
-     WB RateLimiter.backoff без max (аналог P0-3, низкий импакт);
-     blocking-SQLite-in-async (keyring-часть сделана в P2-5).
-- **Живые API-тесты разрешены пользователем** (токены перевыпущены, профиль
-  Ozon `oz_prof1` создан; WB-профиль — см. dist/_uitest и историю чатов).
-- Ключевые уроки этого дня: **#53-57** (cron-локаль, cargo test ≠ build,
-  CssProvider мёртв в GTK 4.20 → css-классы виджета, нода ≠ css-класс,
-  гниющие пиксель-координаты → re-OCR перед сэмплом).
+  1. Опционально/отложено: WB-отчёты сохраняются как JSON (Ozon конвертирует
+     в xlsx с русскими колонками) — потенциальный UX-хвост.
+  2. Отложено: типизация ошибки breaker-open (сейчас Internal); WB
+     RateLimiter.backoff без max (низкий импакт); blocking-SQLite-in-async.
+- **Живые API-тесты разрешены пользователем** (токены перевыпущены, профили
+  `oz_prof1` + `wb_prof` созданы, ключи валидны).
+- Ключевые уроки этого дня: **#53-58** (cron-локаль, cargo test ≠ build,
+  CssProvider мёртв в GTK 4.20, нода ≠ css-класс, гниющие координаты →
+  re-OCR, тихие потери данных WB без сверки со спекой).
 
 ---
 
@@ -179,7 +184,7 @@ crates/
 **Дополнительно (отдельно от 6 пунктов):**
 - ✅ **Живые тесты API Ozon** — пользователь разрешил; токены перевыпущены,
   профиль `oz_prof1` создан. Живой клик-тест GUI тоже выполнялся (методология
-  урока #51). **Живой WB-аудит ещё НЕ проводился** — см. снимок состояния §0.
+  урока #51). **Живой WB-аудит ВЫПОЛНЕН** (см. снимок состояния §0 и секцию 14).
 
 ---
 
@@ -187,6 +192,12 @@ crates/
 
 Последние коммиты на `master` (свежие сверху):
 ```
+06b04cc fix(wb): живой аудит API — пагинация финансов, claims, acceptance poll→download
+7b71524 docs: PROJECT_STATUS — снимок состояния §0 для хэндоффа (HEAD 9ee0e62, бэклог, уроки #53-57)
+9ee0e62 fix(gui): активный пункт sidebar — жирный+accent (CssProvider в GTK 4.20 не применяется)
+cc4ebfc fix(gui): явное выделение активного пункта sidebar
+61a3c22 docs: PROJECT_STATUS — symbolic-иконки + унификация таблицы отчётов
+2fb645f feat(gui): миграция эмодзи-кнопок на Adwaita symbolic-иконки
 96b185c feat(ozon): авто-fill ID складов для warehouse_stock (/v2/warehouse/list)
 c64e9ae feat(cli): флаги --posting-numbers/--warehouse-ids/--skus (остаток A)
 864e2e6 fix(ozon): A/B/C — период→даты, поллинг report/info, accrual_by_day по дням
@@ -397,28 +408,81 @@ dd66056 fix: убрать clear_profiles() из старта (баг: профи
 
 ---
 
-## 7. API WB — сверен с официальной документацией
+## 7. API WB — сверен с официальной спекой + живым прогоном (аудит 2026-08-14)
 
-**Источник:** dev.wildberries.ru (разделы: Баланс, Финансы, Документы, Отчёты, Аналитика).
-Схема WB также сверена через зеркало `github.com/eslazarev/wildberries-sdk`
-(генерируется из OpenAPI-спеки WB; сам dev.wildberries.ru за антиботом).
+**Источник:** официальная OpenAPI-спека WB через зеркало `github.com/eslazarev/
+wildberries-sdk`, каталог `specs/*.yaml` (14 файлов, генерируются из
+dev.wildberries.ru; сам сайт за антиботом). Всё ниже ПОДТВЕРЖДЕНО живым прогоном
+(wb_prof, период 2026-07, 12/12 отчётов OK).
 
-### Домены (ВСЕ подтверждены nslookup + докой)
+### Домены (ВСЕ подтверждены nslookup + спекой)
 | Домен | Назначение |
 |-------|-----------|
 | `finance-api.wildberries.ru` | Баланс, отчёты реализации, эквайринг |
 | `documents-api.wildberries.ru` | Категории, список, скачивание документов |
 | `statistics-api.wildberries.ru` | Заказы, продажи |
-| `seller-analytics-api.wildberries.ru` | Штрафы, антифрод, возвраты, приёмка |
-| `returns-api.wildberries.ru` | Возвраты (claims) — по спеке, не проверено в доках |
+| `seller-analytics-api.wildberries.ru` | Штрафы, антифрод, приёмка |
+| `returns-api.wildberries.ru` | Возвраты (claims) — подтверждено спекой 09-communications |
 
 **api.wildberries.ru НЕ существует (NXDOMAIN) — не использовать!**
 
-### Documents API WB (детали)
+### Баланс
+- `GET /api/v1/account/balance`, БЕЗ параметров. Ответ — ПЛОСКИЙ объект
+  `{currency, current, for_withdraw}` (никакого `{data:[...]}`). Лимит 1/мин.
+
+### Финансы (все POST, тело JSON; даты RFC3339 Москва, годится и `YYYY-MM-DD`)
+- **list-методы** (`/api/finance/v1/sales-reports/list`, `/acquiring/list`):
+  тело `{dateFrom*, dateTo*, limit≤1000, offset}`; ответ — ПРЯМОЙ массив,
+  `total` НЕТ → конец по неполной странице.
+- **detailed-методы** (`/sales-reports/detailed`, `/acquiring/detailed`):
+  тело `{dateFrom*, dateTo*, limit≤100000, rrdId}`; пагинация — КУРСОР rrdId
+  последней строки; конец данных — **204 No Content** (клиент обязан трактовать
+  как пустой массив). offset НЕ существует. Живой прогон: июль = 3217 строк
+  (до фикса молча обрезалось до 1000). Есть также `POST .../detailed/{reportId}`
+  (reportId из list-строк, int64).
+- Лимит 1/мин.
+
+### Документы (documents-api, GET)
 - **categories:** GET /api/v1/documents/categories → `{data:{categories:[{name,title}]}}`
 - **list:** GET /api/v1/documents/list, параметры: `locale, beginTime, endTime, sort, order, category, serviceName, limit(≤50), offset` → `{data:{documents:[...]}}`. Поля документа (схема GetListDataDocumentsInner): `serviceName, name, category, extensions, creationTime, viewed`.
 - **download:** GET /api/v1/documents/download, параметры: `serviceName, extension` → `{data:{fileName, extension, document(base64)}}`.
 - **Rate limits documents:** 1 req/10s burst 5.
+
+### Статистика (statistics-api, GET)
+- `/api/v1/supplier/orders`, `/sales`: параметры ТОЛЬКО `dateFrom` (RFC3339,
+  фильтр по **lastChangeDate** — дате изменения, не дате заказа) и `flag`
+  (0|1). **dateTo и limit НЕ существуют** — не отправлять. Ответ — прямой
+  массив; курсорная пагинация (при >80k строк dateFrom = lastChangeDate
+  последней строки) — на объёмах месяца не требуется. Данные хранятся 90 дней.
+
+### Удержания (seller-analytics, GET)
+- `/api/analytics/v1/deductions`, `/measurement-penalties`: `dateFrom`
+  (date-time, опц.), **`dateTo` (date-time, ОБЯЗАТЕЛЕН)**, **`limit`
+  (ОБЯЗАТЕЛЕН, ≤1000)**, `offset`. Ответ `{data:{reports:[...],total}}` —
+  пагинация по total.
+
+### Антифрод (seller-analytics, GET)
+- `/api/v1/analytics/antifraud-details`: единственный параметр `date`
+  (ГГГГ-ММ-ДД, опц.; без него — все данные с авг 2023). dateFrom/dateTo/limit
+  НЕ существуют. Ответ `{details:[{nmID,sum,currency,dateFrom,dateTo}]}`
+  (недельные интервалы) → фильтрация по периоду ЛОКАЛЬНО (пересечение).
+  Лимит: 1 запрос/10 мин.
+
+### Возвраты claims (returns-api, GET) — подтверждено спекой
+- `GET /api/v1/claims`: параметры `is_archive` (**ОБЯЗАТЕЛЬНЫЙ** bool: false —
+  на рассмотрении, true — в архиве), `id`/`nm_id` (опц.), `limit` (1–200),
+  `offset`. **dateFrom/dateTo НЕ существуют** — сервер отдаёт заявки за
+  фиксированные последние 14 дней → фильтрация по периоду ЛОКАЛЬНО по `dt`.
+  Ответ `{claims:[...], total}`. Поля: `id(UUID), claim_type, status, nm_id,
+  user_comment, wb_comment, dt, imt_name, order_dt, photos[], ...`. Выгружаем
+  ОБА среза (is_archive false+true). Лимит 20/мин.
+
+### Приёмка acceptance_report (seller-analytics, GET, async) — реализовано
+- 1) `GET /api/v1/acceptance_report?dateFrom&dateTo` (**ГГГГ-ММ-ДД**, ≤31 дня)
+  → `{data:{taskId}}`; 2) poll `GET .../tasks/{id}/status` → `{data:{status}}`
+  до `done` (ошибочные: error/failed/cancel*); 3) `GET .../tasks/{id}/download`
+  → прямой массив строк; **204 = данных за период нет**. Таймаут 10 мин;
+  дескриптор `max_range_days=31` → GUI режет длинные интервалы на окна.
 
 ### Авторизация WB
 - Заголовок `Authorization: <token>` (БЕЗ префикса "Bearer ").
@@ -508,17 +572,20 @@ thread_local! {
 ## 11. Известные проблемы и TODO
 
 ### Не реализовано
-1. **Async-отчёты WB** (acceptance_report) — create→poll→download паттерн не реализован, только create-фаза
+1. ~~**Async-отчёты WB** (acceptance_report)~~ — **СДЕЛАНО** (аудит 2026-08-14):
+   полная реализация GET create→taskId→poll status→download, max_range_days=31.
 2. ~~**max_parallel_jobs** планировщика~~ — **ПОЧИНЕНО** (коммит c42a86b): RunningGuard
    (Drop) декремментит счётчик; раньше застопоривался после N задач.
 3. ~~**TestProvider в release**~~ — **ПОЧИНЕНО** (P2-4): TestProvider регистрируется
    только в debug-сборках.
 4. **Очистка rate-limiter от ожидания 60с в тестах** — `MDWF_WB_NO_RATELIMIT=1`
 5. **Автосохранение может восстанавливать test.documents** при провайдере WB — stale state (есть частичная защита от гонки).
+6. **WB-отчёты сохраняются как JSON** — Ozon конвертирует в xlsx с русскими
+   колонками, WB пока отдаёт pretty-JSON (потенциальный UX-хвост; в бэклоге).
 
 ### Не подтверждено первоисточником (может быть неверно)
-1. `returns-api.wildberries.ru` для claims — спека говорит `/api/v1/claims`, но в доке этого раздела нет
-2. Формат ответа claims — догадка
+- (пусто — claims-эндпоинт и формат ПОДТВЕРЖДЕНЫ спекой 09-communications.yaml
+  и живым прогоном 2026-08-14)
 
 ### Не-наши проблемы Ozon (ПЕРЕПРОВЕРЕНО этим чатом — не наш баг, в отличие от returns)
 - `ozon.b2b_sales` — `getFinanceDocumentID: finance document not found`. Запрос
@@ -916,6 +983,24 @@ thread_local! {
     каждым сэмплом заново OCR; и НЕ доверять усреднённому сэмплу строки
     (подложка selection затемняет текст) — искать акцент-ЦВЕТ (R−G>60),
     кластеризовать по y.
+58. **Тихие потери данных невидимы без сверки со спекой (WB-аудит).** Три класса
+    багов, которые НЕ проявляются как ошибки: (а) **обрезка** — detailed-финансы
+    WB отдавали ровно `limit:1000` строк и файл был ВАЛИДНЫМ, просто неполным
+    (июль: 1000 вместо 3217; детективный признак — размер ровно на лимите);
+    (б) **отсутствующий обязательный параметр** — claims без `is_archive` =
+    гарантированный 400, но код о нём не знал (спека — единственный источник
+    обязательности; сервер молчал бы, если бы параметр был опциональным);
+    (в) **лишние параметры** — statistics `dateTo`/`limit` не существуют
+    (могут игнорироваться или ломаться). Паттерны: **204 = конец курсора**
+    (не «ошибка протокола» — клиент обязан вернуть пустой массив); когда API
+    не поддерживает фильтр по периоду (claims: окно 14 дней; antifraud: только
+    date) — фильтровать ЛОКАЛЬНО и честно писать ограничение в описание
+    дескриптора; универсальный «ResponseShape-подход» (данные где-то в JSON)
+    слабее явного enum семейства запроса (метод+параметры+пагинация в одном
+    месте — `WbQueryKind`). И главное: «пустой результат» ≠ «сломано», но и
+    ≠ «работает» — пустые deductions/claims/antifraud проверены доп.
+    прогонами (другой период / без фильтра), чтобы отличить «нет данных»
+    от «не та форма ответа» (`.unwrap_or_default()` глотает разницу!).
 
 
 
@@ -1281,6 +1366,47 @@ event-channel, record_download id, версионирование миграци
   R−G>60) один и сместился ровно на шаг строки; vision-проверка кропа: «Отчёты»
   розовый жирный, «Магазин» сброшен, выделен ровно один пункт.
 - cargo build/clippy(-D warnings)/test(5) — зелёные. Урок #57.
+
+**Чат 2026-08-14 (инсталлер + живой WB-аудит; коммит 06b04cc):**
+- **Инсталлер пересобран** (`build-setup.sh` → `MDWFSetup-1.4.0.exe` 26 МБ,
+  16:05, бинари 16:04 > HEAD 7b71524 16:00): UX-пакет+symbolic+sidebar в
+  выдаче. После WB-фиксов пересобран ЕЩЁ РАЗ (актуален для выдачи).
+- **WB-аудит** (приоритет §0-2): (1) сверка ВСЕХ эндпоинтов с официальной
+  OpenAPI-спекой через зеркало eslazarev/wildberries-sdk (specs/*.yaml —
+  субагент скачал и разобрал 14 файлов); (2) baseline живой прогон старым
+  кодом (5 отчётов снято: orders/sales/balance/list OK, **detailed = ровно
+  1000 строк** — evidence тихой обрезки; прогон остановлен при начале правок,
+  остальные 7 предсказаны спекой); (3) фиксы (06b04cc); (4) повторный живой
+  прогон — **12/12 OK** + доп. проверки пустых (claims август, acceptance
+  август, antifraud без фильтра).
+- **Найдено и исправлено (все — по спеке, до фикса не работали или теряли данные):**
+  - **detailed-финансы** (sales-reports/acquiring): offset:0+limit:1000 →
+    rrdId-курсор (limit 100000), конец по 204; клиент 204 → `[]` (прежде —
+    ложная Protocol-ошибка). Июль: 1000 → **3217 строк** (8.46 МБ).
+  - **claims**: обязателен `is_archive` (400 без него); дат НЕТ (окно 14 дней);
+    limit≤200; ответ `{claims,total}`; два среза (активные+архивные) +
+    локальный фильтр по `dt`.
+  - **acceptance_report**: был POST {limit,offset} (не по спеке) → полная
+    реализация GET create→taskId→poll status (done/error/таймаут 10 мин)→
+    download (204=нет данных); `max_range_days=31`.
+  - **удержания**: dateTo (концом дня) и limit=1000 обязательны; offset до total.
+  - **статистика**: только dateFrom (по lastChangeDate!)+flag=0; dateTo/limit
+    убраны; описания дескрипторов честно отражают семантику.
+  - **antifraud**: только date → выгрузка всего + локальный фильтр пересечения.
+  - **period YYYY-MM** → конец месяца (`+1 месяц −1 день`; прежде `+30 дней`
+    ломал февраль).
+  - Рефакторинг: `HttpMethod`+`ResponseShape` → **`WbQueryKind`** (метод+
+    параметры+пагинация в одном enum); `fetch_all` обходит страницы для
+    list() И download(), прогресс постранично, отмена между страницами.
+- **Тесты**: +7 unit, +5 wiremock-integration (rrdId+204, claims-срезы,
+  обязательные параметры удержаний, acceptance-флоу, дат-параметры
+  статистики). cargo test --workspace = 23 сюита OK; clippy -D warnings = 0.
+- Живой итог по отчётам: orders 708КБ / sales 279КБ / balance 68Б (плоский
+  объект — спека подтверждена) / list 6 строк / **detailed 3217** /
+  acquiring [] / deductions [] / measurement [] / antifraud [] / acceptance
+  [] (флоу завершён, данных нет) / claims [] (заявок нет, запросы валидны).
+  Пустые != сломано — проверены доп. прогонами (урок #58).
+- Урок #58.
 
 **Чат 2026-08-13 (фикс чёрного окна + брендовая иконка запущенного окна) — PROD-качество:**
 Жалоба юзера: «чёрное окно после запуска» + «вижу только дефолтную иконку» + «мне
