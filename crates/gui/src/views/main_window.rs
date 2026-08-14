@@ -6,7 +6,8 @@
 use glib::clone;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Image, Label, Orientation, ProgressBar, Separator, Stack, StackSidebar,
+    Box as GtkBox, Image, Label, ListBox, ListBoxRow, Orientation, ProgressBar, Separator,
+    SelectionMode, Stack,
 };
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -55,11 +56,113 @@ pub fn build_and_present(
     stack.add_titled(&help_view, Some(ViewId::Help.as_str()), "Справка");
     stack.add_titled(&about_view, Some(ViewId::About.as_str()), "О программе");
 
-    // Боковая навигация через StackSidebar.
-    let sidebar = StackSidebar::builder()
-        .stack(&stack)
+    // Боковая навигация: кастомный ListBox в стиле navigation-sidebar с СЕКЦИЯМИ
+    // (StackSidebar плоский — группировку не показывает). Строка-заголовок секции
+    // непереключаемая; widget_name строки = ViewId → связка со стеком.
+    let sidebar = ListBox::builder()
         .width_request(200)
+        .css_classes(["navigation-sidebar"])
         .build();
+    sidebar.set_selection_mode(SelectionMode::Single);
+
+    let rows_by_name: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<String, ListBoxRow>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    let add_section = {
+        let rows_by_name = std::rc::Rc::clone(&rows_by_name);
+        move |sidebar: &ListBox, title: &str, tabs: &[(&str, &str)]| {
+            let hdr = ListBoxRow::builder()
+                .selectable(false)
+                .activatable(false)
+                .build();
+            hdr.set_child(Some(
+                &Label::builder()
+                    .label(title)
+                    .css_classes(["heading"])
+                    .halign(gtk4::Align::Start)
+                    .margin_start(10)
+                    .margin_top(10)
+                    .build(),
+            ));
+            sidebar.append(&hdr);
+            for (id, label) in tabs {
+                let row = ListBoxRow::new();
+                row.set_widget_name(id);
+                row.set_child(Some(
+                    &Label::builder()
+                        .label(*label)
+                        .halign(gtk4::Align::Start)
+                        .margin_start(10)
+                        .margin_top(5)
+                        .margin_bottom(5)
+                        .build(),
+                ));
+                rows_by_name
+                    .borrow_mut()
+                    .insert((*id).to_string(), row.clone());
+                sidebar.append(&row);
+            }
+        }
+    };
+    add_section(
+        &sidebar,
+        "Магазин и выгрузка",
+        &[
+            ("shop", "Магазин"),
+            ("reports", "Отчёты"),
+            ("download", "Загрузка"),
+            ("archive", "Архив"),
+        ],
+    );
+    add_section(
+        &sidebar,
+        "Автоматизация",
+        &[("scheduler", "Расписания"), ("logs", "Журнал")],
+    );
+    add_section(
+        &sidebar,
+        "Прочее",
+        &[
+            ("settings", "Настройки"),
+            ("help", "Справка"),
+            ("about", "О программе"),
+        ],
+    );
+
+    // Клик по вкладке → показываем её в стеке (если ещё не активна — без циклов).
+    let stack_for_sel = stack.clone();
+    sidebar.connect_selected_rows_changed(move |lb| {
+        let Some(row) = lb.selected_row() else {
+            return;
+        };
+        let name = row.widget_name().to_string();
+        if name.is_empty() {
+            return;
+        }
+        if stack_for_sel.visible_child_name().map(|s| s.to_string()) != Some(name.clone()) {
+            stack_for_sel.set_visible_child_name(&name);
+        }
+    });
+
+    // Программное переключение (напр. клик по отчёту → «Загрузка») → подсветить
+    // нужную строку (если ещё не выделена — selection-обработчик увидит совпадение).
+    let sidebar_for_sync = sidebar.clone();
+    let rows_for_sync = std::rc::Rc::clone(&rows_by_name);
+    stack.connect_notify_local(Some("visible-child"), move |stk: &gtk4::Stack, _| {
+        let Some(name) = stk.visible_child_name() else {
+            return;
+        };
+        if let Some(row) = rows_for_sync.borrow().get(name.as_str()) {
+            if sidebar_for_sync.selected_row().as_ref() != Some(row) {
+                sidebar_for_sync.select_row(Some(row));
+            }
+        }
+    });
+
+    // Начальная подсветка — «Магазин» (стек стартует на первой добавленной вкладке).
+    if let Some(row) = rows_by_name.borrow().get("shop") {
+        sidebar.select_row(Some(row));
+    }
 
     root.append(&sidebar);
     root.append(&Separator::new(Orientation::Vertical));
