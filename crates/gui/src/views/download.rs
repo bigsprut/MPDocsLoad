@@ -276,7 +276,8 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     row1.append(&Label::new(Some("Отчёт:")));
     row1.append(&report_combo);
 
-    let load_reports_btn = Button::builder().label("↻ Обновить").tooltip_text("Перезагрузить список отчётов провайдера").build();
+    let load_reports_btn = super::icon_button("Обновить", "view-refresh-symbolic");
+    load_reports_btn.set_tooltip_text(Some("Перезагрузить список отчётов провайдера"));
     row1.append(&load_reports_btn);
     root.append(&row1);
 
@@ -306,10 +307,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
     // Кнопка «📅 Интервал» — выбор стандартного интервала (неделя/месяц/квартал/год)
     // через виджет widgets::interval_picker. Проставляет date_from/date_to.
-    let interval_btn = gtk4::MenuButton::builder()
-        .label("📅 Интервал")
-        .tooltip_text("Выбрать стандартный интервал: неделя / месяц / квартал / год")
-        .build();
+    let interval_btn = gtk4::MenuButton::new();
+    interval_btn.set_child(Some(&super::icon_label_child("Интервал", "x-office-calendar-symbolic")));
+    interval_btn.set_tooltip_text(Some("Выбрать стандартный интервал: неделя / месяц / квартал / год"));
     let interval_popover = gtk4::Popover::new();
     {
         let df = date_from.clone();
@@ -345,13 +345,15 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
     // --- Кнопки действий ---
     let row3 = GtkBox::new(Orientation::Horizontal, 8);
-    let list_btn = Button::builder().label("📋 Список документов").tooltip_text("Для отчётов-списков (Browsable)").build();
-    let download_btn = Button::builder().label("⬇ Скачать выбранные").css_classes(["suggested-action"]).tooltip_text("Скачать отмеченные документы").build();
-    let period_btn = Button::builder().label("📅 Скачать по периоду").tooltip_text("Сгенерировать отчёт за период").build();
-    let cancel_btn = Button::builder()
-        .label("⏹ Отмена")
-        .tooltip_text("Остановить текущее скачивание (если оно есть)")
-        .build();
+    let list_btn = super::icon_button("Список документов", "view-list-symbolic");
+    list_btn.set_tooltip_text(Some("Для отчётов-списков (Browsable)"));
+    let download_btn = super::icon_button("Скачать выбранные", "document-save-symbolic");
+    download_btn.add_css_class("suggested-action");
+    download_btn.set_tooltip_text(Some("Скачать отмеченные документы"));
+    let period_btn = super::icon_button("Скачать по периоду", "x-office-calendar-symbolic");
+    period_btn.set_tooltip_text(Some("Сгенерировать отчёт за период"));
+    let cancel_btn = super::icon_button("Отмена", "process-stop-symbolic");
+    cancel_btn.set_tooltip_text(Some("Остановить текущее скачивание (если оно есть)"));
     {
         let cs_c = cs.clone();
         cancel_btn.connect_clicked(move |_| {
@@ -1059,7 +1061,7 @@ fn render_list(docs: &[DocumentEntry]) {
         toolbar.set_margin_end(8);
         toolbar.set_margin_top(2);
         toolbar.set_margin_bottom(4);
-        let all_btn = Button::builder().label("☑ Выбрать всё").build();
+        let all_btn = super::icon_button("Выбрать всё", "edit-select-all-symbolic");
         all_btn.connect_clicked(|_| {
             CHECKS.with(|c| {
                 for (_, cb) in c.borrow().iter() {
@@ -1067,7 +1069,7 @@ fn render_list(docs: &[DocumentEntry]) {
                 }
             });
         });
-        let none_btn = Button::builder().label("☐ Снять выделение").build();
+        let none_btn = super::icon_button("Снять выделение", "edit-clear-all-symbolic");
         none_btn.connect_clicked(|_| {
             CHECKS.with(|c| {
                 for (_, cb) in c.borrow().iter() {
@@ -1143,10 +1145,7 @@ fn render_list(docs: &[DocumentEntry]) {
             let actions_box = GtkBox::new(Orientation::Horizontal, 4);
             if let Some(info) = &downloaded_info {
                 let path = info.file_path.clone();
-                let open_btn = Button::builder()
-                    .label("📂")
-                    .tooltip_text("Открыть файл")
-                    .build();
+                let open_btn = super::icon_only_button("document-open-symbolic", "Открыть файл");
                 open_btn.connect_clicked(move |_| {
                     let _ = open_file(&path);
                 });
@@ -1159,10 +1158,8 @@ fn render_list(docs: &[DocumentEntry]) {
                 extension: doc.extensions.first().cloned(),
                 date: doc.date.map(|d| d.to_string()),
             };
-            let redownload_btn = Button::builder()
-                .label("↻")
-                .tooltip_text("Перекачать (с заменой)")
-                .build();
+            let redownload_btn =
+                super::icon_only_button("view-refresh-symbolic", "Перекачать (с заменой)");
             redownload_btn.connect_clicked(move |_| {
                 let Some((pid, pname, rtype)) = current_target() else {
                     notify("Магазин или отчёт не выбраны.");
@@ -1275,16 +1272,14 @@ pub fn on_download_finished(result: &crate::channels::DownloadResult) {
             let multi = result.saved_paths.len() > 1;
             let file = first_path.clone();
             let label = if multi {
-                format!("📄 Открыть файл (первый из {})", result.saved_paths.len())
+                format!("Открыть файл (первый из {})", result.saved_paths.len())
             } else {
-                "📄 Открыть файл".to_string()
+                "Открыть файл".to_string()
             };
             let tooltip = result.saved_paths.join("\n");
-            let file_btn = gtk4::Button::builder()
-                .label(&label)
-                .has_tooltip(true)
-                .tooltip_text(&tooltip)
-                .build();
+            let file_btn = super::icon_button(&label, "document-open-symbolic");
+            file_btn.set_has_tooltip(true);
+            file_btn.set_tooltip_text(Some(&tooltip));
             file_btn.connect_clicked(move |_| {
                 let _ = open_file(&file);
             });
@@ -1297,11 +1292,9 @@ pub fn on_download_finished(result: &crate::channels::DownloadResult) {
                 let folder = parent.display().to_string();
                 // Обычный Button (НЕ LinkButton): у LinkButton срабатывает и
                 // авто-открытие URI, и connect_clicked → открывалось 2 проводника.
-                let link = gtk4::Button::builder()
-                    .label("📁 Открыть папку")
-                    .has_tooltip(true)
-                    .tooltip_text(&folder)
-                    .build();
+                let link = super::icon_button("Открыть папку", "folder-open-symbolic");
+                link.set_has_tooltip(true);
+                link.set_tooltip_text(Some(&folder));
                 link.connect_clicked(move |_| {
                     let _ = open_folder(&folder);
                 });
@@ -1347,7 +1340,7 @@ const DOWNLOAD_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::T("Под строкой отчёта — описание и тип периода. Для месячного отчёта за квартал/год скачивание пойдёт по каждому месяцу интервала автоматически."),
     crate::widgets::tab_help::HelpBlock::H("Полезно знать"),
     crate::widgets::tab_help::HelpBlock::B(&[
-        "✓ у документа — уже скачан ранее; «📂 Открыть» открывает файл, «↻ Перекачать» скачивает заново.",
+        "✓ у документа — уже скачан ранее; «Открыть» открывает файл, «Перекачать» скачивает заново.",
         "Повторное скачивание не создаёт дубликат — дедупликация по SHA-256.",
         "После загрузки внизу появляется кнопка «📁 Открыть папку».",
     ]),

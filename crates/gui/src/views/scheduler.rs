@@ -230,7 +230,7 @@ fn build_add_form() -> gtk4::Box {
         });
     }
 
-    let add_btn = Button::with_label("Добавить расписание");
+    let add_btn = super::icon_button("Добавить расписание", "list-add-symbolic");
     add_btn.add_css_class("suggested-action");
     add_btn.set_tooltip_text(Some("Сохранить расписание — оно появится в списке ниже"));
     add_btn.connect_clicked(|_| add_schedule());
@@ -712,13 +712,13 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     });
     top.append(&enabled);
 
-    let edit_btn = Button::with_label("✎");
+    let edit_btn = super::icon_only_button("document-edit-symbolic", "Изменить расписание: имя, время и период");
     edit_btn.set_tooltip_text(Some("Изменить расписание: имя, время и период"));
     let s_for_edit = s.clone();
     edit_btn.connect_clicked(move |_| show_edit_dialog(&s_for_edit));
     top.append(&edit_btn);
 
-    let run_btn = Button::with_label("▶");
+    let run_btn = super::icon_only_button("media-playback-start-symbolic", "Выполнить прямо сейчас (не дожидаясь срока) — удобно для проверки настройки");
     run_btn.set_tooltip_text(Some(
         "Выполнить прямо сейчас (не дожидаясь срока) — удобно для проверки настройки",
     ));
@@ -730,7 +730,7 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     });
     top.append(&run_btn);
 
-    let del_btn = Button::with_label("🗑");
+    let del_btn = super::icon_only_button("user-trash-symbolic", "Удалить расписание");
     del_btn.set_tooltip_text(Some("Удалить расписание"));
     del_btn.add_css_class("destructive-action");
     let name_for_del = s.name.clone();

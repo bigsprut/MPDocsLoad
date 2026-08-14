@@ -214,16 +214,13 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root.append(&section_header("Профили учётных данных"));
 
     let cruds_row = GtkBox::new(Orientation::Horizontal, 8);
-    let add_btn = Button::builder()
-        .label("＋ Добавить")
-        .css_classes(["suggested-action"])
-        .build();
-    let edit_btn = Button::builder()
-        .label("✎ Изменить")
-        .tooltip_text("Изменить выбранный профиль")
-        .build();
-    let check_btn = Button::builder().label("✓ Проверить").build();
-    let del_btn = Button::builder().label("🗑 Удалить").build();
+    let add_btn = super::icon_button("Добавить", "list-add-symbolic");
+    add_btn.add_css_class("suggested-action");
+    let edit_btn = super::icon_button("Изменить", "document-edit-symbolic");
+    edit_btn.set_tooltip_text(Some("Изменить выбранный профиль"));
+    let check_btn = super::icon_button("Проверить", "object-select-symbolic");
+    let del_btn = super::icon_button("Удалить", "user-trash-symbolic");
+    del_btn.add_css_class("destructive-action");
     cruds_row.append(&add_btn);
     cruds_row.append(&edit_btn);
     cruds_row.append(&check_btn);

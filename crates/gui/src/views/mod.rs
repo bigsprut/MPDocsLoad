@@ -1,5 +1,33 @@
 //! Представления (views) приложения.
 
+use gtk4::prelude::*;
+
+/// Контейнер «symbolic-иконка + текст» для кнопок: монохром, темизация (тёмная/
+/// светлая), масштабирование с UI — вместо эмодзи (цветные, не темизуются).
+pub(crate) fn icon_label_child(label: &str, icon_name: &str) -> gtk4::Box {
+    let b = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    b.append(&gtk4::Image::from_icon_name(icon_name));
+    b.append(&gtk4::Label::new(Some(label)));
+    b
+}
+
+/// Кнопка «иконка + текст» на Adwaita symbolic-иконке (иконки поставляются
+/// в бандле: share/icons/Adwaita/symbolic — офлайн, одинаковый вид везде).
+pub(crate) fn icon_button(label: &str, icon_name: &str) -> gtk4::Button {
+    let btn = gtk4::Button::new();
+    btn.set_child(Some(&icon_label_child(label, icon_name)));
+    btn
+}
+
+/// Иконочная кнопка БЕЗ текста — для компактных строк списков.
+/// По GNOME-конвенции требует tooltip (иначе непонятна — см. UX-ревью архива).
+pub(crate) fn icon_only_button(icon_name: &str, tooltip: &str) -> gtk4::Button {
+    let btn = gtk4::Button::new();
+    btn.set_child(Some(&gtk4::Image::from_icon_name(icon_name)));
+    btn.set_tooltip_text(Some(tooltip));
+    btn
+}
+
 pub mod about;
 pub mod archive;
 pub mod download;

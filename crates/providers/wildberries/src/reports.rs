@@ -457,7 +457,7 @@ impl Report for WbReport {
         &self.display_name
     }
     fn category(&self) -> ReportCategory {
-        self.category.clone()
+        self.category
     }
     fn acquisition_mode(&self) -> AcquisitionMode {
         self.mode

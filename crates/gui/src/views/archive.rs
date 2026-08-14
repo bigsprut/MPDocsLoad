@@ -126,10 +126,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .tooltip_text("Конец интервала отбора")
         .build();
 
-    let interval_btn = gtk4::MenuButton::builder()
-        .label("📅 Интервал")
-        .tooltip_text("Стандартный интервал: неделя / месяц / квартал / год (заполнит поля ниже)")
-        .build();
+    let interval_btn = gtk4::MenuButton::new();
+    interval_btn.set_child(Some(&super::icon_label_child("Интервал", "x-office-calendar-symbolic")));
+    interval_btn.set_tooltip_text(Some("Стандартный интервал: неделя / месяц / квартал / год (заполнит поля ниже)"));
     let interval_popover = gtk4::Popover::new();
     {
         let pop = interval_popover.clone();
@@ -171,10 +170,8 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     filters.append(&super::make_date_picker(&date_to, "%d.%m.%Y"));
     filters.append(&reset_btn);
 
-    let apply_btn = Button::builder()
-        .label("🔍 Применить")
-        .tooltip_text("Применить фильтры и обновить список")
-        .build();
+    let apply_btn = super::icon_button("Применить", "edit-find-symbolic");
+    apply_btn.set_tooltip_text(Some("Применить фильтры и обновить список"));
     filters.append(&apply_btn);
     root.append(&filters);
 
@@ -465,10 +462,8 @@ fn render_archive(entries: &[ArchiveEntry]) {
             let actions_box = GtkBox::new(Orientation::Horizontal, 4);
             let file_path = e.file_path.clone();
 
-            let open_btn = Button::builder()
-                .label("📂")
-                .tooltip_text("Открыть файл")
-                .build();
+            let open_btn = super::icon_only_button("document-open-symbolic", "Открыть файл");
+            open_btn.set_tooltip_text(Some("Открыть файл"));
             {
                 let path = file_path.clone();
                 open_btn.connect_clicked(move |_| {
@@ -479,10 +474,8 @@ fn render_archive(entries: &[ArchiveEntry]) {
             }
             actions_box.append(&open_btn);
 
-            let folder_btn = Button::builder()
-                .label("📁")
-                .tooltip_text("Открыть папку с файлом")
-                .build();
+            let folder_btn = super::icon_only_button("folder-open-symbolic", "Открыть папку с файлом");
+            folder_btn.set_tooltip_text(Some("Открыть папку с файлом"));
             {
                 let path = file_path.clone();
                 folder_btn.connect_clicked(move |_| {
@@ -497,10 +490,8 @@ fn render_archive(entries: &[ArchiveEntry]) {
             }
             actions_box.append(&folder_btn);
 
-            let copy_btn = Button::builder()
-                .label("📋")
-                .tooltip_text("Копировать путь в буфер обмена")
-                .build();
+            let copy_btn = super::icon_only_button("edit-copy-symbolic", "Копировать путь в буфер обмена");
+            copy_btn.set_tooltip_text(Some("Копировать путь в буфер обмена"));
             {
                 let path = file_path.clone();
                 copy_btn.connect_clicked(move |_| {
@@ -514,11 +505,8 @@ fn render_archive(entries: &[ArchiveEntry]) {
             actions_box.append(&copy_btn);
 
             // 🗑 Удалить запись и файл (деструктивно, с подтверждением).
-            let del_btn = Button::builder()
-                .label("🗑")
-                .tooltip_text("Удалить запись и файл")
-                .css_classes(["destructive-action"])
-                .build();
+            let del_btn = super::icon_only_button("user-trash-symbolic", "Удалить запись и файл");
+            del_btn.add_css_class("destructive-action");
             {
                 let id = e.id;
                 let path = file_path.clone();

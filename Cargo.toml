@@ -85,7 +85,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 tokio-util-cancellation = "0.1"
 
 # --- GUI (GTK4 + libadwaita), ADR-002 ---
-gtk4 = "0.9"
+gtk4 = { version = "0.9", features = ["v4_6"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }
 glib = "0.20"
 gio = "0.20"
