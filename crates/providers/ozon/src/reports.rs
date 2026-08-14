@@ -1741,4 +1741,43 @@ mod tests {
             assert_eq!(r.unwrap().acquisition_mode, AcquisitionMode::Period, "{rid}");
         }
     }
+
+    /// Страж дрейфа «таблиц в 4 местах»: КАЖДЫЙ дескриптор обязан диспетчеризоваться
+    /// в make_report (иначе reports() молча выкинет отчёт из UI), а КАЖДЫЙ
+    /// type_id — иметь дескриптор (иначе отчёт-фантом в make_report без UI).
+    #[test]
+    fn descriptors_and_dispatch_are_in_sync() {
+        let caps = capabilities();
+        for d in &caps.reports {
+            assert!(
+                make_report(&d.type_id, OzonHttpClient::new(None, crate::client::RetryPolicy::default()).unwrap()).is_ok(),
+                "{}: есть дескриптор, но make_report не диспетчеризует (выпадет из UI)",
+                d.type_id
+            );
+            assert!(
+                !d.display_name.trim().is_empty(),
+                "{}: пустой display_name",
+                d.type_id
+            );
+        }
+        // Обратное направление: фантомных arm'ов нет — их count == числу дескрипторов
+        // (косвенно: все type_id make_report покрыты дескрипторами, иначе arm мёртв).
+        let ids: std::collections::HashSet<&str> =
+            caps.reports.iter().map(|d| d.type_id.as_str()).collect();
+        for known in [
+            "ozon.realization", "ozon.realization_posting", "ozon.buyout", "ozon.balance",
+            "ozon.cash_flow", "ozon.accrual_by_day", "ozon.accrual_postings", "ozon.compensation",
+            "ozon.decompensation", "ozon.mutual_settlement", "ozon.b2b_sales", "ozon.products",
+            "ozon.returns", "ozon.postings", "ozon.discounted", "ozon.warehouse_stock",
+            "ozon.placement_by_products", "ozon.placement_by_supplies", "ozon.marked_products_sales",
+            "ozon.analytics_turnover", "ozon.analytics_stocks",
+        ] {
+            assert!(ids.contains(known), "{known}: arm без дескриптора (мёртвый код/дрейф)");
+        }
+        // Кап-отчёты обзавелись max_range_days.
+        for capped in ["ozon.balance", "ozon.buyout", "ozon.placement_by_products", "ozon.placement_by_supplies"] {
+            let d = caps.reports.iter().find(|d| d.type_id == capped).unwrap();
+            assert!(d.max_range_days.is_some(), "{capped}: max_range_days не задан");
+        }
+    }
 }
