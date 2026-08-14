@@ -21,6 +21,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
+rust_xlsxwriter.workspace = true
 base64 = "0.22"
 
 [dev-dependencies]

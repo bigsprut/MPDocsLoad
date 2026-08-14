@@ -36,6 +36,7 @@ mod date_format;
 mod documents;
 mod provider;
 mod reports;
+mod xlsx;
 
 pub use auth::{WbAuthenticator, WbTokenType, TOKEN_TTL_DAYS};
 pub use client::{RateLimiter, RetryPolicy, WbDomain, WbHttpClient};

@@ -280,11 +280,10 @@ async fn finance_detailed_paginates_rrdid_until_204() {
         .await
         .unwrap();
     assert_eq!(files.len(), 1);
-    let rows: serde_json::Value =
-        serde_json::from_slice(files[0].content.as_ref().unwrap()).unwrap();
-    let arr = rows.as_array().unwrap();
-    assert_eq!(arr.len(), 2, "обе строки страницы внутри");
-    assert_eq!(arr[1]["rrdId"], serde_json::json!(20));
+    // Непустой результат конвертируется в Excel: расширение xlsx, magic PK (ZIP).
+    assert_eq!(files[0].extension, "xlsx");
+    let bytes = files[0].content.as_ref().unwrap();
+    assert_eq!(&bytes[..2], b"PK", "xlsx должен быть ZIP");
     // Запросов ровно два: страница 1 + страница 2 (204 — конец).
     let hits = server
         .received_requests()
@@ -294,6 +293,37 @@ async fn finance_detailed_paginates_rrdid_until_204() {
         .filter(|r| r.url.as_str().contains("/sales-reports/detailed"))
         .count();
     assert_eq!(hits, 2);
+}
+
+/// Пустой результат (нет данных за период) остаётся честным JSON `[]`,
+/// а не пустым xlsx.
+#[tokio::test]
+#[serial(wb_env)]
+async fn empty_detailed_result_stays_json() {
+    let server = MockServer::start().await;
+    set_wb_base_urls(&server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/api/finance/v1/sales-reports/detailed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+
+    let provider = WildberriesProvider::new().unwrap();
+    let profile = Profile::new("WB-1", "wildberries").with_metadata("token", "wb-token");
+    let auth = provider.authenticator(&profile).await.unwrap();
+    let report = provider.report("wb.sales_reports_detailed").await.unwrap();
+
+    let params = mdwf_core::ReportParams::new()
+        .with("date_from", "2026-07-01")
+        .with("date_to", "2026-07-31");
+    let files = report
+        .download(auth.as_ref(), &params, noop_progress(), mdwf_core::CancelToken::new())
+        .await
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].extension, "json");
+    assert_eq!(files[0].content.as_ref().unwrap(), b"[]");
 }
 
 /// Claims: обязательный is_archive, limit=200, offset-пагинация по total,
@@ -438,11 +468,9 @@ async fn acceptance_report_create_poll_download() {
         .await
         .unwrap();
     assert_eq!(files.len(), 1);
-    assert_eq!(files[0].extension, "json");
-    let rows: serde_json::Value =
-        serde_json::from_slice(files[0].content.as_ref().unwrap()).unwrap();
-    assert_eq!(rows.as_array().unwrap().len(), 1);
-    assert_eq!(rows[0]["incomeId"], serde_json::json!("111"));
+    // Непустой результат — Excel (ZIP magic).
+    assert_eq!(files[0].extension, "xlsx");
+    assert_eq!(&files[0].content.as_ref().unwrap()[..2], b"PK");
 }
 
 /// Отчёт приёмки с периодом > 31 дня — внятный отказ (спека: максимум 31 день).

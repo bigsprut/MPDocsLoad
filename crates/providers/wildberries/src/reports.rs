@@ -33,6 +33,7 @@ use mdwf_core::{
 
 use crate::client::{WbDomain, WbHttpClient};
 use crate::date_format;
+use tracing::warn;
 
 // =========================================================================
 // Capabilities
@@ -496,22 +497,50 @@ impl Report for WbReport {
         progress: ProgressCallbackRef,
         cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
-        // Для простых отчётов — тот же обход страниц, результат сохраняем как JSON.
+        // Тот же обход страниц; результат — Excel с русскими колонками
+        // (fallback на JSON, если конвертация не удалась — данные не теряем).
         let filter = filter_from_params(params);
         let fetched = self.fetch_all(auth, &filter, progress, cancel).await?;
-        let value = match fetched {
-            Fetched::Rows(rows) => Value::Array(rows),
-            Fetched::Object(v) => v,
-        };
-        let content = serde_json::to_vec_pretty(&value)
-            .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
-        Ok(vec![DownloadedFile::with_content(
-            format!("{}_{}.json", self.type_id, period),
-            "json",
-            content,
-        )])
+        let base_name = format!("{}_{}", self.type_id, period);
+        match fetched {
+            Fetched::Rows(rows) if !rows.is_empty() => match crate::xlsx::rows_to_xlsx(&self.type_id, &rows) {
+                Ok(bytes) => Ok(vec![DownloadedFile::with_content(
+                    base_name,
+                    "xlsx",
+                    bytes,
+                )]),
+                Err(e) => {
+                    warn!(error = %e, report = %self.type_id, "xlsx conversion failed — saving JSON");
+                    Ok(vec![json_file(&rows, &base_name)])
+                }
+            },
+            // Пустой результат — честный JSON [] (2 байта, однозначно «нет данных»).
+            Fetched::Rows(rows) => Ok(vec![json_file(&rows, &base_name)]),
+            // Баланс: плоский объект → маленькая таблица показателей.
+            Fetched::Object(v) => match crate::xlsx::balance_to_xlsx(&v) {
+                Ok(bytes) => Ok(vec![DownloadedFile::with_content(
+                    base_name,
+                    "xlsx",
+                    bytes,
+                )]),
+                Err(e) => {
+                    warn!(error = %e, report = %self.type_id, "xlsx conversion failed — saving JSON");
+                    let content = serde_json::to_vec_pretty(&v)
+                        .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
+                    Ok(vec![DownloadedFile::with_content(base_name, "json", content)])
+                }
+            },
+        }
     }
+}
+
+/// Сохраняет строки как pretty-JSON (fallback при неудачной xlsx-конвертации
+/// и пустой результат).
+fn json_file(rows: &[Value], base_name: &str) -> DownloadedFile {
+    let content = serde_json::to_vec_pretty(&Value::Array(rows.to_vec()))
+        .unwrap_or_else(|_| b"[]".to_vec());
+    DownloadedFile::with_content(base_name.to_string(), "json", content)
 }
 
 impl WbReport {
@@ -1009,6 +1038,7 @@ impl Report for WbAcceptanceReport {
         }
 
         // Скачивание результата: прямой массив строк (204 → пустой массив).
+        // Непустой результат конвертируем в Excel (fallback — JSON).
         let rows = self
             .client
             .get(
@@ -1018,11 +1048,27 @@ impl Report for WbAcceptanceReport {
                 auth,
             )
             .await?;
+        let period = params.period.clone().unwrap_or_else(|| "current".into());
+        let base_name = format!("wb.acceptance_report_{period}");
+        let arr = rows.as_array();
+        if arr.is_some_and(|a| !a.is_empty()) {
+            match crate::xlsx::rows_to_xlsx("wb.acceptance_report", arr.unwrap_or(&Vec::new())) {
+                Ok(bytes) => {
+                    return Ok(vec![DownloadedFile::with_content(
+                        base_name,
+                        "xlsx",
+                        bytes,
+                    )])
+                }
+                Err(e) => {
+                    warn!(error = %e, "xlsx conversion failed — saving JSON");
+                }
+            }
+        }
         let content = serde_json::to_vec_pretty(&rows)
             .map_err(|e| CoreError::Internal(format!("serialize: {e}")))?;
-        let period = params.period.clone().unwrap_or_else(|| "current".into());
         Ok(vec![DownloadedFile::with_content(
-            format!("wb.acceptance_report_{period}.json"),
+            base_name,
             "json",
             content,
         )])

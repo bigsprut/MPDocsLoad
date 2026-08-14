@@ -2029,6 +2029,7 @@ dependencies = [
  "mdwf-core",
  "parking_lot",
  "reqwest",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "serial_test",
