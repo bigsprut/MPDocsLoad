@@ -173,6 +173,11 @@ pub enum UiCommand {
     SetWinScheduler {
         enabled: bool,
     },
+    // ===== Журнал =====
+    /// Загрузить журнал событий из БД (при старте). Ответ — UiEvent::JournalLoaded.
+    LoadJournal,
+    /// Очистить журнал: БД + лента (кнопка «Очистить»). Ответ — UiEvent::JournalCleared.
+    ClearJournal,
 }
 
 /// Состояние фильтров экрана «Архив» для автосохранения между запусками.
@@ -277,6 +282,10 @@ pub enum UiEvent {
     DownloadDeleted(Result<i64, String>),
     /// Журнал: новая запись (выгрузки/ошибки/запуски расписаний)._append во вкладку.
     Log(LogEntry),
+    /// Журнал: история из БД при старте (свежие первыми) — заменить ленту.
+    JournalLoaded(Vec<LogEntry>),
+    /// Журнал: очищен (БД + лента).
+    JournalCleared,
     /// Планировщик: список расписаний (с резолвом имён профиля/отчётов).
     SchedulesListed(Result<Vec<ScheduleView>, String>),
     /// Планировщик: изменился автозапуск с ОС (новое состояние или ошибка).
@@ -318,11 +327,34 @@ pub enum LogKind {
     Error,
 }
 
-/// Одна запись журнала приложения. `timestamp` — локальное время «ЧЧ:ММ:СС».
-/// Капается во вкладке «Журнал» (cap 500, вытеснение старых).
+impl LogKind {
+    /// Строковый код для хранения в БД (таблица `journal`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Error => "error",
+        }
+    }
+
+    /// Обратное преобразование из кода БД (неизвестный код → Info).
+    #[must_use]
+    pub fn from_db_code(code: &str) -> Self {
+        match code {
+            "success" => Self::Success,
+            "error" => Self::Error,
+            _ => Self::Info,
+        }
+    }
+}
+
+/// Одна запись журнала приложения. `created_at` — момент события в UTC;
+/// отображается локальным временем (сегодня — «ЧЧ:ММ:СС», старше — с датой).
+/// Персистится в SQLite (таблица `journal`, кап [`mdwf_storage::JOURNAL_KEEP`]).
 #[derive(Debug, Clone)]
 pub struct LogEntry {
-    pub timestamp: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
     pub kind: LogKind,
     pub message: String,
 }

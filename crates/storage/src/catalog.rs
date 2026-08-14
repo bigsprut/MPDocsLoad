@@ -16,7 +16,10 @@ use mdwf_core::{CoreError, CoreResult, Profile};
 /// v3: добавлена колонка `downloads.document_id` (значок «уже загружен»).
 /// v4: добавлена колонка `downloads.document_date` (дата документа WB для
 /// фильтра периода Архива).
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
+
+/// Кап журнала событий (в БД и в ленте «Журнала» GUI): храним последние N записей.
+pub const JOURNAL_KEEP: usize = 500;
 
 /// Встроенная схема (создаётся при первом подключении).
 const SCHEMA_SQL: &str = include_str!("../schema.sql");
@@ -177,6 +180,16 @@ pub struct SavedFilter {
     pub provider_id: String,
     pub report_type: String,
     pub filter_json: String,
+}
+
+/// Запись журнала событий приложения (вкладка «Журнал» GUI).
+/// `created_at` — RFC3339 UTC (парсится при загрузке в GUI).
+#[derive(Debug, Clone)]
+pub struct JournalRow {
+    pub id: i64,
+    pub created_at: String,
+    pub kind: String,
+    pub message: String,
 }
 
 /// Каталог на SQLite. Потокобезопасный через Mutex (rusqlite::Connection не Sync).
@@ -757,6 +770,50 @@ impl Catalog {
             .map_err(map_sqlite_err)?;
         Ok(v)
     }
+
+    /// Добавляет запись журнала (вкладка «Журнал» GUI) и держит таблицу
+    /// в пределах [`JOURNAL_KEEP`] последних записей (кап, как в ленте UI).
+    pub fn add_journal_entry(&self, created_at: DateTime<Utc>, kind: &str, message: &str) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO journal (created_at, kind, message) VALUES (?1, ?2, ?3)",
+            params![created_at.to_rfc3339(), kind, message],
+        )
+        .map_err(map_sqlite_err)?;
+        conn.execute(
+            "DELETE FROM journal WHERE id NOT IN (
+                 SELECT id FROM journal ORDER BY id DESC LIMIT ?1)",
+            params![JOURNAL_KEEP as i64],
+        )
+        .map_err(map_sqlite_err)?;
+        Ok(())
+    }
+
+    /// Последние записи журнала (свежие первыми), не более `limit`.
+    pub fn list_journal(&self, limit: u32) -> CoreResult<Vec<JournalRow>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT id, created_at, kind, message FROM journal ORDER BY id DESC LIMIT ?1")
+            .map_err(map_sqlite_err)?;
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok(JournalRow {
+                    id: row.get(0)?,
+                    created_at: row.get::<_, String>(1)?,
+                    kind: row.get(2)?,
+                    message: row.get(3)?,
+                })
+            })
+            .map_err(map_sqlite_err)?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Полностью очищает журнал (кнопка «Очистить»).
+    pub fn clear_journal(&self) -> CoreResult<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM journal", []).map_err(map_sqlite_err)?;
+        Ok(())
+    }
 }
 
 /// Новое/обновляемое расписание.
@@ -1314,5 +1371,50 @@ mod tests {
 
         // Удаление несуществующего id — не ошибка (DELETE 0 строк).
         cat.delete_download(999_999).unwrap();
+    }
+
+    #[test]
+    fn journal_add_list_clear() {
+        let cat = make_cat();
+        let t0 = Utc::now();
+
+        // Пустой журнал.
+        assert!(cat.list_journal(10).unwrap().is_empty());
+
+        // Три записи; list_journal — свежие первыми.
+        for i in 0..3 {
+            let kind = if i % 2 == 0 { "info" } else { "success" };
+            cat.add_journal_entry(t0, kind, &format!("событие {i}")).unwrap();
+        }
+        let rows = cat.list_journal(10).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].message, "событие 2");
+        assert_eq!(rows[2].message, "событие 0");
+        assert_eq!(rows[0].kind, "info");
+        // created_at хранится RFC3339 и парсится обратно.
+        let parsed = DateTime::parse_from_rfc3339(&rows[0].created_at);
+        assert!(parsed.is_ok());
+
+        // limit работает.
+        assert_eq!(cat.list_journal(2).unwrap().len(), 2);
+
+        // «Очистить» — таблица пуста.
+        cat.clear_journal().unwrap();
+        assert!(cat.list_journal(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn journal_cap_keeps_last_500() {
+        let cat = make_cat();
+        let t0 = Utc::now();
+        // 600 записей > капа 500 — остаются последние 500.
+        for i in 0..600 {
+            cat.add_journal_entry(t0, "info", &format!("e{i}")).unwrap();
+        }
+        let rows = cat.list_journal(1000).unwrap();
+        assert_eq!(rows.len(), JOURNAL_KEEP);
+        // Свежейшая — последняя вставленная, старейшая — №100.
+        assert_eq!(rows[0].message, "e599");
+        assert_eq!(rows.last().unwrap().message, "e100");
     }
 }

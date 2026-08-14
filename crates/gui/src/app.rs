@@ -184,6 +184,8 @@ impl App {
             // Начальный ListArchive отправляется из on_archive_state_loaded
             // (с восстановленными значениями, либо None если состояния нет).
             cs.send(UiCommand::LoadArchiveReportTypes);
+            // Журнал: история событий из БД (переживает перезапуск).
+            cs.send(UiCommand::LoadJournal);
             cs.send(UiCommand::LoadArchiveState);
         });
 
@@ -554,11 +556,13 @@ async fn run_command_loop(
                 })();
                 match outcome {
                     Ok(()) => log_event(
+                        &domain,
                         &fwd,
                         crate::channels::LogKind::Success,
                         format!("Расписание «{name}» добавлено"),
                     ),
                     Err(e) => log_event(
+                        &domain,
                         &fwd,
                         crate::channels::LogKind::Error,
                         format!("Не удалось добавить расписание: {e}"),
@@ -589,11 +593,13 @@ async fn run_command_loop(
                 })();
                 match outcome {
                     Ok(()) => log_event(
+                        &domain,
                         &fwd,
                         crate::channels::LogKind::Success,
                         format!("Расписание «{name}» изменено"),
                     ),
                     Err(e) => log_event(
+                        &domain,
                         &fwd,
                         crate::channels::LogKind::Error,
                         format!("Не удалось изменить расписание: {e}"),
@@ -609,6 +615,7 @@ async fn run_command_loop(
                     }
                 }
                 log_event(
+                    &domain,
                     &fwd,
                     crate::channels::LogKind::Info,
                     format!("Расписание «{name}» удалено"),
@@ -641,6 +648,7 @@ async fn run_command_loop(
                 match outcome {
                     Ok(()) => {
                         log_event(
+                            &domain,
                             &fwd,
                             crate::channels::LogKind::Info,
                             format!(
@@ -662,6 +670,7 @@ async fn run_command_loop(
                 match outcome {
                     Ok(()) => {
                         log_event(
+                            &domain,
                             &fwd,
                             crate::channels::LogKind::Info,
                             format!(
@@ -673,6 +682,43 @@ async fn run_command_loop(
                     }
                     Err(e) => fwd.forward(UiEvent::WinSchedulerChanged(Err(e.to_string()))),
                 }
+            }
+            // ===== Журнал =====
+            UiCommand::LoadJournal => {
+                let result = domain.catalog.read().as_ref().map_or_else(
+                    || Err("каталог недоступен".to_string()),
+                    |cat| {
+                        cat.list_journal(mdwf_storage::JOURNAL_KEEP as u32)
+                            .map_err(|e| e.to_string())
+                    },
+                );
+                match result {
+                    Ok(rows) => {
+                        // Свежие первыми (как отдаёт БД); битые created_at пропускаем.
+                        let entries: Vec<crate::channels::LogEntry> = rows
+                            .into_iter()
+                            .filter_map(|r| {
+                                chrono::DateTime::parse_from_rfc3339(&r.created_at)
+                                    .ok()
+                                    .map(|dt| crate::channels::LogEntry {
+                                        created_at: dt.with_timezone(&chrono::Utc),
+                                        kind: crate::channels::LogKind::from_db_code(&r.kind),
+                                        message: r.message,
+                                    })
+                            })
+                            .collect();
+                        fwd.forward(UiEvent::JournalLoaded(entries));
+                    }
+                    Err(e) => tracing::warn!(error = %e, "журнал: не удалось загрузить из БД"),
+                }
+            }
+            UiCommand::ClearJournal => {
+                if let Some(cat) = domain.catalog.read().as_ref() {
+                    if let Err(e) = cat.clear_journal() {
+                        tracing::warn!(error = %e, "журнал: не удалось очистить БД");
+                    }
+                }
+                fwd.forward(UiEvent::JournalCleared);
             }
         }
     }
@@ -1009,6 +1055,7 @@ async fn do_download(
         message: "начало скачивания…".into(),
     });
     log_event(
+        domain,
         fwd,
         crate::channels::LogKind::Info,
         format!("Скачивание {report_type} — {profile_name}"),
@@ -1027,6 +1074,7 @@ async fn do_download(
         Ok(f) => f,
         Err(e) => {
             log_event(
+                domain,
                 fwd,
                 crate::channels::LogKind::Error,
                 format!("{report_type}: {e}"),
@@ -1072,6 +1120,7 @@ async fn do_download(
                 format!(" — внимание: {note}")
             };
             log_event(
+                domain,
                 fwd,
                 crate::channels::LogKind::Success,
                 format!("{report_type}: скачано {} файл(ов){note_suffix}", files.len()),
@@ -1083,6 +1132,7 @@ async fn do_download(
         }
         Err(e) => {
             log_event(
+                domain,
                 fwd,
                 crate::channels::LogKind::Error,
                 format!("{report_type}: запись на диск не удалась: {e}"),
@@ -1094,15 +1144,24 @@ async fn do_download(
 
 /// Шлёт запись в журнал (вкладка «Журнал») с локальной меткой времени ЧЧ:ММ:СС.
 fn log_event(
+    domain: &Domain,
     fwd: &EventForwarder,
     kind: crate::channels::LogKind,
     message: impl Into<String>,
 ) {
-    let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+    let message = message.into();
+    // Персист: журнал переживает перезапуск (таблица `journal`, кап 500).
+    // Best-effort — сбой записи не должен глушить UI-событие.
+    let created_at = chrono::Utc::now();
+    if let Some(cat) = domain.catalog.read().as_ref() {
+        if let Err(e) = cat.add_journal_entry(created_at, kind.as_str(), &message) {
+            tracing::warn!(error = %e, "журнал: не удалось записать в БД");
+        }
+    }
     fwd.forward(crate::channels::UiEvent::Log(crate::channels::LogEntry {
-        timestamp,
+        created_at,
         kind,
-        message: message.into(),
+        message,
     }));
 }
 
@@ -1232,6 +1291,7 @@ impl mdwf_scheduler::JobExecutor for GuiJobExecutor {
             String::new()
         };
         log_event(
+            &self.domain,
             &self.fwd,
             kind,
             format!("Расписание «{}»: {} файл(ов){detail}", req.schedule_name, total),
@@ -1252,7 +1312,7 @@ async fn run_schedule_by_name(domain: Arc<Domain>, fwd: EventForwarder, name: St
         match cat.as_ref().and_then(|c| c.get_schedule(&name).ok().flatten()) {
             Some(s) => s,
             None => {
-                log_event(&fwd, crate::channels::LogKind::Error, format!("Расписание «{name}» не найдено"));
+                log_event(&domain, &fwd, crate::channels::LogKind::Error, format!("Расписание «{name}» не найдено"));
                 return;
             }
         }

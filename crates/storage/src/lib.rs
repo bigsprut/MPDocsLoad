@@ -17,8 +17,8 @@ pub mod file_store;
 pub mod naming;
 
 pub use catalog::{
-    ArchiveEntry, Catalog, DownloadRecord, DownloadedDocInfo, NewDownload, NewSchedule, SavedFilter,
-    ScheduleRecord, SCHEMA_VERSION,
+    ArchiveEntry, Catalog, DownloadRecord, DownloadedDocInfo, JournalRow, NewDownload, NewSchedule,
+    SavedFilter, ScheduleRecord, JOURNAL_KEEP, SCHEMA_VERSION,
 };
 pub use dedup::sha256_hex;
 pub use error::{StorageError, StorageResult};

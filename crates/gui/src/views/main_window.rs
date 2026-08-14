@@ -378,6 +378,12 @@ fn dispatch_event(
         UiEvent::Log(entry) => {
             crate::views::logs::append(entry.clone());
         }
+        UiEvent::JournalLoaded(entries) => {
+            crate::views::logs::set_entries(entries.clone());
+        }
+        UiEvent::JournalCleared => {
+            crate::views::logs::clear();
+        }
         UiEvent::SchedulesListed(res) => {
             crate::views::scheduler::on_schedules_loaded(res);
         }

@@ -80,10 +80,19 @@ CREATE TABLE IF NOT EXISTS schedule_runs (
     schedule_id     INTEGER NOT NULL,
     started_at      TIMESTAMP NOT NULL,
     finished_at     TIMESTAMP,
-    status          TEXT NOT NULL,              -- ok/failed/partial/running
+    status          TEXT NOT NULL,                  -- ok/failed/partial/running
     error           TEXT,
     files_count     INTEGER,
     FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
+);
+
+-- Журнал событий приложения (вкладка «Журнал» GUI): переживает перезапуск.
+-- created_at — RFC3339 UTC (хранение в UTC, отображение в локальном времени).
+CREATE TABLE IF NOT EXISTS journal (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    kind        TEXT NOT NULL,                      -- info/success/error
+    message     TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_downloads_profile ON downloads(profile_id);

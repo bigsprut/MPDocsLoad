@@ -3,20 +3,24 @@
 //!
 //! Источник записей — `UiEvent::Log(LogEntry)`, эмитится из app-loop (старт/
 //! успех/ошибка выгрузки, запуск расписания). Маршрутизация — в main_window.rs.
+//! История персистится в SQLite (таблица `journal`): при старте лента
+//! восстанавливается из БД (`UiEvent::JournalLoaded`), «Очистить» чистит и БД.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use chrono::{DateTime, Utc};
 use gtk4::prelude::*;
 use gtk4::{
     Box as GtkBox, Button, Label, ListBox, ListBoxRow, Orientation, PolicyType, ScrolledWindow,
 };
 
-use crate::channels::{LogEntry, LogKind};
+use crate::channels::{CommandSender, LogEntry, LogKind, UiCommand};
 
 /// Кап на число записей в ленте (защита от безграничного роста памяти).
-const MAX_ENTRIES: usize = 500;
+/// Синхронизирован с БД: каталожный кап = тот же JOURNAL_KEEP.
+const MAX_ENTRIES: usize = mdwf_storage::JOURNAL_KEEP;
 
 thread_local! {
     static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
@@ -25,21 +29,26 @@ thread_local! {
     static ROWS: Rc<RefCell<VecDeque<ListBoxRow>>> = Rc::new(RefCell::new(VecDeque::new()));
 }
 
-pub fn build(_cs: &crate::channels::CommandSender) -> GtkBox {
+pub fn build(cs: &CommandSender) -> GtkBox {
     let root = GtkBox::new(Orientation::Vertical, 12);
     root.set_margin_start(16);
     root.set_margin_end(16);
     root.set_margin_top(16);
     root.set_margin_bottom(16);
 
-    // Заголовок + кнопка «Очистить».
+    // Заголовок + кнопка «Очистить» (чистит и БД — через команду).
     let header = GtkBox::new(Orientation::Horizontal, 12);
     header.append(
         &crate::widgets::tab_help::title_row_with_help("Журнал", "title-2", LOGS_HELP),
     );
     let clear_btn = Button::with_label("Очистить");
     clear_btn.add_css_class("destructive-action");
-    clear_btn.connect_clicked(move |_| clear());
+    {
+        let cs = cs.clone();
+        clear_btn.connect_clicked(move |_| {
+            cs.send(UiCommand::ClearJournal);
+        });
+    }
     header.append(&clear_btn);
     root.append(&header);
 
@@ -96,6 +105,16 @@ pub fn append(entry: LogEntry) {
     });
 }
 
+/// Хук: заменить ленту историей из БД (UiEvent::JournalLoaded).
+/// `entries` — свежие первыми (как отдаёт Catalog::list_journal).
+pub fn set_entries(entries: Vec<LogEntry>) {
+    clear();
+    // Идём от старых к новым и prepend-им: свежая окажется сверху — как в append.
+    for entry in entries.into_iter().rev() {
+        append(entry);
+    }
+}
+
 /// Очищает ленту (кнопка «Очистить»).
 pub fn clear() {
     W_LIST.with(|w| {
@@ -111,7 +130,18 @@ pub fn clear() {
     });
 }
 
-/// Создаёт строку ленты: время | значок-уровень | сообщение.
+/// Локальное отображение времени записи: сегодня — «ЧЧ:ММ:СС», старше —
+/// «ДД.ММ.ГГГГ ЧЧ:ММ» (журнал персистится, записи бывают прошлых дней).
+fn fmt_local_time(created_at: DateTime<Utc>) -> String {
+    let local = created_at.with_timezone(&chrono::Local);
+    if local.date_naive() == chrono::Local::now().date_naive() {
+        local.format("%H:%M:%S").to_string()
+    } else {
+        local.format("%d.%m.%Y %H:%M").to_string()
+    }
+}
+
+/// Создаёт строку ленты: время | значок-уровня | сообщение.
 fn make_row(entry: &LogEntry) -> ListBoxRow {
     let row = ListBoxRow::builder().selectable(false).build();
     let box_ = GtkBox::new(Orientation::Horizontal, 10);
@@ -121,7 +151,7 @@ fn make_row(entry: &LogEntry) -> ListBoxRow {
     box_.set_margin_bottom(4);
 
     let time = Label::builder()
-        .label(&entry.timestamp)
+        .label(fmt_local_time(entry.created_at))
         .css_classes(["dim-label", "monospace"])
         .xalign(0.0)
         .build();
@@ -153,8 +183,8 @@ const LOGS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::H("Что здесь"),
     crate::widgets::tab_help::HelpBlock::T("Лента событий: скачивание (успех/ошибка), запуски расписаний, сбои."),
     crate::widgets::tab_help::HelpBlock::B(&[
-        "Хранятся последние 500 записей.",
-        "«Очистить» — очищает экран (не трогает историю в БД).",
+        "Хранятся последние 500 записей — и в этом сеансе, и между запусками (в БД).",
+        "«Очистить» — удаляет историю целиком (ленту и БД).",
         "Подробные логи-файлы: %APPDATA%\\mdwf\\logs.",
     ]),
 ];
