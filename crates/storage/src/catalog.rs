@@ -198,8 +198,7 @@ impl Catalog {
         Ok(cat)
     }
 
-    /// In-memory каталог для тестов.
-    #[cfg(test)]
+    /// In-memory каталог (тесты и runner-тесты планировщика).
     pub fn open_in_memory() -> CoreResult<Self> {
         let conn = Connection::open_in_memory().map_err(map_sqlite_err)?;
         let cat = Self {
@@ -211,6 +210,19 @@ impl Catalog {
 
     fn apply_schema(&self) -> CoreResult<()> {
         let conn = self.conn.lock();
+        // Версионирование: PRAGMA user_version — будущие миграции смогут
+        // отличать «старую» БД от новой без presence-проверок колонок.
+        // БД новее кода (даунгрейд) — предупреждаем, но работаем best-effort.
+        let ver: u32 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(map_sqlite_err)?;
+        if ver > SCHEMA_VERSION {
+            tracing::warn!(
+                db_version = ver,
+                app_version = SCHEMA_VERSION,
+                "БД новее версии кода (даунгрейд?) — возможна потеря совместимости"
+            );
+        }
         conn.execute_batch(SCHEMA_SQL).map_err(map_sqlite_err)?;
         // Миграция v3: колонка downloads.document_id для значка «уже загружен».
         // Для существующих БД (где таблица создана без колонки) — idempotent ALTER.
@@ -218,6 +230,11 @@ impl Catalog {
         // Миграция v4: колонка downloads.document_date (дата документа WB для
         // фильтра периода Архива). Без backfill (см. migrate_add_document_date).
         migrate_add_document_date(&conn)?;
+        if ver < SCHEMA_VERSION {
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .map_err(map_sqlite_err)?;
+            tracing::info!(from = ver, to = SCHEMA_VERSION, "схема БД обновлена");
+        }
         Ok(())
     }
 

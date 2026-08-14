@@ -260,3 +260,105 @@ pub async fn run_due_schedules(
     }
     Ok(launched)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mdwf_storage::NewSchedule;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn cat() -> Catalog {
+        Catalog::open_in_memory().expect("in-memory catalog")
+    }
+
+    fn mk_schedule(cat: &Catalog, name: &str, enabled: bool, next: Option<&str>) -> i64 {
+        // Уникальное имя профиля на расписание (UNIQUE на profiles.name).
+        let pid = cat
+            .upsert_profile(&mdwf_core::Profile::new(format!("p-{name}"), "ozon"))
+            .unwrap();
+        cat.upsert_schedule(&NewSchedule {
+            id: None,
+            name: name.into(),
+            profile_id: pid,
+            reports: vec!["ozon.realization".into()],
+            cron_expr: "0 3 1 * *".into(),
+            period_offset: -1,
+            params: None,
+            enabled,
+            next_run_at_ts: next.map(str::to_string),
+        })
+        .unwrap()
+    }
+
+    /// Счётчик исполнений (fake executor).
+    struct CountingExecutor(AtomicUsize);
+    #[async_trait::async_trait]
+    impl JobExecutor for CountingExecutor {
+        async fn execute(&self, _req: JobRequest) -> CoreResult<JobResult> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(JobResult { files_count: 1, status: RunStatus::Ok, error: None })
+        }
+    }
+
+    const PAST: &str = "2020-01-01T00:00:00+00:00";
+
+    #[tokio::test]
+    async fn run_due_executes_only_due_enabled() {
+        let c = cat();
+        mk_schedule(&c, "due", true, Some(PAST));
+        mk_schedule(&c, "off", false, Some(PAST)); // выключено — не выполняется
+        mk_schedule(&c, "future", true, Some("2099-01-01T00:00:00+00:00"));
+        mk_schedule(&c, "none", true, None); // нет next — только pending
+
+        let ex = CountingExecutor(AtomicUsize::new(0));
+        let n = run_due_schedules(&c, &ex).await.unwrap();
+        assert_eq!(n, 1, "только due+enabled");
+        assert_eq!(ex.0.load(Ordering::SeqCst), 1);
+
+        // Повторный прогон: next у «due» уже продвинут claim'ом — не дубль.
+        let n2 = run_due_schedules(&c, &ex).await.unwrap();
+        assert_eq!(n2, 0, "claim продвинул next_run — повтор не выполняется");
+        assert_eq!(ex.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn none_next_computed_and_pending() {
+        let c = cat();
+        let id = mk_schedule(&c, "s", true, None);
+        let ex = CountingExecutor(AtomicUsize::new(0));
+        let n = run_due_schedules(&c, &ex).await.unwrap();
+        assert_eq!(n, 0, "без next_run_at выполняться не должен");
+        assert_eq!(ex.0.load(Ordering::SeqCst), 0);
+        let rec = c.list_schedules().unwrap().into_iter().find(|s| s.id == id).unwrap();
+        assert!(rec.next_run_at.is_some(), "next вычислен и сохранён (pending)");
+    }
+
+    #[tokio::test]
+    async fn claim_is_atomic_single_winner() {
+        let c = cat();
+        let id = mk_schedule(&c, "s", true, Some(PAST));
+        let now = "2026-01-01T00:00:00+00:00";
+        let next = "2026-02-01T00:00:00+00:00";
+        // Первый claim забирает, второй (тот же момент) — нет.
+        assert!(c.claim_schedule(id, next, now).unwrap());
+        assert!(!c.claim_schedule(id, next, now).unwrap(), "двойное выполнение запрещено");
+    }
+
+    #[tokio::test]
+    async fn failed_executor_marks_status() {
+        struct Failing;
+        #[async_trait::async_trait]
+        impl JobExecutor for Failing {
+            async fn execute(&self, _req: JobRequest) -> CoreResult<JobResult> {
+                Err(mdwf_core::CoreError::Internal("boom".into()))
+            }
+        }
+        let c = cat();
+        let id = mk_schedule(&c, "s", true, Some(PAST));
+        let n = run_due_schedules(&c, &Failing).await.unwrap();
+        assert_eq!(n, 1, "задача считается запущенной");
+        let rec = c.list_schedules().unwrap().into_iter().find(|s| s.id == id).unwrap();
+        assert_eq!(rec.last_run_status.as_deref(), Some("failed"));
+        assert!(rec.next_run_at.is_some(), "next продвинут — не залипнет");
+    }
+}
