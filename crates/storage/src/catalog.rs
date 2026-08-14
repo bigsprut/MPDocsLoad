@@ -871,6 +871,25 @@ mod tests {
     }
 
     #[test]
+    fn upsert_profile_updates_by_id() {
+        let cat = make_cat();
+        let mut p = Profile::new("Ozon-1", "ozon").with_metadata("client_id", "123");
+        let id = cat.upsert_profile(&p).unwrap();
+
+        // Изменение: новое имя + metadata, тот же id → UPDATE (не новый профиль).
+        p = Profile::new("Ozon-Renamed", "ozon").with_metadata("client_id", "456");
+        p.id = Some(id);
+        let returned = cat.upsert_profile(&p).unwrap();
+        assert_eq!(returned, id, "upsert с id должен вернуть тот же id (UPDATE)");
+
+        let got = cat.get_profile_by_name("Ozon-Renamed").unwrap().unwrap();
+        assert_eq!(got.id, Some(id));
+        assert_eq!(got.metadata("client_id"), Some("456"));
+        // Старого имени больше нет (это переименование, а не дубликат).
+        assert!(cat.get_profile_by_name("Ozon-1").unwrap().is_none());
+    }
+
+    #[test]
     fn update_schedule_updates_fields_and_preserves_enabled() {
         let cat = make_cat();
         let pid = cat.upsert_profile(&Profile::new("p", "ozon")).unwrap();

@@ -52,6 +52,8 @@ thread_local! {
     static W_EMPTY: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     /// Один «активный» диалог добавления (чтобы получать его поля по событию).
     static ACTIVE_DIALOG: Rc<RefCell<Option<Rc<AddDialogState>>>> = Rc::new(RefCell::new(None));
+    /// Профиль в режиме изменения (предзаполнение полей + сохранение с id).
+    static EDIT_TARGET: Rc<RefCell<Option<Profile>>> = Rc::new(RefCell::new(None));
     /// Список провайдеров для диалога добавления (передаётся из on_providers_loaded).
     static DIALOG_PROVIDERS: Rc<RefCell<Vec<ProviderInfo>>> = Rc::new(RefCell::new(Vec::new()));
 }
@@ -216,10 +218,15 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .label("＋ Добавить")
         .css_classes(["suggested-action"])
         .build();
-    let del_btn = Button::builder().label("🗑 Удалить").build();
+    let edit_btn = Button::builder()
+        .label("✎ Изменить")
+        .tooltip_text("Изменить выбранный профиль")
+        .build();
     let check_btn = Button::builder().label("✓ Проверить").build();
-    cruds_row.append(&check_btn);
+    let del_btn = Button::builder().label("🗑 Удалить").build();
     cruds_row.append(&add_btn);
+    cruds_row.append(&edit_btn);
+    cruds_row.append(&check_btn);
     cruds_row.append(&del_btn);
     root.append(&cruds_row);
 
@@ -344,6 +351,16 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         let name = STATE.with(|s| s.borrow().name_at(idx).map(str::to_string));
         if let Some(name) = name {
             cs_chk.send(UiCommand::CheckProfile(name));
+        }
+    });
+
+    // Кнопка «Изменить» — открыть диалог с предзаполнением выбранного профиля.
+    let cs_edit = cs.clone();
+    edit_btn.connect_clicked(move |_| {
+        let idx = STATE.with(|s| s.borrow().selected);
+        let profile = PROFILES.with(|p| p.borrow().get(idx).cloned());
+        if let Some(profile) = profile {
+            show_edit_dialog(&cs_edit, &profile);
         }
     });
 
@@ -478,9 +495,28 @@ struct AddDialogState {
 /// Открывает диалог добавления профиля. Список маркетплейсов наполняется
 /// из реестра (DIALOG_PROVIDERS), без хардкода.
 fn show_add_dialog(cs: &CommandSender) {
+    show_profile_dialog(cs, None);
+}
+
+fn show_edit_dialog(cs: &CommandSender, profile: &Profile) {
+    show_profile_dialog(cs, Some(profile.clone()));
+}
+
+/// Диалог создания/изменения профиля. `edit` = Some → изменение (предзаполнение
+/// полей + сохранение с id → upsert UPDATE); None — создание нового.
+fn show_profile_dialog(cs: &CommandSender, edit: Option<Profile>) {
+    let is_edit = edit.is_some();
     let dialog = adw::MessageDialog::builder()
-        .heading("Новый профиль")
-        .body("Выберите маркетплейс и заполните данные доступа")
+        .heading(if is_edit {
+            "Изменить профиль"
+        } else {
+            "Новый профиль"
+        })
+        .body(if is_edit {
+            "Измените нужные поля. Секретное поле (ключ/токен) оставьте пустым — тогда оно не изменится."
+        } else {
+            "Выберите маркетплейс и заполните данные доступа"
+        })
         .build();
 
     let name_entry = Entry::builder().placeholder_text("Например: WB-основной").build();
@@ -497,6 +533,13 @@ fn show_add_dialog(cs: &CommandSender) {
         }
     }
     provider_combo.set_active(Some(0));
+
+    // Режим изменения: предзаполняем имя и выбираем провайдер профиля.
+    EDIT_TARGET.with(|e| *e.borrow_mut() = edit.clone());
+    if let Some(p) = &edit {
+        name_entry.set_text(&p.name);
+        provider_combo.set_active_id(Some(&p.provider_id));
+    }
 
     let grid = Grid::new();
     grid.set_column_spacing(8);
@@ -574,7 +617,12 @@ fn save_profile_from_dialog(state: &Rc<AddDialogState>) {
         return;
     }
 
+    // Режим изменения: сохраняем id профиля (→ upsert UPDATE вместо INSERT).
+    let editing = EDIT_TARGET.with(|e| e.borrow_mut().take());
     let mut profile = Profile::new(&name, &provider_id);
+    if let Some(p) = &editing {
+        profile.id = p.id;
+    }
     for (field, entry) in state.fields.borrow().iter() {
         let value = entry.text().to_string();
         if !value.is_empty() {
@@ -582,7 +630,10 @@ fn save_profile_from_dialog(state: &Rc<AddDialogState>) {
         }
     }
 
-    STATE.with(|s| s.borrow_mut().append_local(&name, &provider_id));
+    // append_local — только для нового профиля (для существующего — update в БД).
+    if editing.is_none() {
+        STATE.with(|s| s.borrow_mut().append_local(&name, &provider_id));
+    }
     state.cs.send(UiCommand::SaveProfile(profile));
 
     ACTIVE_DIALOG.with(|cell| {
@@ -653,6 +704,18 @@ fn render_dialog_fields(state: &Rc<AddDialogState>, fields: &[AuthFieldInfo]) {
             }
         };
         state.grid.attach(&entry, 1, r, 1, 1);
+        // Режим изменения (EDIT_TARGET задан): несекретные поля — из профиля,
+        // секретное — пусто с подсказкой (keyring не трогается: пустое поле не
+        // перезаписывает существующий секрет, см. store_profile_secrets).
+        // В режиме создания — поле не трогаем (свой placeholder из match выше).
+        let target = EDIT_TARGET.with(|e| e.borrow().clone());
+        if let Some(p) = &target {
+            if field.secret {
+                entry.set_placeholder_text(Some("оставьте пустым, чтобы не менять"));
+            } else if let Some(v) = p.auth_metadata.get(&field.id) {
+                entry.set_text(v);
+            }
+        }
         state.fields.borrow_mut().push((field.clone(), entry));
     }
     state.grid.show();
