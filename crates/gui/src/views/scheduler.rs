@@ -685,6 +685,20 @@ fn make_row(s: &ScheduleView) -> gtk4::ListBoxRow {
     card.set_margin_top(8);
     card.set_margin_bottom(8);
 
+    // Двойной клик по карточке → диалог редактирования (то же, что «✎»).
+    // ListBoxRow activate в GTK 4.20/MinGW не срабатывает (живой клик-тест:
+    // сигнал не эмитится) — используем GestureClick: n_press==2 = двойной
+    // клик (штатный счётчик GTK, не таймстампы вручную).
+    let dbl = gtk4::GestureClick::new();
+    dbl.set_button(gtk4::gdk::BUTTON_PRIMARY);
+    let s_for_dbl = s.clone();
+    dbl.connect_pressed(move |_g, n_press, _x, _y| {
+        if n_press >= 2 {
+            show_edit_dialog(&s_for_dbl);
+        }
+    });
+    card.add_controller(dbl);
+
     // --- Верх: имя расписания + действия (вкл / выполнить / удалить) ---
     let top = gtk4::Box::new(Orientation::Horizontal, 10);
     let name = Label::builder()
