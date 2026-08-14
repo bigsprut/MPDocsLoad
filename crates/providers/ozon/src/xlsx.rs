@@ -485,6 +485,107 @@ fn workbook_balance(wb: &mut Workbook, json: &Value) -> CoreResult<()> {
     Ok(())
 }
 
+// ===== Фоллбэк «Отчёта об отправлениях» (данные /v3/posting/fbo/list) =====
+
+/// Лист «Отправления» из полных данных /v3/posting/fbo/list: денормализация
+/// posting × products — по строке на товар внутри отправления (как CSV Ozon).
+/// Финансы (старая цена) подтягиваются из financial_data.products по product_id.
+pub fn sheet_postings_from_fbo_list(wb: &mut Workbook, postings: &[Value]) -> CoreResult<()> {
+    let sheet = wb.add_worksheet();
+    sheet
+        .set_name("Отправления")
+        .map_err(|e| CoreError::Internal(format!("xlsx sheet name: {e}")))?;
+    let bold = Format::new().set_bold();
+    let headers: &[(&str, &str)] = &[
+        ("posting_number", "Номер отправления"),
+        ("order_number", "Заказ"),
+        ("status", "Статус"),
+        ("substatus", "Подстатус"),
+        ("warehouse_name", "Склад"),
+        ("city", "Город"),
+        ("delivery_type", "Тип доставки"),
+        ("offer_id", "Артикул"),
+        ("sku", "SKU"),
+        ("name", "Наименование"),
+        ("quantity", "Количество"),
+        ("price", "Цена"),
+        ("old_price", "Цена до скидки"),
+        ("currency", "Валюта"),
+    ];
+    for (col, (_, title)) in headers.iter().enumerate() {
+        sheet
+            .write_string_with_format(0, col as u16, *title, &bold)
+            .map_err(|e| CoreError::Internal(format!("xlsx header: {e}")))?;
+    }
+    let mut row_idx = 1u32;
+    for p in postings {
+        // Финансы по товару: financial_data.products[].{product_id, old_price}.
+        let fin_by_sku: std::collections::HashMap<String, &Value> = p
+            .pointer("/financial_data/products")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|f| {
+                        let id = f.get("product_id")?;
+                        Some((id.to_string(), f))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let products = p
+            .get("products")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for prod in &products {
+            let sku_key = prod
+                .get("sku")
+                .map(std::string::ToString::to_string)
+                .unwrap_or_default();
+            let fin = fin_by_sku.get(&sku_key).copied();
+            let mut row_obj = serde_json::Map::new();
+            for field in ["posting_number", "order_number", "status", "substatus"] {
+                if let Some(v) = p.get(field) {
+                    row_obj.insert(field.to_string(), v.clone());
+                }
+            }
+            for (field, ptr) in [
+                ("warehouse_name", "/analytics_data/warehouse_name"),
+                ("city", "/analytics_data/city"),
+                ("delivery_type", "/analytics_data/delivery_type"),
+            ] {
+                if let Some(v) = p.pointer(ptr) {
+                    row_obj.insert(field.to_string(), v.clone());
+                }
+            }
+            for field in ["offer_id", "sku", "name", "quantity"] {
+                if let Some(v) = prod.get(field) {
+                    row_obj.insert(field.to_string(), v.clone());
+                }
+            }
+            // Цена: products[].price.amount; старая цена — из financial_data.
+            if let Some(amount) = prod.pointer("/price/amount") {
+                row_obj.insert("price".into(), amount.clone());
+            }
+            if let Some(v) = prod.pointer("/price/currency") {
+                row_obj.insert("currency".into(), v.clone());
+            }
+            if let Some(old) = fin.and_then(|f| f.get("old_price")) {
+                row_obj.insert("old_price".into(), old.clone());
+            }
+            let row_val = Value::Object(row_obj);
+            for (col, (path, _)) in headers.iter().enumerate() {
+                let cell = extract_path(&row_val, path);
+                write_cell(sheet, row_idx, col as u16, cell.as_deref());
+            }
+            row_idx += 1;
+        }
+    }
+    sheet.set_freeze_panes(1, 0).ok();
+    let _ = sheet.autofit();
+    Ok(())
+}
+
 // ===== Хелперы =====
 
 /// Извлекает значение по точечному пути ("a.b.c") из JSON-объекта.

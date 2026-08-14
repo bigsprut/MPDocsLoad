@@ -305,7 +305,8 @@ static REPORT_DEFS: &[ReportDef] = &[
         display_name: "Остатки на FBS-складе",
         category: ReportCategory::Documents,
         period_kind: PeriodKind::None,
-        description: "Остатки на FBS-складе (ID складов подставляются автоматически).",
+        description: "Остатки на FBS-складе (ID складов подставляются автоматически). \
+             Для схемы FBO складов нет — используйте отчёт «Аналитика по остаткам».",
         params: DefParams::Text {
             id: "warehouse_ids",
             label: "ID складов (через запятую)",
@@ -523,16 +524,23 @@ impl Report for OzonReport {
 /// Строит тело запроса для download из параметров.
 ///
 /// Конвертирует period `"YYYY-MM"` в диапазон дат `(date_from, date_to)` формата
-/// `YYYY-MM-DD`: первый день месяца .. последний день месяца. Применяется когда
-/// UI/CLI передаёт только period (без явных date_from/date_to в values) — для
-/// отчётов, требующих диапазон дат (balance, buyout, placement_*, returns,
-/// postings, cash_flow, marked_products_sales).
+/// `YYYY-MM-DD`: первый день месяца .. последний день месяца; period `"YYYY-MM-DD"`
+/// (один день) — в `(date, date)`. Применяется когда UI/CLI передаёт только
+/// period (без явных date_from/date_to в values) — для отчётов, требующих
+/// диапазон дат (balance, buyout, placement_*, returns, postings, cash_flow,
+/// marked_products_sales). Раньше дневной период уходил с ПУСТЫМ filter →
+/// 4xx «invalid date filter, expected processed_at or cutoff».
 /// Возвращает (None, None) если period пуст или невалиден.
 fn period_to_date_range(period: Option<&str>) -> (Option<String>, Option<String>) {
     let Some(p) = period else {
         return (None, None);
     };
-    let Some((y, m)) = date_format::parse_year_month(p) else {
+    let raw = p.trim();
+    // Один день: YYYY-MM-DD → (date, date).
+    if raw.len() == 10 && chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").is_ok() {
+        return (Some(raw.to_string()), Some(raw.to_string()));
+    }
+    let Some((y, m)) = date_format::parse_year_month(raw) else {
         return (None, None);
     };
     let Some(first) = chrono::NaiveDate::from_ymd_opt(y, m, 1) else {
@@ -858,14 +866,9 @@ impl Report for OzonAsyncReport {
         &self,
         auth: &dyn mdwf_core::Authenticator,
         params: &ReportParams,
-        _progress: ProgressCallbackRef,
+        progress: ProgressCallbackRef,
         cancel: CancelToken,
     ) -> CoreResult<Vec<DownloadedFile>> {
-        // Параметры поллинга /v1/report/info (шаг 2): async-отчёты Ozon генерируются
-        // не мгновенно — waiting/processing это нормальные промежуточные статусы.
-        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-        const POLL_MAX_ATTEMPTS: usize = 120; // ~10 минут максимум.
-
         // Авто-fill: для warehouse_stock, если ID складов не переданы явно —
         // получаем их через /v2/warehouse/list (склады FBS/rFBS продавца).
         let params = if self.type_id == "ozon.warehouse_stock"
@@ -887,8 +890,9 @@ impl Report for OzonAsyncReport {
                     // отправки запроса без warehouseId (→ 4xx «at least 1 item»).
                     return Err(CoreError::Internal(
                         "у продавца нет FBS/rFBS-складов ( /v2/warehouse/list вернул пустой список) \
-                         — отчёт «Остатки на FBS-складе» неприменим. \
-                         Если используете FBO — отчёт недоступен для вашей схемы работы."
+                         — отчёт «Остатки на FBS-складе» неприменим. Если используете FBO — \
+                         воспользуйтесь отчётом «Аналитика по остаткам» (показывает остатки \
+                         FBO по всем вашим товарам)."
                             .into(),
                     ));
                 }
@@ -900,10 +904,40 @@ impl Report for OzonAsyncReport {
         } else {
             params.clone()
         };
+        self.download_with_retries(auth, &params, progress, cancel, 0)
+            .await
+    }
+}
 
-        // Шаг 1: запрос отчёта → получаем code.
-        let body = build_download_body(&self.type_id, &params);
-        let resp = self.client.post(self.endpoint, &body, auth).await?;
+impl OzonAsyncReport {
+    /// Create → поллинг → файл, с ретраями/фоллбэком для postings (см. ниже).
+    /// `build_failures` — сколько раз серверная генерация уже упала
+    /// («Failed to build report»); ретраится до POSTINGS_BUILD_RETRIES раз.
+    async fn download_with_retries(
+        &self,
+        auth: &dyn mdwf_core::Authenticator,
+        params: &ReportParams,
+        progress: ProgressCallbackRef,
+        cancel: CancelToken,
+        mut build_failures: u32,
+    ) -> CoreResult<Vec<DownloadedFile>> {
+        // Параметры поллинга /v1/report/info (шаг 2): async-отчёты Ozon генерируются
+        // не мгновенно — waiting/processing это нормальные промежуточные статусы.
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+        const POLL_MAX_ATTEMPTS: usize = 120; // ~10 минут максимум.
+
+        // Цикл create-попыток: при «Failed to build report» (postings) —
+        // повторный create со свежим code (до POSTINGS_BUILD_RETRIES раз),
+        // затем фоллбэк. 'create — метка для перезапуска обоих шагов.
+        'create: loop {
+        // Шаг 1: запрос отчёта → получаем code. Ошибку create маппим в
+        // человекочитаемую, где известна семантика (b2b: «нет документа» —
+        // аккаунт не продаёт юрлицам, а не сбой).
+        let body = build_download_body(self.type_id.as_str(), params);
+        let resp = match self.client.post(self.endpoint, &body, auth).await {
+            Ok(r) => r,
+            Err(e) => return Err(friendly_create_error(&self.type_id, e)),
+        };
 
         // Извлекаем code. Большинство create-эндпоинтов возвращают {result:{code}},
         // но часть — {code} без result-обёртки (discounted, warehouse_stock,
@@ -944,10 +978,41 @@ impl Report for OzonAsyncReport {
                         .get("error")
                         .and_then(|e| e.as_str())
                         .unwrap_or("неизвестная ошибка");
-                    return Err(CoreError::Internal(format!(
+                    let err = CoreError::Internal(format!(
                         "Ozon {}: генерация отчёта не удалась: {err}",
                         self.type_id
-                    )));
+                    ));
+                    // «Failed to build report» у postings — серверная генерация
+                    // падает стабильно (живые пробы июль/февраль 2026). Ретраи
+                    // покрывают транзиентный случай; после исчерпания — фоллбэк
+                    // на самостоятельную сборку из /v3/posting/fbo/list.
+                    if self.type_id == "ozon.postings" && is_build_failure(&err) {
+                        build_failures += 1;
+                        if build_failures > POSTINGS_BUILD_RETRIES {
+                            tracing::warn!(
+                                attempts = build_failures,
+                                "postings: серверная генерация стабильно падает — фоллбэк на /v3/posting/fbo/list"
+                            );
+                            progress.report(mdwf_core::ProgressUpdate::message(
+                                "Серверная генерация отчёта не удалась — собираю отчёт \
+                                 из данных отправлений (FBO list)…",
+                            ));
+                            return self
+                                .postings_fallback(auth, params, progress, &cancel)
+                                .await;
+                        }
+                        let pause = build_retry_pause();
+                        tracing::warn!(
+                            attempt = build_failures,
+                            ?pause,
+                            "postings: генерация не удалась, повторяю запрос"
+                        );
+                        cancellable_sleep(pause, &cancel).await?;
+                        // Новый create (свежий code) и новый цикл поллинга:
+                        // перезапускаем ОБА шага.
+                        continue 'create;
+                    }
+                    return Err(err);
                 }
                 "success" => {
                     let url = result
@@ -988,12 +1053,110 @@ impl Report for OzonAsyncReport {
         let bytes = self.client.download_file(&file_url).await?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
         let ext = detect_format(&bytes);
-        Ok(vec![DownloadedFile::with_content(
+        return Ok(vec![DownloadedFile::with_content(
             format!("{}_{}.{}", self.type_id, period, ext),
             ext,
             bytes,
+        )]);
+        } // 'create
+    }
+
+    /// Фоллбэк «Отчёта об отправлениях»: серверная генерация
+    /// /v1/report/postings/create стабильно падает («Failed to build report»,
+    /// живые пробы июль/февраль 2026) — собираем отчёт сами из полных данных
+    /// /v3/posting/fbo/list (денормализация отправление × товар → xlsx).
+    async fn postings_fallback(
+        &self,
+        auth: &dyn mdwf_core::Authenticator,
+        params: &ReportParams,
+        progress: ProgressCallbackRef,
+        cancel: &CancelToken,
+    ) -> CoreResult<Vec<DownloadedFile>> {
+        let period = params.period.as_deref();
+        let (df, dt) = match (
+            params.get("date_from").map(str::to_string),
+            params.get("date_to").map(str::to_string),
+        ) {
+            (Some(df), Some(dt)) => (Some(df), Some(dt)),
+            _ => period_to_date_range(period),
+        };
+        let mut total = 0usize;
+        let mut pages = 0u32;
+        let progress_cb = &progress;
+        let postings = self
+            .client
+            .fetch_fbo_postings_v3(auth, df.as_deref(), dt.as_deref(), |chunk, _| {
+                total += chunk.len();
+                pages += 1;
+                progress_cb.report(mdwf_core::ProgressUpdate {
+                    fraction: None,
+                    message: format!("Отправления: получено {total} (страница {pages})"),
+                    current: Some(total as u64),
+                    total: None,
+                });
+            })
+            .await?;
+        if cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        crate::xlsx::sheet_postings_from_fbo_list(&mut wb, &postings)?;
+        let bytes = wb
+            .save_to_buffer()
+            .map_err(|e| CoreError::Internal(format!("xlsx write: {e}")))?;
+        let period = params.period.clone().unwrap_or_else(|| "current".into());
+        Ok(vec![DownloadedFile::with_content(
+            format!("{}_{}.xlsx", self.type_id, period),
+            "xlsx",
+            bytes,
         )])
     }
+}
+
+/// Число повторных create при серверном сбое генерации «Failed to build
+/// report» (только postings). Итого до 1+2 попыток, между ними BUILD_RETRY_PAUSE.
+const POSTINGS_BUILD_RETRIES: u32 = 2;
+/// Пауза между повторами (сервер просит «Try again later»). Переопределяется
+/// переменной MDWF_OZON_BUILD_RETRY_MS (тесты ставят миллисекунды).
+fn build_retry_pause() -> std::time::Duration {
+    let ms = std::env::var("MDWF_OZON_BUILD_RETRY_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(30_000);
+    std::time::Duration::from_millis(ms)
+}
+/// Сон с отзывом на отмену: «Отмена» пользователя прерывает ожидание ретрая.
+async fn cancellable_sleep(d: std::time::Duration, cancel: &CancelToken) -> CoreResult<()> {
+    tokio::select! {
+        () = tokio::time::sleep(d) => Ok(()),
+        () = cancel.cancelled() => Err(CoreError::Cancelled),
+    }
+}
+
+/// True для ошибки серверной генерации отчёта, которую имеет смысл повторить
+/// (сообщение Ozon «Failed to build report. Try again later»).
+fn is_build_failure(e: &CoreError) -> bool {
+    e.to_string().contains("Failed to build report")
+}
+
+/// Человекочитаемая обёртка ошибок create-фазы, где известна семантика.
+/// b2b_sales: gRPC NotFound «finance document not found» = у продавца НЕТ
+/// документа реестра продаж юрлицам за период (аккаунт не продаёт юрлицам) —
+/// это данные, а не сбой.
+fn friendly_create_error(type_id: &str, e: CoreError) -> CoreError {
+    let msg = e.to_string();
+    if msg.contains("finance document not found") || msg.contains("getFinanceDocumentID") {
+        return CoreError::Api {
+            status: 404,
+            message: format!(
+                "Ozon {type_id}: за выбранный период нет документа «реестр продаж \
+                 юридическим лицам» — кабинет не продаёт юрлицам (B2B). Отчёт \
+                 неприменим; PDF появляется только при наличии B2B-продаж."
+            ),
+            retryable: false,
+        };
+    }
+    e
 }
 
 // =========================================================================
@@ -1445,6 +1608,49 @@ impl Report for OzonPaginatedReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn period_range_accepts_single_day() {
+        // День YYYY-MM-DD → (date, date): раньше уходил пустой filter →
+        // 4xx «invalid date filter, expected processed_at or cutoff».
+        assert_eq!(
+            period_to_date_range(Some("2026-07-01")),
+            (Some("2026-07-01".into()), Some("2026-07-01".into()))
+        );
+        // Месяц — как раньше.
+        assert_eq!(
+            period_to_date_range(Some("2026-07")),
+            (Some("2026-07-01".into()), Some("2026-07-31".into()))
+        );
+        // Мусор — (None, None).
+        assert_eq!(period_to_date_range(Some("abc")), (None, None));
+    }
+
+    #[test]
+    fn build_failure_detection() {
+        let e = CoreError::Internal(
+            "Ozon ozon.postings: генерация отчёта не удалась: Failed to build report. Try again later.".into(),
+        );
+        assert!(is_build_failure(&e));
+        assert!(!is_build_failure(&CoreError::Internal("другая ошибка".into())));
+    }
+
+    #[test]
+    fn b2b_create_error_becomes_friendly() {
+        let raw = CoreError::Api {
+            status: 404,
+            message: "service.CreateDocumentB2BSalesReport: getFinanceDocumentID: \
+                      rpc error: code = NotFound desc = finance document not found"
+                .into(),
+            retryable: false,
+        };
+        let friendly = friendly_create_error("ozon.b2b_sales", raw);
+        let msg = friendly.to_string();
+        assert!(msg.contains("не продаёт юрлицам"), "получили: {msg}");
+        // Чужие ошибки проходят без перекройки.
+        let other = CoreError::Api { status: 429, message: "rate".into(), retryable: true };
+        assert_eq!(friendly_create_error("ozon.b2b_sales", other).to_string(), "rate");
+    }
 
     #[test]
     fn build_body_realization_month_year_int() {

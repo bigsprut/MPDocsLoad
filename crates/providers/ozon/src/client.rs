@@ -471,15 +471,38 @@ impl OzonHttpClient {
         date_from: Option<&str>,
         date_to: Option<&str>,
     ) -> CoreResult<Vec<String>> {
-        let url = format!("{}/v2/posting/fbo/list", self.base_url);
-        let mut nums = Vec::new();
-        let limit = 1000i64;
-        let mut offset = 0i64;
+        // /v3 (cursor): /v2 отключается 31.08.2026 (changelog docs.ozon.ru).
+        let postings = self
+            .fetch_fbo_postings_v3(auth, date_from, date_to, |_, _| {})
+            .await?;
+        Ok(postings
+            .iter()
+            .filter_map(|p| p.get("posting_number").and_then(serde_json::Value::as_str))
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Полные данные FBO-отправлений за период — POST /v3/posting/fbo/list
+    /// (cursor-пагинация). Используется фоллбэком отчёта «Об отправлениях»:
+    /// серверная генерация /v1/report/postings/create стабильно падает
+    /// («Failed to build report»), а эти данные содержат всё существенное
+    /// (статусы, заказы, товары, цены, склад). `sink` принимает каждую
+    /// страницу (для прогресса; может быть `&mut ()`).
+    #[allow(clippy::type_complexity)]
+    pub async fn fetch_fbo_postings_v3(
+        &self,
+        auth: &dyn Authenticator,
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+        mut sink: impl FnMut(&[serde_json::Value], &str),
+    ) -> CoreResult<Vec<serde_json::Value>> {
+        let url = format!("{}/v3/posting/fbo/list", self.base_url);
+        let mut all: Vec<serde_json::Value> = Vec::new();
+        let mut cursor = String::new();
         let mut iter = 0u32;
         loop {
+            // since/to — ISO datetime (google.protobuf.Timestamp), не date-only.
             let mut filter = serde_json::Map::new();
-            // since/to — google.protobuf.Timestamp (ISO datetime), НЕ date-only
-            // (иначе «invalid google.protobuf.Timestamp value»).
             if let Some(df) = date_from {
                 if let Some(iso) = crate::date_format::date_only_to_iso(df, false) {
                     filter.insert("since".into(), json!(iso));
@@ -491,30 +514,36 @@ impl OzonHttpClient {
                 }
             }
             let body = json!({
-                "limit": limit,
-                "offset": offset,
-                "translit": false,
+                // Дока: limit 1..=100 для /v3/posting/fbo/list.
+                "limit": 100,
+                "cursor": cursor,
                 "filter": filter,
             });
             let resp = self.post_url(&url, &body, auth).await?;
-            // result — массив отправлений; у каждого есть posting_number.
-            let rows = resp.get("result").and_then(serde_json::Value::as_array);
-            let n = rows.map_or(0, Vec::len) as i64;
-            if let Some(postings) = rows {
-                for p in postings {
-                    if let Some(pn) = p.get("posting_number").and_then(serde_json::Value::as_str) {
-                        nums.push(pn.to_string());
-                    }
-                }
-            }
-            // Выход: страница меньше лимта (конец) либо защита от цикла (~200k).
-            if n < limit || iter >= 200 {
+            let postings = resp
+                .get("postings")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let has_next = resp
+                .get("has_next")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let next = resp
+                .get("cursor")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            sink(&postings, &next);
+            all.extend(postings);
+            // Выход: has_next=false, курсор не двигается, либо защита от цикла.
+            if !has_next || next.is_empty() || iter >= 200 {
                 break;
             }
-            offset += limit;
+            cursor = next;
             iter += 1;
         }
-        Ok(nums)
+        Ok(all)
     }
 
     /// Номера FBS-отправлений за период — POST /v4/posting/fbs/list
