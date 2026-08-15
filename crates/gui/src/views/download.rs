@@ -307,7 +307,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .build();
     root.append(&mode_hint);
 
-    // --- Строка 2: фильтры ---
+    // --- Строка 2: период (диапазон + интервал) ---
+    // Фильтры разложены на ДВЕ строки: одна длинная задавала минимальную
+    // ширину окна ~710px и мешала уменьшению (жалоба на размер окна).
     // Период по умолчанию: последний год (диапазон) + прошлый месяц (для period-отчётов).
     let today = chrono::Local::now().date_naive();
     let year_ago = today - chrono::Duration::days(365);
@@ -343,9 +345,6 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     }
     interval_btn.set_popover(Some(&interval_popover));
 
-    let category_label = Label::new(Some("Категория:"));
-    row2.append(&category_label);
-    row2.append(&category_combo);
     row2.append(&Label::new(Some("Диапазон:")));
     row2.append(&date_from);
     // Кнопка-календарь для date_from
@@ -356,9 +355,16 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     row2.append(&super::make_date_picker(&date_to, "%d.%m.%Y"));
     // Кнопка выбора стандартного интервала
     row2.append(&interval_btn);
-    row2.append(&Label::new(Some("Лимит:")));
-    row2.append(&limit_entry);
     root.append(&row2);
+
+    // --- Строка 2b: категория + лимит ---
+    let row2b = GtkBox::new(Orientation::Horizontal, 8);
+    let category_label = Label::new(Some("Категория:"));
+    row2b.append(&category_label);
+    row2b.append(&category_combo);
+    row2b.append(&Label::new(Some("Лимит:")));
+    row2b.append(&limit_entry);
+    root.append(&row2b);
 
     // Описание выбранного периода («январь 2025» / «3 квартал 2025» /
     // «второе полугодие 2024» / «23 января 2026» / «с 04.03.2025 по…») —
@@ -376,13 +382,19 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     date_to.connect_changed(|_| refresh_range_desc());
     refresh_range_desc();
 
-    // --- Кнопки действий ---
+    // --- Кнопки действий (два ряда: один длинный ряд держал min-ширину
+    // окна ~680px — жалоба на размер окна) ---
     let row3 = GtkBox::new(Orientation::Horizontal, 8);
     let list_btn = super::icon_button("Список документов", "view-list-symbolic");
     list_btn.set_tooltip_text(Some("Для отчётов-списков (Browsable)"));
     let download_btn = super::icon_button("Скачать выбранные", "document-save-symbolic");
     download_btn.add_css_class("suggested-action");
     download_btn.set_tooltip_text(Some("Скачать отмеченные документы"));
+    row3.append(&list_btn);
+    row3.append(&download_btn);
+    root.append(&row3);
+
+    let row3b = GtkBox::new(Orientation::Horizontal, 8);
     let period_btn = super::icon_button("Скачать по периоду", "x-office-calendar-symbolic");
     period_btn.set_tooltip_text(Some("Сгенерировать отчёт за период"));
     let cancel_btn = super::icon_button("Отмена", "process-stop-symbolic");
@@ -393,11 +405,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             cs_c.cancel_current();
         });
     }
-    row3.append(&list_btn);
-    row3.append(&download_btn);
-    row3.append(&period_btn);
-    row3.append(&cancel_btn);
-    root.append(&row3);
+    row3b.append(&period_btn);
+    row3b.append(&cancel_btn);
+    root.append(&row3b);
 
     // --- Список документов (с чекбоксами) ---
     let list_box = ListBox::new();

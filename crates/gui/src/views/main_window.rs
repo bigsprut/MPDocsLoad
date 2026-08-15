@@ -14,6 +14,37 @@ use libadwaita::prelude::*;
 
 use crate::channels::{CommandSender, UiEvent, ViewId};
 
+/// Дефолтный размер окна — адаптивно: ~3/4 первого монитора (минус прикидка
+/// на панель задач), зажатый в 780×540…1100×720. Фиксированные 1100×720 с
+/// самого начала проекта не учитывали небольшие экраны (жалоба юзера).
+fn default_window_size() -> (i32, i32) {
+    let (mut w, mut h) = (960, 600);
+    let mut raw = None;
+    if let Some(disp) = gtk4::gdk::Display::default() {
+        let monitors = disp.monitors();
+        if monitors.n_items() > 0 {
+            if let Some(m) = monitors
+                .item(0)
+                .and_then(|o| o.downcast_ref::<gtk4::gdk::Monitor>().cloned())
+            {
+                let r = m.geometry();
+                raw = Some((r.width(), r.height()));
+                w = (r.width() * 3 / 4).clamp(780, 1100);
+                // workarea в GDK4 не экспонирована — вычитаем прикидку панели задач.
+                h = ((r.height() - 80).max(400) * 3 / 4).clamp(540, 720);
+            }
+        }
+    }
+    if cfg!(debug_assertions) {
+        // Диагностика выбора дефолта при разработке.
+        match raw {
+            Some((rw, rh)) => eprintln!("[window] монитор {rw}x{rh} → дефолт {w}x{h}"),
+            None => eprintln!("[window] монитор не определён → дефолт {w}x{h}"),
+        }
+    }
+    (w, h)
+}
+
 /// Строит главное окно и показывает его.
 pub fn build_and_present(
     app: &adw::Application,
@@ -23,8 +54,8 @@ pub fn build_and_present(
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Marketplace Downloader — MDWF")
-        .default_width(1100)
-        .default_height(720)
+        .default_width(default_window_size().0)
+        .default_height(default_window_size().1)
         .build();
 
     // Корневой контейнер: [боковая навигация | разделитель | стек].

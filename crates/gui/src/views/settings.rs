@@ -1,10 +1,14 @@
 //! Вкладка «Настройки»: редактирование config.toml (спец. §2.7.1, гл. 06).
 //!
-//! Загружает текущий AppConfig, даёт редактировать ключевые поля, сохраняет.
-//! Полный набор секций доступен через прямой доступ к config.toml в data_dir.
+//! Параметры сгруппированы по смыслу на подвкладках (Файлы / Сеть /
+//! Расписания / Безопасность) — одна длинная простыня полей растягивала
+//! окно по высоте и мешала его уменьшению. Кнопка «Сохранить» и статус —
+//! общие внизу. Подписи полей — естественной ширины (без фиксированных
+//! width_chars): строка остаётся компактной на любом окне, пустоты
+//! посередине нет.
 
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Button, Entry, Label, Orientation, SpinButton};
+use gtk4::{Box as GtkBox, Button, Entry, Label, Orientation, SpinButton, Stack, StackSwitcher};
 use libadwaita as adw;
 
 use mdwf_config::AppConfig;
@@ -35,29 +39,18 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     if let Ok(p) = &prov {
         cfg = p.raw.clone();
         CFG.with(|c| *c.borrow_mut() = Some(p.raw.clone()));
-        root.append(&Label::builder()
-            .label(format!("Файл конфигурации: {}", p.config_path.display()))
-            .css_classes(["dim-label"])
-            .halign(gtk4::Align::Start)
-            .wrap(true)
-            .build());
-        root.append(&Label::builder()
-            .label(format!("Папка данных: {}", p.data_dir.display()))
-            .css_classes(["dim-label"])
-            .halign(gtk4::Align::Start)
-            .wrap(true)
-            .build());
-        root.append(&Label::builder()
-            .label(format!("Каталог SQLite: {}", p.db_path.display()))
-            .css_classes(["dim-label"])
-            .halign(gtk4::Align::Start)
-            .wrap(true)
-            .build());
     }
 
-    // --- Секция Storage ---
-    root.append(&section_header("Хранилище"));
+    // --- Подвкладки по смысловым группам ---
+    let stack = Stack::builder()
+        .vhomogeneous(false) // страницы разной высоты — без пустот
+        .build();
+    let switcher = StackSwitcher::builder().stack(&stack).build();
+    switcher.set_halign(gtk4::Align::Start);
+    root.append(&switcher);
 
+    // Страница «Файлы».
+    let files = page();
     let output_dir = labeled_entry("Папка выгрузки:", &cfg.storage.output_dir);
     // Кнопка выбора папки через системный диалог (FileChooser).
     {
@@ -97,21 +90,32 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         // Вставляем кнопку после поля (в конец строки).
         output_dir.row.append(&browse_btn);
     }
-    root.append(&output_dir.row);
+    files.append(&output_dir.row);
 
     let template = labeled_entry("Шаблон имени файла:", &cfg.storage.file_name_template);
-    root.append(&template.row);
+    files.append(&template.row);
 
     let compute_hash = gtk4::CheckButton::builder()
         .label("Вычислять SHA-256 (для дедупликации)")
         .active(cfg.storage.compute_hash)
         .halign(gtk4::Align::Start)
         .build();
-    root.append(&compute_hash);
+    files.append(&compute_hash);
 
-    // --- Секция Network ---
-    root.append(&section_header("Сеть"));
+    // Справочно: где лежат данные (не настройки — просто информация).
+    if let Ok(p) = &prov {
+        for (caption, value) in [
+            ("Файл конфигурации:", p.config_path.display().to_string()),
+            ("Папка данных:", p.data_dir.display().to_string()),
+            ("Каталог SQLite:", p.db_path.display().to_string()),
+        ] {
+            files.append(&dim_path_row(caption, &value));
+        }
+    }
+    stack.add_titled(&files, None, "Файлы");
 
+    // Страница «Сеть».
+    let net = page();
     let timeout = labeled_spin(
         "Таймаут запроса (с):",
         f64::from(cfg.network.request_timeout_seconds),
@@ -119,10 +123,10 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         300.0,
         1.0,
     );
-    root.append(&timeout.row);
+    net.append(&timeout.row);
 
     let retries = labeled_spin("Макс. повторов:", f64::from(cfg.network.max_retries), 0.0, 20.0, 1.0);
-    root.append(&retries.row);
+    net.append(&retries.row);
 
     let concurrency = labeled_spin(
         "Макс. параллельных запросов на провайдера:",
@@ -131,11 +135,11 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         20.0,
         1.0,
     );
-    root.append(&concurrency.row);
+    net.append(&concurrency.row);
+    stack.add_titled(&net, None, "Сеть");
 
-    // --- Секция Scheduler ---
-    root.append(&section_header("Расписания"));
-
+    // Страница «Расписания».
+    let sched = page();
     let parallel_jobs = labeled_spin(
         "Макс. параллельных задач:",
         f64::from(cfg.scheduler.max_parallel_jobs),
@@ -143,24 +147,24 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         20.0,
         1.0,
     );
-    root.append(&parallel_jobs.row);
+    sched.append(&parallel_jobs.row);
 
     let autostart = gtk4::CheckButton::builder()
         .label("Автозапуск с Windows")
         .active(cfg.scheduler.autostart_with_os)
         .halign(gtk4::Align::Start)
         .build();
-    root.append(&autostart);
+    sched.append(&autostart);
+    stack.add_titled(&sched, None, "Расписания");
 
-    // --- Секция Security ---
-    root.append(&section_header("Безопасность"));
-
+    // Страница «Безопасность».
+    let sec = page();
     let use_keychain = gtk4::CheckButton::builder()
         .label("Хранить секреты в OS keychain (иначе — in-memory)")
         .active(cfg.security.use_keychain)
         .halign(gtk4::Align::Start)
         .build();
-    root.append(&use_keychain);
+    sec.append(&use_keychain);
 
     let log_retention = labeled_spin(
         "Хранить логи (дней):",
@@ -169,9 +173,12 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         365.0,
         1.0,
     );
-    root.append(&log_retention.row);
+    sec.append(&log_retention.row);
+    stack.add_titled(&sec, None, "Безопасность");
 
-    // --- Кнопка сохранения ---
+    root.append(&stack);
+
+    // --- Кнопка сохранения и статус: общие, видны на любой подвкладке ---
     let save_btn = Button::builder()
         .label("💾 Сохранить настройки")
         .css_classes(["suggested-action"])
@@ -240,13 +247,31 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     root
 }
 
-fn section_header(text: &str) -> Label {
-    Label::builder()
-        .label(text)
-        .css_classes(["heading"])
-        .halign(gtk4::Align::Start)
-        .margin_top(8)
-        .build()
+/// Страница-контейнер подвкладки настроек.
+fn page() -> GtkBox {
+    GtkBox::new(Orientation::Vertical, 10)
+}
+
+/// Справочная строка-путь (подпись + переносимое значение).
+fn dim_path_row(caption: &str, value: &str) -> GtkBox {
+    let row = GtkBox::new(Orientation::Horizontal, 8);
+    row.append(
+        &Label::builder()
+            .label(caption)
+            .css_classes(["dim-label"])
+            .halign(gtk4::Align::Start)
+            .build(),
+    );
+    row.append(
+        &Label::builder()
+            .label(value)
+            .css_classes(["dim-label"])
+            .halign(gtk4::Align::Start)
+            .wrap(true)
+            .ellipsize(gtk4::pango::EllipsizeMode::Middle)
+            .build(),
+    );
+    row
 }
 
 struct LabeledEntry {
@@ -256,7 +281,9 @@ struct LabeledEntry {
 
 fn labeled_entry(label: &str, value: &str) -> LabeledEntry {
     let row = GtkBox::new(Orientation::Horizontal, 8);
-    row.append(&Label::builder().label(label).width_chars(34).xalign(0.0).hexpand(true).build());
+    // Подпись — естественной ширины: раньше фиксированные width_chars(34)
+    // оставляли пустоту посередине строки на широком окне.
+    row.append(&Label::builder().label(label).xalign(0.0).valign(gtk4::Align::Center).build());
     let entry = Entry::builder().text(value).hexpand(true).build();
     row.append(&entry);
     LabeledEntry { row, entry }
@@ -269,9 +296,10 @@ struct LabeledSpin {
 
 fn labeled_spin(label: &str, value: f64, min: f64, max: f64, step: f64) -> LabeledSpin {
     let row = GtkBox::new(Orientation::Horizontal, 8);
-    row.append(&Label::builder().label(label).width_chars(34).xalign(0.0).hexpand(true).build());
+    row.append(&Label::builder().label(label).xalign(0.0).valign(gtk4::Align::Center).build());
     let spin = SpinButton::with_range(min, max, step);
     spin.set_value(value);
+    spin.set_halign(gtk4::Align::End);
     row.append(&spin);
     LabeledSpin { row, spin }
 }
@@ -279,12 +307,11 @@ fn labeled_spin(label: &str, value: f64, min: f64, max: f64, step: f64) -> Label
 /// Контекстная помощь вкладки «Настройки» (кнопка «?» в заголовке).
 const SETTINGS_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::H("Что здесь"),
-    crate::widgets::tab_help::HelpBlock::T("Основные параметры сохранения скачанных файлов. Применяются к <b>новым</b> скачиваниям после кнопки «Сохранить»."),
+    crate::widgets::tab_help::HelpBlock::T("Параметры сгруппированы по смыслу на подвкладках: Файлы, Сеть, Расписания, Безопасность. Применяются к <b>новым</b> скачиваниям после кнопки «Сохранить» (внизу, видна на любой подвкладке)."),
     crate::widgets::tab_help::HelpBlock::H("Поля"),
     crate::widgets::tab_help::HelpBlock::B(&[
         "Папка выгрузки — куда сохранять файлы; кнопка 📁 выбирает папку в диалоге.",
         "Шаблон имени файла — плейсхолдеры {provider} {profile} {report} {period} {doc_id} {doc_date}.",
-        "Структура папок — например, по маркетплейсу и году.",
         "SHA-256 — дедупликация повторных выгрузок.",
     ]),
     // &lt;/&gt; — экранированные скобки: HelpBlock::T рендерится через set_markup.

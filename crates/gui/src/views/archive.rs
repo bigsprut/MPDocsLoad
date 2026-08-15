@@ -407,8 +407,22 @@ fn render_archive(entries: &[ArchiveEntry]) {
                 .build()
         };
         header.append(&hcell("Профиль", 16));
-        header.append(&hcell("Отчёт", 22));
+        header.append(&vsep());
+        // «Отчёт» — эластичная колонка и в заголовке ТОЖЕ (hexpand): иначе
+        // заголовки после «Отчёта» не уезжают вместе с данными вправо и
+        // повисают не над своими колонками.
+        header.append(
+            &Label::builder()
+                .label("Отчёт")
+                .width_chars(22)
+                .max_width_chars(22)
+                .xalign(0.0)
+                .hexpand(true)
+                .build(),
+        );
+        header.append(&vsep());
         header.append(&hcell("Период", 10));
+        header.append(&vsep());
         // «Формат»: в строках данных слева иконка (20px) — в заголовке
         // такой же по ширине спейсер, текст стоит на одной линии.
         let fmt_head = GtkBox::new(Orientation::Horizontal, 6);
@@ -417,9 +431,14 @@ fn render_archive(entries: &[ArchiveEntry]) {
         fmt_head.append(&spacer);
         fmt_head.append(&hcell("Формат", 8));
         header.append(&fmt_head);
+        header.append(&vsep());
         header.append(&hcell("Размер", 10));
+        header.append(&vsep());
         header.append(&hcell("Скачан", 16));
-        header.append(&hcell("Действия", 20));
+        header.append(&vsep());
+        // «Действия» — прижаты вправо расширившимся «Отчётом» (как в данных).
+        let actions_hdr = Label::builder().label("Действия").xalign(0.0).build();
+        header.append(&actions_hdr);
         list_box.append(&header);
 
         for e in entries {
@@ -440,12 +459,14 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
                     .build(),
             );
+            row.append(&vsep());
             // Человекочитаемое имя отчёта (с fallback на type_id); tooltip —
             // технический type_id для точной идентификации.
             let report_label = e
                 .report_display_name
                 .clone()
                 .unwrap_or_else(|| e.report_type.clone());
+            // Отчёт — эластичная колонка: забирает лишнюю ширину строки.
             row.append(
                 &Label::builder()
                     .label(&report_label)
@@ -453,9 +474,11 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .width_chars(22)
                     .max_width_chars(22)
                     .xalign(0.0)
+                    .hexpand(true)
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
                     .build(),
             );
+            row.append(&vsep());
             let period_str = e
                 .period
                 .as_deref()
@@ -468,6 +491,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .xalign(0.0)
                     .build(),
             );
+            row.append(&vsep());
             // Формат: иконка типа файла (PNG из gresource) + короткий текст —
             // визуально принадлежит именно этой колонке.
             let fmt_box = GtkBox::new(Orientation::Horizontal, 6);
@@ -486,6 +510,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .build(),
             );
             row.append(&fmt_box);
+            row.append(&vsep());
             let size_str = human_size(u64::try_from(e.file_size).unwrap_or(0));
             row.append(
                 &Label::builder()
@@ -495,6 +520,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .xalign(0.0)
                     .build(),
             );
+            row.append(&vsep());
             let dt_str = e
                 .downloaded_at
                 .with_timezone(&chrono::Local)
@@ -509,8 +535,10 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .build(),
             );
 
-            // Действия: 📂 Открыть файл, 📁 Открыть папку, 📋 Копировать путь.
-            let actions_box = GtkBox::new(Orientation::Horizontal, 4);
+            // Действия: 📂 открыть, 📁 папка, 📋 путь, 🗑 удалить — компактной
+            // группой у правого края (без растягивания пустотой).
+            let actions_box = GtkBox::new(Orientation::Horizontal, 2);
+            actions_box.set_halign(gtk4::Align::End);
             let file_path = e.file_path.clone();
 
             let open_btn = super::icon_only_button("document-open-symbolic", "Открыть файл");
@@ -706,7 +734,15 @@ fn ext_icon_resource(ext: &str) -> &'static str {
     }
 }
 
-/// Человекочитаемый размер файла.
+/// Вертикальная линия-разделитель колонок Архива (высотой в строку):
+/// сетка таблицы «рамками» — горизонтали даёт ListBox (show_separators),
+/// вертикали — эти сепараторы между ячейками (заголовок и строки alike).
+fn vsep() -> gtk4::Separator {
+    let s = gtk4::Separator::new(gtk4::Orientation::Vertical);
+    s.set_valign(gtk4::Align::Fill);
+    s
+}
+
 /// Человекочитаемый размер («1,2 МБ», «456 Б»). Используется и экспортом
 /// Архива (archive_export) — формат в файле совпадает с таблицей на экране.
 pub(crate) fn human_size(bytes: u64) -> String {
