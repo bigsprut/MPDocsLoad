@@ -16,19 +16,21 @@
     (WB Documents API: УПД/УКД/акты; Ozon transaction-list/accrual/b2b-sales/...)
   - *Period*: тип отчёта + период → генерация → скачивание.
     (Ozon realization/compensation, WB sales-reports/detailed, ...)
-- **GUI** на GTK4 + libadwaita: 7 вкладок (Профили, Отчёты, Загрузка, Настройки, Планировщик, Журнал, О программе).
+- **GUI** на GTK4 + libadwaita: 9 разделов (Магазин, Отчёты, Загрузка, Архив, Настройки, Расписания, Журнал, Справка, О программе).
 - **CLI** `mdwf`: providers / profiles / reports / download / schedule / out-of-scope / doctor.
 - **Планировщик** с cron (ежемесячно/ежедневно/еженедельно) + автозапуск с Windows.
 - **Идемпотентность**: дедупликация выгрузок по SHA-256 (SQLite UNIQUE-индекс).
 - **Безопасность**: секреты в Windows Credential Manager (OS keychain), маскирование в логах.
+- **Журнал событий**: выгрузки/ошибки/расписания с источником (вручную, CLI,
+  расписание) — персистится в SQLite и переживает перезапуск.
 - **Надёжность**: retry policy (429/5xx), circuit breaker, rate limits по доменам WB.
 
 ## Покрытие API
 
 | Маркетплейс | Отчётов через API | Out-of-scope |
 |-------------|-------------------|--------------|
-| Ozon        | 18                | 5 (УПД с доп.услугами, отчёты партнёров, обеспечительные платежи, счета, акты сверки) |
-| Wildberries | 14 + Documents API| 3 (акты сверки, счета, договоры) |
+| Ozon        | 21                | 5 (УПД с доп.услугами, отчёты партнёров, обеспечительные платежи, счета, акты сверки) |
+| Wildberries | 13 + Documents API| 3 (акты сверки, счета, договоры) |
 
 ---
 
@@ -114,7 +116,7 @@ crates/
 ├── scheduler/         # cron + автозапуск Windows (HKCU Run-ключ)
 ├── config/            # config.toml + пути к данным (dirs)
 ├── test-provider/     # TestProvider mock (для разработки GUI/CLI без реальных API)
-├── providers/ozon/    # Ozon Seller API (18 отчётов, retry, circuit breaker)
+├── providers/ozon/    # Ozon Seller API (21 отчёт, retry, circuit breaker)
 ├── providers/wildberries/ # Wildberries OpenAPI (Documents API, 5 доменов)
 ├── cli/               # mdwf (clap, 14 exit-кодов)
 ├── gui/               # mdwf-gui (GTK4 + libadwaita)
@@ -127,9 +129,9 @@ crates/
 ## Тесты
 
 ```bash
-cargo test --workspace               # 100 тестов
-cargo test -p mdwf-providers-ozon    # 24 (включая mock-сервер wiremock)
-cargo test -p mdwf-providers-wildberries  # 20 (3-шаговый Documents API)
+cargo test --workspace               # ~220 тестов
+cargo test -p mdwf-providers-ozon    # 59 (включая mock-сервер wiremock)
+cargo test -p mdwf-providers-wildberries  # 55 (5 доменов, 3-шаговый Documents API)
 cargo test -p mdwf-cli --test e2e    # 7 E2E через CLI
 ```
 
@@ -139,16 +141,20 @@ Release-бинарник требует GTK-рантайм рядом с `.exe`.
 собирает release и копирует необходимые DLL из MSYS2:
 
 ```bash
-./scripts/build-release.sh
-# Результат: dist/mdwf-gui.exe + dist/*.dll (GTK-рантайм, ~70 MB)
+# Release-бандл + инсталлер Inno Setup одной командой:
+bash scripts/build-setup.sh          # из Git Bash/MSYS2
+.uild-setup.cmd                    # или из PowerShell/двойным кликом
+# Результат: dist/mdwf/ (relocatable-бандл ~100 МБ, все DLL)
+#          и installer/Output/MDWFSetup-<version>.exe
 ```
 
 ## Ссылки
 
 - Техническая спецификация: `MarketplaceDownloaderFramework_TechnicalDoc_v1.4_2026-07-10.md`
-- Ozon Seller API: https://dev.ozon.ru/
+- Ozon Seller API: https://docs.ozon.ru/api/seller/ (локальная копия — docs/)
 - Wildberries OpenAPI: https://dev.wildberries.ru/
 
 ## Лицензия
 
-MIT OR Apache-2.0.
+MIT OR Apache-2.0 — тексты в `LICENSE-MIT` и `LICENSE-Apache-2.0`;
+сторонние компоненты дистрибутива — `NOTICE.md`.
