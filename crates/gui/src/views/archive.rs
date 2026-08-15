@@ -39,6 +39,12 @@ thread_local! {
     static W_DATE_TO: Rc<RefCell<Option<gtk4::Entry>>> = Rc::new(RefCell::new(None));
     static W_LIST: Rc<RefCell<Option<gtk4::Grid>>> = Rc::new(RefCell::new(None));
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
+    /// Скролл таблицы: для сохранения позиции прокрутки при удалении записи
+    /// (список перерисовывается — без восстановления прокрутка уходит в начало).
+    static W_SCROLL: Rc<RefCell<Option<ScrolledWindow>>> = Rc::new(RefCell::new(None));
+    /// Флаг «после перерисовки вернуть прокрутку на прежнее место»
+    /// (ставится перед refresh после удаления записи).
+    static PRESERVE_SCROLL: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
     /// Последний показанный набор записей (источник для кнопки «Экспорт»).
     static ENTRIES: Rc<RefCell<Vec<ArchiveEntry>>> = Rc::new(RefCell::new(Vec::new()));
     /// Карта: отображаемое имя профиля → имя (уникальный ключ в БД).
@@ -210,6 +216,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     scroll.set_policy(PolicyType::Automatic, PolicyType::Automatic);
     scroll.set_vexpand(true);
     root.append(&scroll);
+    W_SCROLL.with(|w| *w.borrow_mut() = Some(scroll.clone()));
 
     // Сохраняем виджеты в thread-local для обновления из хуков.
     CMD.with(|c| *c.borrow_mut() = Some(cs.clone()));
@@ -379,6 +386,19 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
 fn render_archive(entries: &[ArchiveEntry]) {
     // Памятка текущего списка — для кнопки «Экспорт».
     ENTRIES.with(|e| *e.borrow_mut() = entries.to_vec());
+    // Прокрутка: при удалении записи (флаг) сохраняем позицию и возвращаем
+    // после перерисовки — иначе список прыгает в начало и место удаления
+    // приходится искать заново.
+    let saved_scroll = if PRESERVE_SCROLL.with(|p| p.replace(false)) {
+        W_SCROLL.with(|w| {
+            w.borrow()
+                .as_ref()
+                .map(gtk4::ScrolledWindow::vadjustment)
+                .map(|adj| adj.value())
+        })
+    } else {
+        None
+    };
     W_LIST.with(|gw| {
         // Колонки данных (чётные): Профиль, Отчёт, Период, Формат, Размер,
         // Скачан, Действия; между ними (нечётные) — вертикальные линии.
@@ -580,7 +600,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
             }
             actions_box.append(&open_btn);
 
-            let folder_btn = super::icon_only_button("folder-open-symbolic", "Открыть папку с файлом");
+            let folder_btn = super::icon_only_button("folder-symbolic", "Открыть папку с файлом");
             folder_btn.set_tooltip_text(Some("Открыть папку с файлом"));
             {
                 let path = file_path.clone();
@@ -631,6 +651,17 @@ fn render_archive(entries: &[ArchiveEntry]) {
             if row < 2 + entries.len() as i32 {
                 hline(&grid, row);
                 row += 1;
+            }
+        }
+
+        // Возврат прокрутки после перерисовки (после пересчёта раскладки —
+        // в idle; set_value сам клампится в допустимый диапазон).
+        if let Some(v) = saved_scroll {
+            let adj = W_SCROLL.with(|w| w.borrow().as_ref().map(gtk4::ScrolledWindow::vadjustment));
+            if let Some(adj) = adj {
+                glib::source::idle_add_local_once(move || {
+                    adj.set_value(v);
+                });
             }
         }
     });
@@ -894,7 +925,9 @@ pub fn on_download_deleted(res: &Result<i64, String>) {
     match res {
         Ok(_id) => {
             notify("Запись удалена.");
-            // Refresh списка с текущими фильтрами.
+            // Refresh списка с текущими фильтрами; прокрутку сохранить —
+            // пользователь удаляет записи подряд и не должен искать место.
+            PRESERVE_SCROLL.with(|p| *p.borrow_mut() = true);
             send_list_archive(selected_profile(), selected_report());
         }
         Err(e) => notify(&format!("Ошибка удаления: {e}")),
