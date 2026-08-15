@@ -21,6 +21,10 @@ env:
   CARGO_TERM_COLOR: always
   # Зеркалирует scripts/env.sh: pkg-config ищет MinGW-сборку GTK4/libadwaita.
   PKG_CONFIG_PATH: /mingw64/lib/pkgconfig
+  # Свежий rustup запрещает target triple в channel из rust-toolchain.toml
+  # («target tuple in channel name») — выбираем gnu-тулчейн env-override'ом,
+  # как это делает scripts/env.sh. Без этого rustup возьмёт host-MSVC.
+  RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
 
 jobs:
   check:

@@ -223,6 +223,14 @@ pub struct Catalog {
     conn: Arc<Mutex<Connection>>,
 }
 
+/// Путь рядом с БД с добавленным суффиксом: `t.db` → `t.db.bak` / `t.db.bak1`.
+fn db_sibling(db_path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut s = db_path.as_os_str().to_os_string();
+    s.push(".");
+    s.push(suffix);
+    std::path::PathBuf::from(s)
+}
+
 impl Catalog {
     /// Открывает (или создаёт) каталог по пути.
     pub fn open(path: &Path) -> CoreResult<Self> {
@@ -232,6 +240,10 @@ impl Catalog {
         let cat = Self {
             conn: Arc::new(Mutex::new(conn)),
         };
+        // Снапшот ДО применения схемы/миграций: `.bak` обязан хранить
+        // домиграционное состояние (страховка истории Архива/журнала на
+        // случай повреждения основного файла или неудачной миграции).
+        cat.backup_snapshot(path);
         cat.apply_schema()?;
         Ok(cat)
     }
@@ -244,6 +256,43 @@ impl Catalog {
         };
         cat.apply_schema()?;
         Ok(cat)
+    }
+
+    /// Снапшот-страховка каталога рядом с БД: `<db>.bak` — свежий снапшот,
+    /// `<db>.bak1` — предыдущий (ротация). `VACUUM INTO` пишет автономную
+    /// согласованную копию — включая транзакции, закоммиченные в WAL
+    /// основного файла (отдельный -wal у снапшота не появляется).
+    ///
+    /// Особенности:
+    /// - пустой/новосозданный файл не бэкапится (нечего страховать);
+    /// - `VACUUM INTO` не перезаписывает существующий файл, поэтому перед
+    ///   ним идёт ротация: прежний `.bak` становится `.bak1`;
+    /// - при одновременном открытии каталога двумя процессами (GUI + задача
+    ///   планировщика) гонка ротации худо-бедно разрешается проигрышем одного
+    ///   из бэкапов (rename/VACUUM INTO падает с ошибкой) — без порчи данных;
+    /// - ошибка бэкапа НЕ прерывает открытие каталога: это страховка,
+    ///   а не обязательство (warn в лог).
+    fn backup_snapshot(&self, db_path: &Path) {
+        match std::fs::metadata(db_path) {
+            Ok(m) if m.len() > 0 => {}
+            _ => return,
+        }
+        let bak = db_sibling(db_path, "bak");
+        let bak1 = db_sibling(db_path, "bak1");
+        let _ = std::fs::remove_file(&bak1);
+        if bak.exists() {
+            if let Err(e) = std::fs::rename(&bak, &bak1) {
+                tracing::warn!(error = %e, "каталог: ротация .bak → .bak1 не удалась");
+                return;
+            }
+        }
+        // Путь в SQL-литерал: экранируем одинарные кавычки (обратные слэши
+        // Windows-путей внутри литерала валидны как есть).
+        let target = bak.to_string_lossy().replace('\'', "''");
+        let conn = self.conn.lock();
+        if let Err(e) = conn.execute_batch(&format!("VACUUM INTO '{target}'")) {
+            tracing::warn!(error = %e, "каталог: снапшот .bak не создан");
+        }
     }
 
     fn apply_schema(&self) -> CoreResult<()> {
@@ -1458,5 +1507,44 @@ mod tests {
         // Свежейшая — последняя вставленная, старейшая — №100.
         assert_eq!(rows[0].message, "e599");
         assert_eq!(rows.last().unwrap().message, "e100");
+    }
+
+    #[test]
+    fn backup_snapshot_rotates_and_holds_prior_state() {
+        let dir = std::env::temp_dir().join(format!("mdwf-catbak-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        for f in ["t.db", "t.db.bak", "t.db.bak1"] {
+            let _ = std::fs::remove_file(dir.join(f));
+        }
+
+        // Три цикла открытие→вставка→закрытие. Каждый open (кроме самого
+        // первого на пустом файле) снимает снапшот ДО своих изменений.
+        for name in ["p1", "p2", "p3"] {
+            let cat = Catalog::open(&dir.join("t.db")).unwrap();
+            cat.upsert_profile(&Profile::new(name, "ozon")).unwrap();
+        }
+
+        let bak = dir.join("t.db.bak");
+        let bak1 = dir.join("t.db.bak1");
+        assert!(bak.exists(), "снапшот .bak создан");
+        assert!(bak1.exists(), "ротация создала .bak1");
+
+        // Снапшот — автономная БД: открывается как каталог и содержит
+        // состояние ДО последнего открытия (ротация сдвинула на поколение).
+        let profile_names = |p: &Path| {
+            Catalog::open(p)
+                .unwrap()
+                .list_profiles()
+                .unwrap()
+                .into_iter()
+                .map(|x| x.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(profile_names(&bak), vec!["p1", "p2"], ".bak — до последнего open");
+        assert_eq!(profile_names(&bak1), vec!["p1"], ".bak1 — на поколение старше");
+        // Основной файл при этом жив и содержит всё.
+        assert_eq!(profile_names(&dir.join("t.db")), vec!["p1", "p2", "p3"]);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
