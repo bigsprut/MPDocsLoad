@@ -10,7 +10,8 @@
   чистое. Неотслеживаемые `MDWF/downloads/**` — артефакты живых прогонов
   (в репо не нужны). Выпущен релиз **v1.5.0** (2026-08-15): CHANGELOG
   `[1.5.0]`, тег + GitHub Release с `MDWFSetup-1.5.0.exe`. Ствол =
-  **1.6.0-unreleased** (первая фича: путь к файлу в журнале, `b8f7a73`).
+  **1.6.0-unreleased**: путь к файлу в журнале (`b8f7a73`), копируемая
+  справка-TextView + авторство в «О программе» (`6e4f04e`).
 - **CI ЗЕЛЁНЫЙ** (первый стабильный прогон: run 31876509552):
   `.github/workflows/ci.yml` — windows-latest + msys2/setup-msys2@v2
   (mingw64: gtk4/libadwaita/pkgconf/gcc), шаги `cargo test --workspace` +
@@ -212,6 +213,7 @@ crates/
 
 Последние коммиты на `master` (свежие сверху):
 ```
+6e4f04e feat(gui): справка — единый TextView (выделение сквозь документ) + авторство в «О программе»
 b8f7a73 feat: путь к файлу в сообщениях журнала о скачивании (GUI + CLI + расписания)
 2f7f82a fix(build): build-setup.sh — версия из [workspace.package] + //D-эскейп ISCC
 43365e1 chore(release): [Unreleased] → [1.5.0] — 2026-08-15
