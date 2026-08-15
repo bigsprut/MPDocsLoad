@@ -1,0 +1,62 @@
+# CI: тесты + clippy всего workspace на Windows-раннере в MSYS2/MINGW64 —
+# то же окружение, что и локальная разработка (scripts/env.sh): MinGW-сборка
+# GTK4/libadwaita + gnu-тулчейн (пин в rust-toolchain.toml).
+# GUI-тесты — логика без GTK-инициализации, дисплей не нужен.
+# gcc нужен не только как линкер gnu-тулчейна: build.rs GUI вызывает windres
+# (binutils из зависимостей gcc), glib-compile-resources приходит с gtk4→glib2.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Зеркалирует scripts/env.sh: pkg-config ищет MinGW-сборку GTK4/libadwaita.
+  PKG_CONFIG_PATH: /mingw64/lib/pkgconfig
+
+jobs:
+  check:
+    name: cargo test + clippy (mingw64)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MSYS2 + GTK4 (mingw64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: mingw64
+          # inherit: в PATH остаётся предустановленный rustup/cargo раннера
+          # (msys2-пути идут впереди него).
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-libadwaita
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-gcc
+
+      - name: Кэш cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Окружение GTK (fail-fast диагностика)
+        run: |
+          pkg-config --modversion gtk4 libadwaita-1
+          gcc --version | head -n1
+          rustc --version
+
+      - name: Тесты (workspace)
+        run: cargo test --workspace
+
+      - name: Clippy (workspace, -D warnings)
+        run: cargo clippy --workspace --tests -- -D warnings
