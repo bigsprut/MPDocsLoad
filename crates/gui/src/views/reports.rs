@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Label, ListBox, Orientation};
+use gtk4::{Box as GtkBox, Label, ListBox, Orientation, PolicyType, ScrolledWindow};
 
 use crate::channels::{CommandSender, ReportInfo};
 
@@ -55,11 +55,16 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     row.append(&load_btn);
     root.append(&row);
 
-    // Список отчётов.
+    // Список отчётов. Скролл обязателен: без него 21 строка с описаниями
+    // задаёт окну минимальную высоту ~850px (окно не уменьшалось).
     let list_box = ListBox::new();
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
-    list_box.set_vexpand(true);
-    root.append(&list_box);
+    let scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(PolicyType::Never)
+        .vexpand(true)
+        .build();
+    scroll.set_child(Some(&list_box));
+    root.append(&scroll);
 
     W_SHOP_LABEL.with(|w| *w.borrow_mut() = Some(shop_label.clone()));
     LIST_WIDGET.with(|lw| *lw.borrow_mut() = Some(list_box.clone()));

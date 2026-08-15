@@ -96,19 +96,36 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             .build(),
     );
 
-    // --- Панель фильтров ---
-    let filters = GtkBox::new(Orientation::Horizontal, 8);
+    // --- Панель фильтров (ДВЕ строки: одна длинная строка задаёт окну
+    // минимальную ширину ~1050px и не даёт уменьшать окно) ---
+    let filters = GtkBox::new(Orientation::Vertical, 6);
     filters.set_margin_bottom(4);
+    let filters_top = GtkBox::new(Orientation::Horizontal, 8);
+    let filters_main = GtkBox::new(Orientation::Horizontal, 8);
+    filters.append(&filters_top);
+    filters.append(&filters_main);
 
     let profile_combo = ComboBoxText::new();
     profile_combo.set_tooltip_text(Some("Профиль (все — любой магазин)"));
-    filters.append(&Label::new(Some("Профиль:")));
-    filters.append(&profile_combo);
+    filters_top.append(&Label::new(Some("Профиль:")));
+    filters_top.append(&profile_combo);
 
     let report_combo = ComboBoxText::new();
     report_combo.set_tooltip_text(Some("Тип отчёта"));
-    filters.append(&Label::new(Some("Отчёт:")));
-    filters.append(&report_combo);
+    filters_top.append(&Label::new(Some("Отчёт:")));
+    filters_top.append(&report_combo);
+
+    // Кнопки действий — в первой строке справа (во второй и так тесно от
+    // полей дат; первая имеет запас ширины).
+    let apply_btn = super::icon_button("Применить", "edit-find-symbolic");
+    apply_btn.set_tooltip_text(Some("Применить фильтры и обновить список"));
+    let export_btn = super::icon_button("Экспорт", "document-save-symbolic");
+    export_btn.set_tooltip_text(Some("Сохранить показанный список в Excel или CSV"));
+    let spacer = GtkBox::new(Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    filters_top.append(&spacer);
+    filters_top.append(&apply_btn);
+    filters_top.append(&export_btn);
 
     // Фильтр по дате — ДВА способа задать интервал (единый источник правды —
     // поля «С:…—…По:» + DATE_RANGE):
@@ -163,22 +180,14 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         send_list_archive(selected_profile(), selected_report());
     });
 
-    filters.append(&interval_btn);
-    filters.append(&Label::new(Some("С:")));
-    filters.append(&date_from);
-    filters.append(&super::make_date_picker(&date_from, "%d.%m.%Y"));
-    filters.append(&Label::new(Some("—")));
-    filters.append(&date_to);
-    filters.append(&super::make_date_picker(&date_to, "%d.%m.%Y"));
-    filters.append(&reset_btn);
-
-    let apply_btn = super::icon_button("Применить", "edit-find-symbolic");
-    apply_btn.set_tooltip_text(Some("Применить фильтры и обновить список"));
-    filters.append(&apply_btn);
-
-    let export_btn = super::icon_button("Экспорт", "document-save-symbolic");
-    export_btn.set_tooltip_text(Some("Сохранить показанный список в Excel или CSV"));
-    filters.append(&export_btn);
+    filters_main.append(&interval_btn);
+    filters_main.append(&Label::new(Some("С:")));
+    filters_main.append(&date_from);
+    filters_main.append(&super::make_date_picker(&date_from, "%d.%m.%Y"));
+    filters_main.append(&Label::new(Some("—")));
+    filters_main.append(&date_to);
+    filters_main.append(&super::make_date_picker(&date_to, "%d.%m.%Y"));
+    filters_main.append(&reset_btn);
     root.append(&filters);
 
     // --- Результат/статус вкладки ---
@@ -378,19 +387,39 @@ fn render_archive(entries: &[ArchiveEntry]) {
             return;
         }
 
-        // Заголовок таблицы (симметричные колонки по width_chars).
+        // Заголовок таблицы. Ширина ячейки фиксирована парой
+        // width_chars == max_width_chars (+ ellipsize на длинных колонках):
+        // width_chars задаёт только МИНИМУМ, а натуральная ширина = длине
+        // текста — из-за этого колонки «разъезжались» построчно (длинное
+        // имя профиля/отчёта раздвигало свою ячейку). Одинаковый запрос
+        // ширины у всех ячеек колонки = ровные колонки.
         let header = GtkBox::new(Orientation::Horizontal, 12);
         header.set_margin_start(8);
         header.set_margin_end(8);
         header.set_margin_top(4);
         header.set_margin_bottom(4);
-        header.append(&Label::builder().label("Профиль").width_chars(16).xalign(0.0).build());
-        header.append(&Label::builder().label("Отчёт").width_chars(22).xalign(0.0).build());
-        header.append(&Label::builder().label("Период").width_chars(10).xalign(0.0).build());
-        header.append(&Label::builder().label("Формат").width_chars(8).xalign(0.0).build());
-        header.append(&Label::builder().label("Размер").width_chars(10).xalign(0.0).build());
-        header.append(&Label::builder().label("Скачан").width_chars(12).xalign(0.0).build());
-        header.append(&Label::builder().label("Действия").width_chars(20).xalign(0.0).build());
+        let hcell = |text: &str, w: i32| {
+            Label::builder()
+                .label(text)
+                .width_chars(w)
+                .max_width_chars(w)
+                .xalign(0.0)
+                .build()
+        };
+        header.append(&hcell("Профиль", 16));
+        header.append(&hcell("Отчёт", 22));
+        header.append(&hcell("Период", 10));
+        // «Формат»: в строках данных слева иконка (20px) — в заголовке
+        // такой же по ширине спейсер, текст стоит на одной линии.
+        let fmt_head = GtkBox::new(Orientation::Horizontal, 6);
+        let spacer = GtkBox::new(Orientation::Horizontal, 0);
+        spacer.set_size_request(20, -1);
+        fmt_head.append(&spacer);
+        fmt_head.append(&hcell("Формат", 8));
+        header.append(&fmt_head);
+        header.append(&hcell("Размер", 10));
+        header.append(&hcell("Скачан", 16));
+        header.append(&hcell("Действия", 20));
         list_box.append(&header);
 
         for e in entries {
@@ -401,24 +430,16 @@ fn render_archive(entries: &[ArchiveEntry]) {
             row.set_margin_bottom(2);
             row.set_css_classes(&["doc-list-row"]);
 
-            // Колонка «Профиль»: иконка типа файла (PNG из gresource) + имя
-            // профиля в одном Box, чтобы не сбить выравнивание с header.
-            let profile_box = GtkBox::new(Orientation::Horizontal, 6);
-            profile_box.append(
-                &Image::builder()
-                    .resource(ext_icon_resource(&e.file_format))
-                    .pixel_size(20)
-                    .build(),
-            );
-            profile_box.append(
+            // Профиль — имя (фиксированная ширина, длинные — с обрезкой).
+            row.append(
                 &Label::builder()
                     .label(&e.profile_name)
                     .width_chars(16)
+                    .max_width_chars(16)
                     .xalign(0.0)
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
                     .build(),
             );
-            row.append(&profile_box);
             // Человекочитаемое имя отчёта (с fallback на type_id); tooltip —
             // технический type_id для точной идентификации.
             let report_label = e
@@ -430,6 +451,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .label(&report_label)
                     .tooltip_text(&e.report_type)
                     .width_chars(22)
+                    .max_width_chars(22)
                     .xalign(0.0)
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
                     .build(),
@@ -442,21 +464,34 @@ fn render_archive(entries: &[ArchiveEntry]) {
                 &Label::builder()
                     .label(&period_str)
                     .width_chars(10)
+                    .max_width_chars(10)
                     .xalign(0.0)
                     .build(),
             );
-            row.append(
+            // Формат: иконка типа файла (PNG из gresource) + короткий текст —
+            // визуально принадлежит именно этой колонке.
+            let fmt_box = GtkBox::new(Orientation::Horizontal, 6);
+            fmt_box.append(
+                &Image::builder()
+                    .resource(ext_icon_resource(&e.file_format))
+                    .pixel_size(20)
+                    .build(),
+            );
+            fmt_box.append(
                 &Label::builder()
                     .label(super::ext_label(&e.file_format))
                     .width_chars(8)
+                    .max_width_chars(8)
                     .xalign(0.0)
                     .build(),
             );
+            row.append(&fmt_box);
             let size_str = human_size(u64::try_from(e.file_size).unwrap_or(0));
             row.append(
                 &Label::builder()
                     .label(&size_str)
                     .width_chars(10)
+                    .max_width_chars(10)
                     .xalign(0.0)
                     .build(),
             );
@@ -468,7 +503,8 @@ fn render_archive(entries: &[ArchiveEntry]) {
             row.append(
                 &Label::builder()
                     .label(&dt_str)
-                    .width_chars(12)
+                    .width_chars(16)
+                    .max_width_chars(16)
                     .xalign(0.0)
                     .build(),
             );

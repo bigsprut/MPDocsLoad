@@ -46,6 +46,18 @@ pub fn build_and_present(
     let help_view = crate::views::help::build();
     let about_view = crate::views::about::build();
 
+    // Высокие статичные вкладки («Настройки» ~850px минимума, «Расписания»
+    // ~680px) — в скролл: иначе их минимальная высота растягивает окно
+    // и запрещает уменьшение (жалоба «окно не уменьшается, снизу пусто»).
+    let wrap_scroll = |v: gtk4::Widget| -> gtk4::Widget {
+        let sw = gtk4::ScrolledWindow::new();
+        sw.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Automatic);
+        sw.set_child(Some(&v));
+        sw.upcast::<gtk4::Widget>()
+    };
+    let settings_view = wrap_scroll(settings_view.upcast::<gtk4::Widget>());
+    let scheduler_view = wrap_scroll(scheduler_view.upcast::<gtk4::Widget>());
+
     stack.add_titled(&shop_view, Some(ViewId::Shop.as_str()), "Магазин");
     stack.add_titled(&reports_view, Some(ViewId::Reports.as_str()), "Отчёты");
     stack.add_titled(&download_view, Some(ViewId::Download.as_str()), "Загрузка");
