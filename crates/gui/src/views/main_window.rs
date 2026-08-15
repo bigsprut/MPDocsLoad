@@ -294,24 +294,29 @@ pub fn build_and_present(
     title_box.append(&title_label);
     header.set_title_widget(Some(&title_box));
 
-    // Меню «Приложение»: пункты «Справка» + «О программе» + «Выход».
+    // Меню «Приложение» (слева вверху): кнопка с ИКОНКОЙ самой программы
+    // (в теме hicolor бандла, не гамбургер) — пункты «Справка», «О
+    // программе», «Выход». Переключение вкладок — выбором строки sidebar
+    // (тот же путь, что и отладочный MDWF_START_VIEW; прежний способ через
+    // поиск Stack в дереве не срабатывал — пункты «не работали»).
     let menu = gtk4::gio::Menu::new();
     menu.append(Some("Справка"), Some("app.help"));
     menu.append(Some("О программе"), Some("app.about"));
     menu.append(Some("Выход"), Some("app.quit"));
+    let app_icon = Image::builder().icon_name("mdwf").pixel_size(22).build();
     let menu_btn = gtk4::MenuButton::builder()
-        .icon_name("open-menu-symbolic")
-        .tooltip_text("Меню")
+        .tooltip_text("Меню приложения")
         .menu_model(&menu)
         .build();
+    menu_btn.set_child(Some(&app_icon));
     header.pack_start(&menu_btn);
 
     toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&root));
     toolbar.add_bottom_bar(&bottom);
 
-    // Действия приложения: about и quit.
-    setup_app_actions(app, &window);
+    // Действия приложения: about, quit, help.
+    setup_app_actions(app, &sidebar, &rows_by_name, &window);
 
     // Цикл обработки событий UI: читаем из async_channel receiver в main context.
     {
@@ -335,8 +340,18 @@ pub fn build_and_present(
     window.present();
 }
 
-/// Регистрирует действия приложения `app.about` и `app.quit`.
-fn setup_app_actions(app: &adw::Application, window: &adw::ApplicationWindow) {
+/// Регистрирует действия приложения `app.about`, `app.help`, `app.quit`.
+/// Переключение вкладок — ВЫБОРОМ СТРОКИ SIDEBAR (проверенный путь:
+/// он же используется хуком MDWF_START_VIEW); прежний вариант с поиском
+/// Stack и set_visible_child_name из меню не срабатывал.
+fn setup_app_actions(
+    app: &adw::Application,
+    sidebar: &ListBox,
+    rows_by_name: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<String, ListBoxRow>>,
+    >,
+    window: &adw::ApplicationWindow,
+) {
     // Действие «quit»: закрывает окно и завершает приложение.
     let quit_action = gtk4::gio::SimpleAction::new("quit", None);
     {
@@ -351,59 +366,28 @@ fn setup_app_actions(app: &adw::Application, window: &adw::ApplicationWindow) {
 
     // Действие «about»: показываем вкладку «О программе».
     let about_action = gtk4::gio::SimpleAction::new("about", None);
-    about_action.connect_activate({
-        let win = window.clone();
-        move |_, _| {
-            // Переключаем стек на «about» — ищем его в content.
-            show_about_in_window(&win);
-        }
-    });
+    {
+        let (sb, rows) = (sidebar.clone(), std::rc::Rc::clone(rows_by_name));
+        about_action.connect_activate(move |_, _| {
+            if let Some(row) = rows.borrow().get("about").cloned() {
+                sb.select_row(Some(&row));
+            }
+        });
+    }
     app.add_action(&about_action);
 
     // Действие «help»: показываем вкладку «Справка». Горячая клавиша F1.
     let help_action = gtk4::gio::SimpleAction::new("help", None);
-    help_action.connect_activate({
-        let win = window.clone();
-        move |_, _| {
-            show_view_in_window(&win, ViewId::Help);
-        }
-    });
+    {
+        let (sb, rows) = (sidebar.clone(), std::rc::Rc::clone(rows_by_name));
+        help_action.connect_activate(move |_, _| {
+            if let Some(row) = rows.borrow().get("help").cloned() {
+                sb.select_row(Some(&row));
+            }
+        });
+    }
     app.add_action(&help_action);
     app.set_accels_for_action("app.help", &["F1"]);
-}
-
-/// Находит стек в окне и переключает на вкладку «О программе».
-fn show_about_in_window(win: &adw::ApplicationWindow) {
-    show_view_in_window(win, ViewId::About);
-}
-
-/// Находит стек в окне и переключает на указанную вкладку (для app-действий).
-fn show_view_in_window(win: &adw::ApplicationWindow, view: ViewId) {
-    // Идём от content (ToolbarView) -> content (GtkBox) -> stack.
-    let Some(content) = win.content() else {
-        return;
-    };
-    // Рекурсивный поиск Stack среди детей.
-    if let Some(stack) = find_stack(&content) {
-        stack.set_visible_child_name(view.as_str());
-    }
-}
-
-/// Рекурсивный поиск первого виджета типа gtk4::Stack в дереве.
-fn find_stack(widget: &gtk4::Widget) -> Option<gtk4::Stack> {
-    if let Ok(stack) = widget.clone().downcast::<gtk4::Stack>() {
-        return Some(stack);
-    }
-    if let Some(bin) = widget.downcast_ref::<gtk4::Box>() {
-        let mut child = bin.first_child();
-        while let Some(c) = child {
-            if let Some(found) = find_stack(&c) {
-                return Some(found);
-            }
-            child = c.next_sibling();
-        }
-    }
-    None
 }
 
 /// Маршрутизация событий UI в нужные обработчики.
