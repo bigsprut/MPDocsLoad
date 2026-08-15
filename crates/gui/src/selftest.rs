@@ -78,11 +78,11 @@ struct EnsureProfile {
     name: String,
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserialize, Debug, Default, Clone)]
 struct Step {
     /// Команда: load_providers | load_profiles | load_reports | select_shop |
     /// download | check_profile | load_journal | clear_journal | list_archive |
-    /// list_schedules | run_schedule_now.
+    /// list_schedules | add_schedule | delete_schedule | run_schedule_now.
     cmd: String,
     #[serde(default)]
     provider: Option<String>,
@@ -98,6 +98,15 @@ struct Step {
     date_to: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    /// cron-выражение для add_schedule (напр. "0 2 1 * *").
+    #[serde(default)]
+    cron: Option<String>,
+    /// За какой месяц выгружает расписание (add_schedule; default 0).
+    #[serde(default)]
+    period_offset: Option<i32>,
+    /// Выбранные документы для Browsable-отчётов (download; WB serviceName и пр.).
+    #[serde(default)]
+    documents: Vec<DocSelStep>,
     /// Ждать после команды событие этого типа (см. event_kind).
     #[serde(default)]
     wait_event: Option<String>,
@@ -106,6 +115,19 @@ struct Step {
     /// Тихое окно после команды, если wait_event не задан (мс; default 500).
     #[serde(default)]
     settle_ms: Option<u64>,
+}
+
+/// Документ для Browsable-выгрузки в сценарии (литерал: id известен из
+/// прошлого прогона / списка документов; date — YYYY-MM-DD, опционально).
+#[derive(Deserialize, Debug, Default, Clone)]
+struct DocSelStep {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    extension: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -397,11 +419,21 @@ fn build_command(step: &Step) -> Result<UiCommand> {
             if let Some(dt) = &step.date_to {
                 params = params.with("date_to", dt);
             }
+            let documents = step
+                .documents
+                .iter()
+                .map(|d| crate::channels::DocumentSel {
+                    id: d.id.clone(),
+                    name: d.name.clone(),
+                    extension: d.extension.clone(),
+                    date: d.date.clone(),
+                })
+                .collect();
             Ok(UiCommand::Download {
                 provider_id: need("provider", &step.provider)?,
                 profile_name: need("profile", &step.profile)?,
                 report_type: need("report", &step.report)?,
-                documents: Vec::new(),
+                documents,
                 params,
                 cancel: CancellationToken::new(),
             })
@@ -414,6 +446,16 @@ fn build_command(step: &Step) -> Result<UiCommand> {
             date_range: None,
         }),
         "list_schedules" => Ok(UiCommand::ListSchedules),
+        "add_schedule" => Ok(UiCommand::AddSchedule {
+            name: need("name", &step.name)?,
+            profile_name: need("profile", &step.profile)?,
+            report_type: need("report", &step.report)?,
+            cron_expr: need("cron", &step.cron)?,
+            period_offset: step.period_offset.unwrap_or(0),
+        }),
+        "delete_schedule" => Ok(UiCommand::DeleteSchedule {
+            name: need("name", &step.name)?,
+        }),
         "run_schedule_now" => Ok(UiCommand::RunScheduleNow {
             name: need("name", &step.name)?,
         }),
@@ -640,5 +682,72 @@ mod tests {
             ..Default::default()
         };
         assert!(build_command(&bad).is_err());
+    }
+
+    #[test]
+    fn step_download_with_documents() {
+        // Browsable-отчёт: документы литералом (id + имя + расширение + дата).
+        let s = Step {
+            cmd: "download".into(),
+            provider: Some("wildberries".into()),
+            profile: Some("wb_prof".into()),
+            report: Some("wildberries.documents".into()),
+            documents: vec![DocSelStep {
+                id: "some-service-name".into(),
+                name: Some("УПД №123".into()),
+                extension: Some("xlsx".into()),
+                date: Some("2026-07-15".into()),
+            }],
+            ..Default::default()
+        };
+        match build_command(&s) {
+            Ok(UiCommand::Download { documents, .. }) => {
+                assert_eq!(documents.len(), 1);
+                assert_eq!(documents[0].id, "some-service-name");
+                assert_eq!(documents[0].name.as_deref(), Some("УПД №123"));
+                assert_eq!(documents[0].extension.as_deref(), Some("xlsx"));
+                assert_eq!(documents[0].date.as_deref(), Some("2026-07-15"));
+            }
+            other => panic!("не Download: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn step_schedule_commands() {
+        // add_schedule: cron обязателен, offset по умолчанию 0.
+        let ok = Step {
+            cmd: "add_schedule".into(),
+            name: Some("smoke_sched".into()),
+            profile: Some("drv".into()),
+            report: Some("test.realization".into()),
+            cron: Some("0 2 1 * *".into()),
+            period_offset: Some(-1),
+            ..Default::default()
+        };
+        match build_command(&ok) {
+            Ok(UiCommand::AddSchedule {
+                name,
+                cron_expr,
+                period_offset,
+                ..
+            }) => {
+                assert_eq!(name, "smoke_sched");
+                assert_eq!(cron_expr, "0 2 1 * *");
+                assert_eq!(period_offset, -1);
+            }
+            other => panic!("не AddSchedule: {other:?}"),
+        }
+        let no_cron = Step {
+            cron: None,
+            ..ok.clone()
+        };
+        assert!(build_command(&no_cron).is_err());
+        // delete_schedule: только имя.
+        let del = Step {
+            cmd: "delete_schedule".into(),
+            name: Some("smoke_sched".into()),
+            ..Default::default()
+        };
+        assert!(matches!(build_command(&del), Ok(UiCommand::DeleteSchedule { .. })));
     }
 }

@@ -1,0 +1,37 @@
+{
+  "name": "schedule_smoke",
+  "isolated": true,
+  "ensure_profile": { "provider": "test", "name": "drv" },
+  "steps": [
+    { "cmd": "load_providers" },
+    {
+      "cmd": "add_schedule",
+      "name": "smoke_sched",
+      "profile": "drv",
+      "report": "test.realization",
+      "cron": "0 2 1 * *",
+      "period_offset": 0,
+      "wait_event": "SchedulesListed"
+    },
+    {
+      "cmd": "run_schedule_now",
+      "name": "smoke_sched",
+      "wait_event": "SchedulesListed",
+      "timeout_ms": 60000
+    },
+    {
+      "cmd": "delete_schedule",
+      "name": "smoke_sched",
+      "wait_event": "SchedulesListed"
+    },
+    { "cmd": "load_journal", "wait_event": "JournalLoaded" }
+  ],
+  "expect": [
+    { "event": "Log", "contains": "Расписание «smoke_sched» добавлено" },
+    { "event": "Log", "contains": "расписание «smoke_sched», запуск вручную" },
+    { "event": "Log", "contains": "Расписание «smoke_sched»" },
+    { "event": "SchedulesListed", "contains": "ok: 1 расписаний" },
+    { "event": "SchedulesListed", "contains": "ok: 0 расписаний" },
+    { "journal_contains": ": 1 файл(ов)" }
+  ]
+}
