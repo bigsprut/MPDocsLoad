@@ -1,0 +1,30 @@
+{
+  "name": "smoke",
+  "isolated": true,
+  "ensure_profile": { "provider": "test", "name": "drv" },
+  "steps": [
+    { "cmd": "load_providers" },
+    { "cmd": "load_reports", "provider": "test", "wait_event": "ReportsLoaded" },
+    { "cmd": "select_shop", "provider": "test", "profile": "drv" },
+    {
+      "cmd": "download",
+      "provider": "test",
+      "profile": "drv",
+      "report": "test.realization",
+      "period": "2026-07",
+      "wait_event": "DownloadFinished",
+      "timeout_ms": 30000
+    },
+    { "cmd": "list_archive", "wait_event": "ArchiveListed" },
+    { "cmd": "load_journal", "wait_event": "JournalLoaded" }
+  ],
+  "expect": [
+    { "event": "ProvidersLoaded", "contains": "test" },
+    { "event": "ReportsLoaded", "contains": "ok: 2 отчётов" },
+    { "event": "DownloadFinished", "contains": "ok: 1 файл" },
+    { "event": "Log", "contains": "скачано 1 файл(ов)" },
+    { "event": "Log", "contains": "вручную (GUI)" },
+    { "event": "ArchiveListed", "contains": "ok: 1 записей" },
+    { "journal_contains": "скачано 1 файл(ов)" }
+  ]
+}

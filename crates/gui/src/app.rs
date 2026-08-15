@@ -76,49 +76,8 @@ impl App {
         let gtk_app = adw::Application::new(Some(APP_ID), gtk4::gio::ApplicationFlags::FLAGS_NONE);
 
         // Конфиг + каталог + secrets.
-        let prov = ProvisionedConfig::load_standard().context("load config")?;
-        std::fs::create_dir_all(&prov.data_dir).ok();
-        let catalog = Catalog::open(&prov.db_path).context("open catalog")?;
-
-        let secrets: Arc<dyn SecretStore> = if prov.raw.security.use_keychain {
-            Arc::new(OsKeychain::new())
-        } else {
-            Arc::new(InMemorySecretStore::new())
-        };
-
-        let file_store = FileStore::new(FileStoreConfig {
-            output_dir: prov.output_dir.clone(),
-            file_name_template: prov.raw.storage.file_name_template.clone(),
-            folder_structure: parse_folder_structure(&prov.raw.storage.folder_structure),
-            compute_hash: prov.raw.storage.compute_hash,
-        });
-
-        // Доменный слой.
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .context("tokio runtime")?;
-
-        let registry = ProviderRegistry::new();
-        // Регистрируем провайдеров: Ozon + Wildberries (+ TestProvider (mock)
-        // только в debug-сборках — в релизе пользователю mock не нужен).
-        #[cfg(debug_assertions)]
-        registry.register(Arc::new(TestProvider::new()) as ProviderRef)?;
-        registry.register(Arc::new(mdwf_providers_ozon::OzonProvider::new()?) as ProviderRef)?;
-        registry.register(Arc::new(
-            mdwf_providers_wildberries::WildberriesProvider::new()?,
-        ) as ProviderRef)?;
-
-        info!(?prov.data_dir, ?prov.db_path, ?prov.output_dir, "config loaded");
-
-        let domain = Arc::new(Domain {
-            registry,
-            catalog: RwLock::new(Some(catalog)),
-            secrets,
-            runtime: RwLock::new(Some(runtime)),
-            config: RwLock::new(prov),
-            file_store: RwLock::new(file_store),
-        });
+        let domain = build_domain(ProvisionedConfig::load_standard().context("load config")?, false)
+            .context("build domain")?;
 
         // Каналы UI <-> tokio.
         let (command_sender, cmd_rx) = CommandSender::channel();
@@ -205,8 +164,62 @@ impl App {
     }
 }
 
-/// Цикл обработки команд UI в tokio-стороне.
-async fn run_command_loop(
+/// Строит доменный слой (registry + catalog + secrets + runtime + config).
+/// Без единого GTK-вызова — используется и `App::new`, и headless-драйвер
+/// self-test (`--self-test`), которому окно не нужно.
+///
+/// `in_memory_secrets` — true для self-test: ключи keyring не трогаем,
+/// тестовым профилям секреты не нужны.
+pub(crate) fn build_domain(
+    prov: ProvisionedConfig,
+    in_memory_secrets: bool,
+) -> Result<Arc<Domain>> {
+    std::fs::create_dir_all(&prov.data_dir).ok();
+    let catalog = Catalog::open(&prov.db_path).context("open catalog")?;
+
+    let secrets: Arc<dyn SecretStore> = if in_memory_secrets || !prov.raw.security.use_keychain {
+        Arc::new(InMemorySecretStore::new())
+    } else {
+        Arc::new(OsKeychain::new())
+    };
+
+    let file_store = FileStore::new(FileStoreConfig {
+        output_dir: prov.output_dir.clone(),
+        file_name_template: prov.raw.storage.file_name_template.clone(),
+        folder_structure: parse_folder_structure(&prov.raw.storage.folder_structure),
+        compute_hash: prov.raw.storage.compute_hash,
+    });
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("tokio runtime")?;
+
+    let registry = ProviderRegistry::new();
+    // Регистрируем провайдеров: Ozon + Wildberries (+ TestProvider (mock)
+    // только в debug-сборках — в релизе пользователю mock не нужен).
+    #[cfg(debug_assertions)]
+    registry.register(Arc::new(TestProvider::new()) as ProviderRef)?;
+    registry.register(Arc::new(mdwf_providers_ozon::OzonProvider::new()?) as ProviderRef)?;
+    registry.register(Arc::new(
+        mdwf_providers_wildberries::WildberriesProvider::new()?,
+    ) as ProviderRef)?;
+
+    info!(?prov.data_dir, ?prov.db_path, ?prov.output_dir, "config loaded");
+
+    Ok(Arc::new(Domain {
+        registry,
+        catalog: RwLock::new(Some(catalog)),
+        secrets,
+        runtime: RwLock::new(Some(runtime)),
+        config: RwLock::new(prov),
+        file_store: RwLock::new(file_store),
+    }))
+}
+
+/// Цикл обработки команд UI в tokio-стороне. pub(crate): переиспользуется
+/// headless-драйвером self-test (`--self-test`).
+pub(crate) async fn run_command_loop(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<UiCommand>,
     domain: Arc<Domain>,
     fwd: EventForwarder,

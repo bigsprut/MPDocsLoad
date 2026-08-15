@@ -1,0 +1,23 @@
+{
+  "name": "live_ozon_balance",
+  "isolated": false,
+  "steps": [
+    {
+      "cmd": "download",
+      "provider": "ozon",
+      "profile": "oz_prof1",
+      "report": "ozon.balance",
+      "period": "2026-07",
+      "date_from": "2026-07-01",
+      "date_to": "2026-07-31",
+      "wait_event": "DownloadFinished",
+      "timeout_ms": 120000
+    },
+    { "cmd": "load_journal", "wait_event": "JournalLoaded" }
+  ],
+  "expect": [
+    { "event": "DownloadFinished", "contains": "ok: 1 файл" },
+    { "event": "Log", "contains": "«Баланс» (июль 2026): скачано 1 файл(ов)" },
+    { "journal_contains": "«Баланс» (июль 2026): скачано 1 файл(ов)" }
+  ]
+}

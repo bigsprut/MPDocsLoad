@@ -45,6 +45,7 @@
 
 mod app;
 mod channels;
+mod selftest;
 mod theme;
 mod views;
 mod widgets;
@@ -56,6 +57,17 @@ use gtk4::prelude::{DialogExt, WidgetExt};
 use tracing_subscriber::EnvFilter;
 
 pub use app::App;
+
+/// Достаёт путь сценария из `--self-test <path>` (None — флага нет).
+fn selftest_arg(args: Vec<String>) -> Option<std::path::PathBuf> {
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--self-test" {
+            return it.next().map(std::path::PathBuf::from);
+        }
+    }
+    None
+}
 
 /// Relocatable-бандл: если рядом с exe есть `share/` (релизный дистрибутив),
 /// настраиваем env так, чтобы GTK/libadwaita/gdk-pixbuf нашли иконки, схемы и
@@ -106,6 +118,21 @@ fn main() -> Result<ExitCode> {
     // рядом с exe, а не по путям сборки (D:\msys64). На дев-машине (target/debug
     // без share/) — no-op, остаётся MSYS2 из PATH.
     setup_bundle_env();
+
+    // Headless event-level драйвер (--self-test <scenario.json>): БЕЗ окна,
+    // скриншотов и кликов — прогон UiCommand через тот же app-loop с отчётом
+    // JSON и программными проверками (замена OCR-верификации, уроки #51/#59).
+    // До single-instance: параллельный запуск с живым GUI легален.
+    if let Some(path) = selftest_arg(std::env::args().collect()) {
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,mdwf=debug"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .init();
+        let pass = selftest::run(&path)?;
+        return Ok(ExitCode::from(u8::from(!pass)));
+    }
 
     // Single-instance + инсталлятор AppMutex: захват named mutex ДО создания
     // adw::Application (иначе gtk::Application-second-instance форвардит activate
