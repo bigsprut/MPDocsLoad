@@ -221,8 +221,7 @@ pub async fn run_due_schedules(
         };
         let due = ts
             .parse::<chrono::DateTime<Utc>>()
-            .map(|t| now >= t)
-            .unwrap_or(false);
+            .is_ok_and(|t| now >= t);
         if !due {
             continue;
         }

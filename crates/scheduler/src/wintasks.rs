@@ -65,8 +65,7 @@ pub fn is_windows_scheduler_enabled() -> bool {
     Command::new("schtasks")
         .args(["/Query", "/TN", TASK_NAME])
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 /// Путь к CLI-бинарнику (`mdwf.exe`) — в той же директории, что текущий exe.

@@ -12,18 +12,13 @@ use mdwf_core::CoreError;
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// Режим хранения секретов.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SecretMode {
     /// OS keychain (Windows Credential Manager / macOS Keychain / Secret Service).
+    #[default]
     Keychain,
     /// In-memory (только для разработки/тестов; не переживает перезапуск).
     Memory,
-}
-
-impl Default for SecretMode {
-    fn default() -> Self {
-        Self::Keychain
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

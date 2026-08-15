@@ -32,7 +32,7 @@ impl Default for RetryPolicy {
         Self {
             max_retries: 5,
             base_delay: Duration::from_millis(500),
-            max_delay: Duration::from_millis(30_000),
+            max_delay: Duration::from_secs(30),
         }
     }
 }
@@ -86,7 +86,7 @@ impl RateLimiter {
             let now = std::time::Instant::now();
             let wait = match *last {
                 Some(t) if now.duration_since(t) < self.min_interval => {
-                    self.min_interval - now.duration_since(t)
+                    self.min_interval.saturating_sub(now.duration_since(t))
                 }
                 _ => Duration::ZERO,
             };
@@ -477,8 +477,8 @@ mod tests {
     #[test]
     fn retry_delays_exponential() {
         let p = RetryPolicy::default();
-        assert_eq!(p.delay_for_attempt(3), Duration::from_millis(1000));
-        assert_eq!(p.delay_for_attempt(4), Duration::from_millis(2000));
+        assert_eq!(p.delay_for_attempt(3), Duration::from_secs(1));
+        assert_eq!(p.delay_for_attempt(4), Duration::from_secs(2));
     }
 
     #[test]

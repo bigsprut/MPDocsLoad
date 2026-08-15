@@ -219,13 +219,12 @@ fn sheet_from_array_report(
 
     // Данные.
     let rows = array_at_path(json, array_path);
-    let mut row_idx = 1u32;
-    for row_val in rows {
+    for (i, row_val) in rows.into_iter().enumerate() {
+        let row_idx = (i + 1) as u32;
         for (col, (path, _)) in headers.iter().enumerate() {
             let cell = extract_path(row_val, path);
             write_cell(sheet, row_idx, col as u16, cell.as_deref());
         }
-        row_idx += 1;
     }
     sheet.set_freeze_panes(1, 0).ok();
     let _ = sheet.autofit();
@@ -303,13 +302,12 @@ fn sheet_accrual_by_day(wb: &mut Workbook, json: &Value) -> CoreResult<()> {
         s1.write_string_with_format(0, col as u16, *t, &bold)
             .map_err(|e| CoreError::Internal(format!("xlsx: {e}")))?;
     }
-    let mut row_idx = 1u32;
-    for acc in &accruals {
+    for (i, acc) in accruals.iter().enumerate() {
+        let row_idx = (i + 1) as u32;
         for (col, (path, _)) in h1.iter().enumerate() {
             let cell = extract_path(acc, path);
             write_cell(s1, row_idx, col as u16, cell.as_deref());
         }
-        row_idx += 1;
     }
     s1.set_freeze_panes(1, 0).ok();
     let _ = s1.autofit();

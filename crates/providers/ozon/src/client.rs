@@ -35,7 +35,7 @@ impl Default for RetryPolicy {
         Self {
             max_retries: 5,
             base_delay: Duration::from_millis(500),
-            max_delay: Duration::from_millis(30_000),
+            max_delay: Duration::from_secs(30),
         }
     }
 }
@@ -105,7 +105,7 @@ impl CircuitBreaker {
                 if opened.elapsed() < self.cooldown {
                     return Err(CoreError::Unavailable(format!(
                         "circuit breaker open (осталось {:?})",
-                        self.cooldown - opened.elapsed()
+                        self.cooldown.saturating_sub(opened.elapsed())
                     )));
                 }
             }
@@ -692,10 +692,10 @@ mod tests {
         let p = RetryPolicy::default();
         assert_eq!(p.delay_for_attempt(1), Duration::from_millis(500));
         assert_eq!(p.delay_for_attempt(2), Duration::from_millis(500));
-        assert_eq!(p.delay_for_attempt(3), Duration::from_millis(1000));
-        assert_eq!(p.delay_for_attempt(4), Duration::from_millis(2000));
-        assert_eq!(p.delay_for_attempt(5), Duration::from_millis(4000));
-        assert_eq!(p.delay_for_attempt(6), Duration::from_millis(8000));
+        assert_eq!(p.delay_for_attempt(3), Duration::from_secs(1));
+        assert_eq!(p.delay_for_attempt(4), Duration::from_secs(2));
+        assert_eq!(p.delay_for_attempt(5), Duration::from_secs(4));
+        assert_eq!(p.delay_for_attempt(6), Duration::from_secs(8));
     }
 
     #[test]

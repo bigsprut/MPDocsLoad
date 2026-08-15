@@ -313,13 +313,12 @@ fn write_rows_sheet(
             .map_err(|e| CoreError::Internal(format!("xlsx header: {e}")))?;
     }
 
-    let mut row_idx = 1u32;
-    for row_val in rows {
+    for (i, row_val) in rows.iter().enumerate() {
+        let row_idx = (i + 1) as u32;
         for (col, (field, _)) in columns.iter().enumerate() {
             let cell = value_to_cell(row_val.get(*field));
             write_cell(sheet, row_idx, col as u16, cell.as_deref());
         }
-        row_idx += 1;
     }
     sheet.set_freeze_panes(1, 0).ok();
     let _ = sheet.autofit();

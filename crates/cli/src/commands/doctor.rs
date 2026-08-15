@@ -31,7 +31,7 @@ pub async fn run(ctx: &Context) -> Result<ExitCode> {
 
     // Выгрузки.
     println!("\nКаталог выгрузок: OK (SQLite {} байт)",
-        std::fs::metadata(&ctx.config.db_path).map(|m| m.len()).unwrap_or(0));
+        std::fs::metadata(&ctx.config.db_path).map_or(0, |m| m.len()));
 
     // Проверка подключений профилей.
     if !profiles.is_empty() {

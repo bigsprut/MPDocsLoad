@@ -1450,11 +1450,12 @@ mod tests {
         // Повторная вставка того же файла работает (слот UNIQUE свободен).
         let id2 = cat.record_download(&rec).unwrap();
         assert!(id2 > 0);
-        assert!(cat
-            .list_downloads_filtered(Some(pid), Some("ozon.balance"), None)
-            .unwrap()
-            .len()
-            == 1);
+        assert_eq!(
+            cat.list_downloads_filtered(Some(pid), Some("ozon.balance"), None)
+                .unwrap()
+                .len(),
+            1
+        );
 
         // Удаление несуществующего id — не ошибка (DELETE 0 строк).
         cat.delete_download(999_999).unwrap();

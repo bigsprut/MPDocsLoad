@@ -12,20 +12,15 @@ use crate::error::{StorageError, StorageResult};
 use crate::naming::FileNameContext;
 
 /// Структура каталогов (спец. §2.7.1: `folder_structure`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum FolderStructure {
     /// Все файлы в одной папке.
     Flat,
     /// `{output_dir}/{provider}/{period}/{file}`.
+    #[default]
     ByProviderPeriod,
     /// `{output_dir}/{provider}/{profile}/{period}/{file}`.
     ByProviderProfilePeriod,
-}
-
-impl Default for FolderStructure {
-    fn default() -> Self {
-        Self::ByProviderPeriod
-    }
 }
 
 /// Параметры сохранения файлов.
