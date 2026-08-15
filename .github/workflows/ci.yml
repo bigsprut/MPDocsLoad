@@ -53,6 +53,12 @@ jobs:
       - name: Кэш cargo
         uses: Swatinem/rust-cache@v2
 
+      # Явная установка тулчейна: авто-установка по RUSTUP_TOOLCHAIN не
+      # гарантирует компонент clippy (rust-toolchain.toml при env-override
+      # не читается), а clippy-шаг падал «cargo-clippy is not installed».
+      - name: Rust-тулчейн (gnu + clippy)
+        run: rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal --component clippy
+
       - name: Окружение GTK (fail-fast диагностика)
         run: |
           pkg-config --modversion gtk4 libadwaita-1
