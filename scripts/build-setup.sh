@@ -60,9 +60,19 @@ echo "  найден: $ISCC"
 echo ""
 echo "=== [3/3] Компиляция инсталлятора ==="
 # Версия — единственный источник: [workspace.package] Cargo.toml.
-APP_VERSION="$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*//')"
+# ВАЖНО: строка там С ОТСТУПОМ (секция) — прежде искали ^version без отступа
+# (старый отдельный [package]); после унификации 3b6c462 grep молча давал
+# пустоту → ISCC падал «more than one script filename».
+APP_VERSION="$(grep -m1 '^[[:space:]]*version = "' "$REPO_ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
+if [[ -z "$APP_VERSION" ]]; then
+    echo "  ОШИБКА: версия не найдена в [workspace.package] Cargo.toml" >&2
+    exit 1
+fi
 echo "  версия: $APP_VERSION"
-"$ISCC" "/DMyAppVersion=$APP_VERSION" "$REPO_ROOT/installer/mdwf.iss"
+# //D (не /D): MSYS/Git-Bash конвертирует аргументы вида /Dxxx в
+# "C:/Program Files/Git/Dxxx" → ISCC видит второе «имя скрипта». Двойной
+# слэш — штатный MSYS-эскейп (как cmd //c), до exe доходит /DMyAppVersion=….
+"$ISCC" "//DMyAppVersion=$APP_VERSION" "$REPO_ROOT/installer/mdwf.iss"
 
 echo ""
 echo "============================================================"
