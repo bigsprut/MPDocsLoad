@@ -295,7 +295,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Range,
         description: "Отчёт о возвратах за период (диапазон дат).",
-        cabinet: Some("Аналитика → Отчёты → Возвраты"),
+        cabinet: Some("Аналитика → Моя аналитика → Отчёты → Возвраты"),
         params: DefParams::DateRange,
         max_range_days: None,
         dispatch: Dispatch::Paginated("/v1/returns/list", PaginationKind::ReturnsList),
