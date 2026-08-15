@@ -8,112 +8,49 @@
 
 - **HEAD:** последний коммит `master` = origin/master, рабочее дерево
   чистое. Неотслеживаемые `MDWF/downloads/**` — артефакты живых прогонов
-  (в репо не нужны). Ствол = **1.5.0-unreleased**; инсталлер 1.4.0 (10:15,
-  бандл проверен test-clean-env) соответствует тегу **v1.4.0** — GitHub
-  Release с MDWFSetup-1.4.0.exe существует.
-- **Зелёное состояние:** `cargo test --workspace` exit=0 (23 сюита);
-  clippy `-D warnings`=0 по всем крейтам.
-- **Инсталлер актуален:** `installer/Output/MDWFSetup-1.4.0.exe`
-  (15 авг, 10:15) — включает всю ночь 15.08: журнал в БД с источниками,
-  названия/периоды в сообщениях, фикс CLI-исполнителя расписаний,
-  все cabinet-пути (вкл. Закрывающие/Справочные у realization). Бандл
-  проверен test-clean-env (exit 124).
-- **Сделано последним пакетом (вечер 2026-08-14 → ночь 15-го):**
-  1. **Двойной клик = редактирование**: строка профиля в «Магазине»
-     (ListView — activate работает) и карточка расписания в «Планировщике»
-     (ListBoxRow — только GestureClick n_press≥2; activate в GTK 4.20/MinGW
-     на двойной клик НЕ срабатывает). Коммиты `962d66f`, `ecc28b4`.
-  2. **Интервал-виджет**: вкладка «Неделя» убрана, «Полугодие» добавлена
-     перед «Годом»; под датами — живое описание периода `describe_range`
-     («2024 год» / «январь 2025» / «второе полугодие 2024» / «3 квартал
-     2025» / «23 января 2026» / иначе «с 04.03.2025 по 06.03.2025»),
-     считается из самих дат — одинаково для виджета и ручного ввода.
-     Коммит `c57ab9e`.
-  3. **N/A-проблемы Ozon РЕШЕНЫ** (`534509e`, детали §11): b2b_sales —
-     friendly-error; postings — retry create×3 → **фоллбэк: своя сборка
-     xlsx из /v3/posting/fbo/list** (живьём 666 строк); /v2→/v3 fbo/list
-     (v2 отключается 31.08.2026); CLI-период YYYY-MM-DD.
-  4. **ЛК-пути отчётов в GUI** (`391f8af` + фикс `4ea596c`): три
-     поверхности — «Отчёты» (строка «ЛК: …»), «Загрузка» (инфо-панель),
-     «Справка» (раздел 8a, генерируется из дескрипторов). Названия разделов
-     взяты из ЖИВОГО кабинета (скриншоты юзера, ДВЕ партии: Финансы→Документы
-     + Товары/FBO/FBS/Аналитика/Баланс): docs.ozon.ru называет разделы
-     по-старому. Ключевое: «Товары и цены» не существует («Товары → Работа
-     с товарами → Список товаров»); в FBS нет «Управления остатками»
-     (XLS — «Обновить остатки на складах»); stocks/turnover/уценка —
-     «Аналитика → Моя аналитика → Отчёты → Товары → Продажи со склада
-     Ozon → …»; Баланс — «Финансы → Начисления и документы». Урок #60.
-     По доке остались: placement_* (FBO → Стоимость размещения), returns.
-     Плюс note-информирование о фоллбэке postings (Журнал «— внимание: …»).
-  5. **build-setup.cmd** работает из PowerShell/двойного клика (`b0d7ab5`;
-     PATH-починки: bash.exe, /usr/bin, cygpath -u, cargo).
-- **Сделано этим чатом (ночь→утро 15.08, HEAD 06b3b47):**
-  1. **Проверки бандла 02:06** — test-clean-env + test-installed зелёные
-     (exit 124, postinstall 0, loaders.cache относительные пути).
-  2. **Живой GUI-прогон фоллбэка postings БЕЗ кликов** (ce29251): новый
-     env-хук `MDWF_START_VIEW=logs` открывает окно сразу на «Журнале»;
-     расписание fb_smoke → 3 ретрая → /v3 fbo/list → в Журнале «…— внимание:
-     Ozon не смог сформировать отчёт… 665 шт.», файл 44 645 байт (= CLI).
-  3. **Журнал в БД** (9a698e9): таблица `journal` (v5), кап 500, загрузка
-     истории при старте, «Очистить» чистит БД; created_at UTC → показ
-     локальный (сегодня «ЧЧ:ММ:СС», старше — «ДД.ММ.ГГГГ ЧЧ:ММ»).
-  4. **Источники событий + названия/периоды** (d54f109): `journal.origin`
-     (v6) — «вручную (GUI)» / «CLI» / «расписание «X», автозапуск|запуск
-     вручную|задача Windows|запуск из CLI» (enum `mdwf_core::LogOrigin`);
-     сообщения журнала несут display_name отчёта + период («Баланс»
-     (июль 2026)), describe-хелперы перенесены в `mdwf-core::journal`
-     (общие для GUI/CLI); CLI `download` тоже пишет журнал. Чип [источник]
-     в ленте. Живо: GUI-рестарт показывает историю из БД.
-  5. **Фикс: CLI-исполнитель расписаний терял выгрузки** (06b3b47):
-     `mdwf schedule run` (путь задачи Windows) скачивал и выбрасывал файлы
-     и не подставлял период из offset. Теперь persist + каталог + журнал;
-     `--by-task` (флаг задачи Windows) различает авто/ручной запуск.
-- **Headless self-test драйвер** (0070ee5): `mdwf-gui --self-test
-  <сценарий.json>` — event-level проверки GUI без окна/скриншотов/кликов
-  (урок #62); сценарии scripts/selftest/ (smoke + live_ozon_balance,
-  оба PASS). Методология GUI-проверок теперь: логика → self-test,
-  пиксели → скриншот+OCR, клики → только если юзер не за машиной.
-- **Метаданные проекта** (0246941): LICENSE-MIT/Apache-2.0 (Cargo заявлял
-  без файлов), NOTICE (vscode-icons/GTK/Inno), CHANGELOG 1.4.0,
-  SECURITY, CONTRIBUTING, Cargo repository/автор без заглушек, README
-  актуализирован. Тег **v1.4.0** + GitHub Release с инсталлером;
-  описание и topics репо выставлены (gh).
-- **Версионирование (3b6c462):** ствол = 1.5.0-unreleased (после тега
-  v1.4.0 накопился feat --self-test → MINOR). Единственный источник
-  версии — Cargo.toml [workspace.package]; инсталлер берёт через ISCC
-  /DMyAppVersion. Политика: фича→MINOR, фикс→PATCH, docs не трогают;
-  релиз = tag + build-setup + GitHub Release + [Unreleased]→дата в
-  CHANGELOG. Инсталлер 1.4.0 (10:15) соответствует тегу v1.4.0; следующая
-  сборка build-setup = 1.5.0 целиком.
-- **Ближайшие задачи (согласованы с юзером 15.08, выполнять по порядку):**
-  1. **CI**: `.github/workflows/ci.yml` — windows-latest +
-     msys2/setup-msys2@v2 (pacman: mingw-w64-x86_64-{gtk4,libadwaita,
-     pkgconf}), gnu-тулчейн; шаги `cargo test --workspace` и
-     `cargo clippy --tests -- -D warnings`. Проверить, что build.rs gui
-     (glib-build-tools/gresource) живёт в MSYS2-окружении CI.
-  2. **Бэкап каталога**: в `Catalog::open` — `VACUUM INTO db.bak` с ротацией
-     .bak→.bak1 (учесть WAL); +тест. Страховка истории Архива/журнала.
-  3. **Self-test сценарии**: расписание (AddSchedule → RunScheduleNow →
-     ожидание Log origin «запуск вручную»), ClearJournal; ВАЖНО:
-     `build_command` в selftest.rs пока НЕ умеет documents/ids для
-     Browsable-отчётов — расширить Step.
-  4. **Экспорт Архива в xlsx/CSV**: кнопка в archive.rs (rust_xlsxwriter).
-  5. (по выбору юзера) проверка обновлений через GitHub Releases API;
-     склейка месячных выгрузок в один xlsx.
-  6. **Релиз 1.5.0**: CHANGELOG [Unreleased]→[1.5.0] + дата; закрыть GUI;
-     `bash scripts/build-setup.sh` (версию возьмёт из Cargo = 1.5.0);
-     `git tag v1.5.0` + `gh release create` с MDWFSetup-1.5.0.exe.
-- **Хвосты юзера**: сверка ЛК-путей WB по таблице (выдана 15.08 в чате;
-  WB-пути по доке, живым кабинетом WB не проверялись). Для Ozon скриншоты
-  больше не требуются — все 21 путь сверены (живой ЛК + база знаний
-  seller-edu.ozon.ru через поисковые сниппеты: placement_* → «Финансы →
-  Стоимость размещения (по товарам/по поставкам)», returns → «Аналитика →
-  Моя аналитика → Отчёты → Возвраты»).
+  (в репо не нужны). Выпущен релиз **v1.5.0** (2026-08-15): CHANGELOG
+  `[1.5.0]`, тег + GitHub Release с `MDWFSetup-1.5.0.exe`; ствол = 1.5.0
+  (следующая фича → bump 1.6.0-unreleased).
+- **CI ЗЕЛЁНЫЙ** (первый стабильный прогон: run 31876509552):
+  `.github/workflows/ci.yml` — windows-latest + msys2/setup-msys2@v2
+  (mingw64: gtk4/libadwaita/pkgconf/gcc), шаги `cargo test --workspace` +
+  `cargo clippy --tests -D warnings`. Грабли rustup на раннере — урок #63:
+  triple в rust-toolchain.toml запрещён свежим rustup (env
+  RUSTUP_TOOLCHAIN решает), авто-установка тулчейна не ставит clippy
+  (явный `rustup toolchain install … --component clippy`).
+- **Сделано этим чатом (15.08 день; 78f1649…43365e1 + релиз):**
+  1. **CI** — воркфлоу выше; 3 итерации фиксов окружения (rustup env,
+     clippy-компонент, линты 1.97 на старом коде).
+  2. **Бэкап каталога** (`dbd0d88`): `Catalog::open` ДО применения схемы
+     создаёт `<db>.bak` (`VACUUM INTO` — согласованное состояние, включая
+     закоммиченный WAL), прежний `.bak` ротируется в `.bak1`; ошибки
+     бэкапа не прерывают открытие (warn). +тест ротации/содержимого.
+  3. **Self-test расширение** (`14b0e40`): Step умеет `add_schedule`/
+     `delete_schedule` (cron/period_offset) и `documents` (DocumentSel
+     литералом — Browsable-отчёты). Сценарии `schedule_smoke`
+     (AddSchedule → RunScheduleNow → Log origin «запуск вручную» →
+     DeleteSchedule) и `journal_clear` («1 запись» → ClearJournal →
+     «0 записей»); оба PASS.
+  4. **Экспорт Архива** (`79bec36`): кнопка «Экспорт» — xlsx
+     (rust_xlsxwriter, шапка bold + autofit) или CSV для Excel («;»+BOM+
+     RFC4180-экранирование); колонки как в таблице вкладки + «Путь к
+     файлу»; формат — по расширению имени в диалоге Save. Заодно «Скачан»
+     в «Архиве» — локальное время (было UTC-как-есть).
+  5. **Clippy 1.97-фиксы** (`a1728a1`): CI-stable свежее локального 1.90 —
+     enumerate вместо счётчиков, derivable Default (FolderStructure,
+     SecretMode), Duration from_secs/saturating_sub, map_unwrap_or →
+     map_or/is_ok_and. Локально проверено ОБЕИМИ тулчейнами.
+- **Зелёное состояние:** `cargo test --workspace` exit=0 (23 сюиты);
+  clippy `-D warnings`=0 локально (1.90) и на CI (1.97).
+- **Ближайшие задачи (опционально, по выбору юзера):** проверка
+  обновлений через GitHub Releases API; склейка месячных выгрузок в один
+  xlsx. Хвост юзера: сверка ЛК-путей WB по таблице (выдана 15.08).
 - **Живые API-тесты разрешены пользователем** (профили `oz_prof1` +
   `wb_prof`, ключи валидны).
-- Ключевые уроки нарастающим итогом: **#53-62** (новые: #61 непроверенный
-  CLI-путь деградирует тихо; #62 event-level self-test вместо OCR;
-  #60 дополнен базой знаний продавцов через сниппеты).
+- Ключевые уроки нарастающим итогом: **#53-64** (новые: #63 —
+  CI windows/MSYS2 + три особенности rustup; #64 — MSYS-конвертация
+  switch-аргументов + «единый источник версии → обновить всех
+  потребителей»).
 
 ---
 
@@ -275,6 +212,15 @@ crates/
 
 Последние коммиты на `master` (свежие сверху):
 ```
+2f7f82a fix(build): build-setup.sh — версия из [workspace.package] + //D-эскейп ISCC
+43365e1 chore(release): [Unreleased] → [1.5.0] — 2026-08-15
+a1728a1 fix: чистый clippy 1.97 (CI) — enumerate/Default/Duration/map_or
+bd0b93c ci: явная установка stable-gnu с clippy
+f9b478c docs: CHANGELOG [Unreleased] — экспорт Архива, бэкап каталога, CI, self-test сценарии
+79bec36 feat(gui): экспорт списка Архива в Excel/CSV (кнопка «Экспорт»)
+14b0e40 test(gui): self-test — add_schedule/delete_schedule/documents в Step + сценарии
+dbd0d88 feat(storage): снапшот-страховка каталога + ci: RUSTUP_TOOLCHAIN env
+78f1649 ci: GitHub Actions — windows-latest + MSYS2/mingw64
 27e7216 docs: §0 — политика версионирования, ствол 1.5.0-unreleased (HEAD 3b6c462)
 3b6c462 chore(release): 1.4.0 → 1.5.0 (unreleased) + единый источник версии
 18b2eb9 docs: §0+урок #62 — headless self-test драйвер (HEAD 0070ee5)
@@ -1206,6 +1152,33 @@ thread_local! {
     Нюанс bash: env.sh при позиционных аргументах делает exec "$@" —
     перед source чистить `set --`. Скриншот+OCR остаётся только для того,
     что реально про пиксели (вёрстка, иконки, выделение).
+63. **CI на windows+MSYS2: три особенности rustup.** (1) Свежий rustup
+    (≥1.28) запрещает target triple в channel rust-toolchain.toml
+    («target tuple in channel name») — на раннере это валит любой
+    cargo-вызов; лечится env RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu
+    на уровне job (env-override сильнее toolchain-файла, как в env.sh).
+    (2) Авто-установка тулчейна по env-override НЕ ставит clippy (файл
+    rust-toolchain.toml с components при этом игнорируется!) — нужен
+    явный `rustup toolchain install …--profile minimal --component clippy`.
+    (3) CI-stable свеже́е локального (1.97 vs 1.90) → новые линты падают
+    на СТАРОМ коде; чтобы не итерировать по 10+ минут на прогон —
+    поставить точную CI-версию ОТДЕЛЬНЫМ тулчейном локально
+    (`rustup toolchain install 1.97.0-x86_64-pc-windows-gnu --profile
+    minimal --component clippy`) и прогнать `cargo +1.97.0-… clippy
+    --workspace` ДО пуша; чинить код (не пинить версию), следя, что
+    локальная версия тоже зелёная.
+64. **MSYS/Git-Bash конвертирует switch-аргументы нативных exe в пути.**
+    Аргумент `/DMyAppVersion=1.5.0` для ISCC bash молча превращал в
+    `C:/Program Files/Git/DMyAppVersion=1.5.0` (префикс /D смаплен на
+    корень установки Git) → ISCC «You may not specify more than one
+    script filename». Диагностика: `cmd //c echo <аргументы>`. Лечение —
+    двойной слэш `//D…` (штатный MSYS-эскейп, до exe доходит `/D…`), тот
+    же паттерн что `cmd //c`/`taskkill //IM`. Родственный урок: при
+    «едином источнике версии» (перенос version в [workspace.package])
+    нужно обновить ВСЕХ потребителей — экстрактор build-setup.sh
+    (grep '^version = ') продолжал искать старый отдельный [package] и
+    молча давал пустоту; guard «пустая версия → abort» превращает это в
+    громкую ошибку.
 
 **Чат 2026-08-14 (закрытие остатков бэклога; efcab98, eeafba0):**
 - **Единая иконка «Обновить»** (efcab98): кнопка «↻ Обновить» в «Отчётах»
@@ -1317,6 +1290,38 @@ thread_local! {
   download::persist + журнал; `schedule run --by-task` (wintasks ставит
   флаг) → «задача Windows» vs «запуск из CLI». Живо: файл + каталог + журнал.
   Урок #61.
+
+**Чат 2026-08-15 (день: CI, бэкап каталога, self-test сценарии, экспорт
+Архива, релиз v1.5.0; 78f1649…2f7f82a):**
+- **CI** (`.github/workflows/ci.yml`): windows-latest + msys2/setup-msys2@v2
+  (mingw64: gtk4/libadwaita/pkgconf/gcc, path-type inherit), шаги
+  cargo test --workspace + clippy -D warnings, rust-cache. Доведён до
+  зелёного за 3 итерации (run 31876509552): env RUSTUP_TOOLCHAIN (triple
+  в toolchain-файле запрещён свежим rustup), явный install тулчейна с
+  clippy, фиксы линтов 1.97 на старом коде (проверено локально ОБЕИМИ
+  тулчейнами). Урок #63.
+- **Бэкап каталога** (dbd0d88): `Catalog::open` ДО миграций — `VACUUM INTO
+  <db>.bak` + ротация `.bak`→`.bak1`; WAL учтён (снапшот согласован),
+  ошибки не прерывают открытие. Тест: 3 открытия → `.bak`/`.bak1` с
+  состояниями на поколение назад, оба открываются как Catalog.
+- **Self-test** (14b0e40): Step += cron/period_offset/documents
+  (DocumentSel литералом); add_schedule/delete_schedule; сценарии
+  `schedule_smoke` (ручной запуск расписания: Log origin «запуск
+  вручную», файл, удаление, SchedulesListed 1→0) и `journal_clear`
+  («1 записей» → ClearJournal → «0 записей»). PASS; smoke цел.
+- **Экспорт Архива** (79bec36): `views/archive_export.rs` (чистая логика:
+  xlsx bold-шапка+autofit / CSV «;»+BOM+RFC4180; +4 теста), кнопка
+  «Экспорт» + FileChooserDialog(Save) в archive.rs, формат по расширению,
+  имя `mdwf-архив-YYYY-MM-DD.xlsx`; колонки экрана + «Путь к файлу».
+  Заодно «Скачан» — локальное время (было UTC). Живой smoke-запуск GUI —
+  вкладка строится.
+- **Релиз v1.5.0**: CHANGELOG [1.5.0] — 2026-08-15; build-setup.sh чинен
+  на живой сборке (версия из [workspace.package] с guard + `//D`-эскейп
+  для ISCC — bash конвертировал /D-аргумент в путь! урок #64);
+  MDWFSetup-1.5.0.exe собран, test-clean-env зелёный (v1.5.0 в логе);
+  тег v1.5.0 + GitHub Release с инсталлером.
+- Итог: план §0 (CI/бэкап/self-test/экспорт/релиз) выполнен полностью;
+  оставшееся — опционально (проверка обновлений, склейка выгрузок).
 
 
 
