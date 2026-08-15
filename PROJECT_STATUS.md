@@ -66,6 +66,11 @@
      `mdwf schedule run` (путь задачи Windows) скачивал и выбрасывал файлы
      и не подставлял период из offset. Теперь persist + каталог + журнал;
      `--by-task` (флаг задачи Windows) различает авто/ручной запуск.
+- **Headless self-test драйвер** (0070ee5): `mdwf-gui --self-test
+  <сценарий.json>` — event-level проверки GUI без окна/скриншотов/кликов
+  (урок #62); сценарии scripts/selftest/ (smoke + live_ozon_balance,
+  оба PASS). Методология GUI-проверок теперь: логика → self-test,
+  пиксели → скриншот+OCR, клики → только если юзер не за машиной.
 - **Метаданные проекта** (0246941): LICENSE-MIT/Apache-2.0 (Cargo заявлял
   без файлов), NOTICE (vscode-icons/GTK/Inno), CHANGELOG 1.4.0,
   SECURITY, CONTRIBUTING, Cargo repository/автор без заглушек, README
@@ -1146,6 +1151,17 @@ thread_local! {
     что путь не запускался ни разу. Заодно: источники событий журнала
     (LogOrigin) заставили различать запуск вручную/CLI/задачей — без
     этого различия такие баги не видны в истории.
+62. **Event-level headless-драйвер вместо OCR для проверки ЛОГИКИ GUI.**
+    `mdwf-gui --self-test <сценарий.json>` (0070ee5): сценарий UiCommand
+    гоняется через тот же run_command_loop, что и живое окно, без GTK —
+    события в отчёт JSON, ожидания программно (event+contains,
+    journal_contains, min_count). Критично: изоляция по умолчанию
+    (<сценарий>.data/ — своя БД и downloads), иначе тесты пишут в журнал
+    пользователя; isolated=false — для live-API сценариев. Гонять сам
+    драйвер живьём: `bash scripts/self-test.sh scripts/selftest/smoke.json`.
+    Нюанс bash: env.sh при позиционных аргументах делает exec "$@" —
+    перед source чистить `set --`. Скриншот+OCR остаётся только для того,
+    что реально про пиксели (вёрстка, иконки, выделение).
 
 **Чат 2026-08-14 (закрытие остатков бэклога; efcab98, eeafba0):**
 - **Единая иконка «Обновить»** (efcab98): кнопка «↻ Обновить» в «Отчётах»
