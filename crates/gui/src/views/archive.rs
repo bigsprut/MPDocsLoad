@@ -37,7 +37,7 @@ thread_local! {
     /// Поля произвольного интервала дат (source of truth для DATE_RANGE).
     static W_DATE_FROM: Rc<RefCell<Option<gtk4::Entry>>> = Rc::new(RefCell::new(None));
     static W_DATE_TO: Rc<RefCell<Option<gtk4::Entry>>> = Rc::new(RefCell::new(None));
-    static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
+    static W_LIST: Rc<RefCell<Option<gtk4::Grid>>> = Rc::new(RefCell::new(None));
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     /// Последний показанный набор записей (источник для кнопки «Экспорт»).
     static ENTRIES: Rc<RefCell<Vec<ArchiveEntry>>> = Rc::new(RefCell::new(Vec::new()));
@@ -199,13 +199,14 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .build();
     root.append(&result_label);
 
-    // --- Список архивных записей ---
-    let list_box = ListBox::new();
-    list_box.set_selection_mode(gtk4::SelectionMode::None);
-    list_box.set_show_separators(true);
+    // --- Таблица архивных записей: GtkGrid (заголовок + все строки в ОДНОЙ
+    // сетке) — колонки физически общие: заголовок всегда над своей колонкой,
+    // линии-разделители стоят ровно. ---
+    let grid = gtk4::Grid::new();
+    grid.set_column_spacing(12);
 
     let scroll = ScrolledWindow::new();
-    scroll.set_child(Some(&list_box));
+    scroll.set_child(Some(&grid));
     scroll.set_policy(PolicyType::Automatic, PolicyType::Automatic);
     scroll.set_vexpand(true);
     root.append(&scroll);
@@ -216,7 +217,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_REPORT_COMBO.with(|w| *w.borrow_mut() = Some(report_combo.clone()));
     W_DATE_FROM.with(|w| *w.borrow_mut() = Some(date_from.clone()));
     W_DATE_TO.with(|w| *w.borrow_mut() = Some(date_to.clone()));
-    W_LIST.with(|w| *w.borrow_mut() = Some(list_box));
+    W_LIST.with(|w| *w.borrow_mut() = Some(grid));
     W_RESULT.with(|w| *w.borrow_mut() = Some(result_label));
 
     // Правка полей дат (вручную или календарём) → пересобираем DATE_RANGE.
@@ -369,88 +370,101 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
     RESTORING.with(|r| *r.borrow_mut() = false);
 }
 
-/// Рендерит список архивных записей в ListBox.
+/// Рендерит таблицу Архива: заголовок и все строки — в ОДНОМ GtkGrid.
+/// Колонки сетки физически общие на все строки: заголовок всегда стоит ровно
+/// над своей колонкой, вертикальные линии-разделители — строго по границам
+/// колонок (прежде строки были независимыми HBox — заголовки «уезжали»).
+/// Раскладка: чётные колонки — данные (7 шт), нечётные — вертикальные линии;
+/// строка 0 — заголовок, далее данные, между ними горизонтальные линии.
 fn render_archive(entries: &[ArchiveEntry]) {
     // Памятка текущего списка — для кнопки «Экспорт».
     ENTRIES.with(|e| *e.borrow_mut() = entries.to_vec());
-    W_LIST.with(|lw| {
-        let Some(list_box) = lw.borrow().clone() else {
+    W_LIST.with(|gw| {
+        // Колонки данных (чётные): Профиль, Отчёт, Период, Формат, Размер,
+        // Скачан, Действия; между ними (нечётные) — вертикальные линии.
+        const CELLS: [i32; 7] = [0, 2, 4, 6, 8, 10, 12];
+        const SPAN: i32 = 13;
+
+        // Прикрепить ячейку в строку row (с внутренними отступами строки).
+        fn put(grid: &gtk4::Grid, w: &impl IsA<gtk4::Widget>, col: i32, row: i32) {
+            w.set_margin_top(3);
+            w.set_margin_bottom(3);
+            grid.attach(w, col, row, 1, 1);
+        }
+        // Вертикальная линия между колонками (вся высота строки).
+        fn vline(grid: &gtk4::Grid, col: i32, row: i32) {
+            let sep = vsep();
+            grid.attach(&sep, col, row, 1, 1);
+        }
+        // Горизонтальная линия на всю ширину таблицы.
+        fn hline(grid: &gtk4::Grid, row: i32) {
+            let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
+            grid.attach(&sep, 0, row, SPAN, 1);
+        }
+
+        let Some(grid) = gw.borrow().clone() else {
             return;
         };
-        // Очищаем старые строки.
-        while let Some(child) = list_box.first_child() {
-            list_box.remove(&child);
+        grid.set_margin_start(8);
+        grid.set_margin_end(8);
+        grid.set_margin_top(4);
+        grid.set_margin_bottom(4);
+        // Очищаем старое содержимое.
+        while let Some(child) = grid.first_child() {
+            grid.remove(&child);
         }
 
         if entries.is_empty() {
-            list_box.append(&Label::new(Some("Ничего не найдено по заданным фильтрам.")));
+            grid.attach(
+                &Label::new(Some("Ничего не найдено по заданным фильтрам.")),
+                0,
+                0,
+                1,
+                1,
+            );
             return;
         }
 
-        // Заголовок таблицы. Ширина ячейки фиксирована парой
-        // width_chars == max_width_chars (+ ellipsize на длинных колонках):
-        // width_chars задаёт только МИНИМУМ, а натуральная ширина = длине
-        // текста — из-за этого колонки «разъезжались» построчно (длинное
-        // имя профиля/отчёта раздвигало свою ячейку). Одинаковый запрос
-        // ширины у всех ячеек колонки = ровные колонки.
-        let header = GtkBox::new(Orientation::Horizontal, 12);
-        header.set_margin_start(8);
-        header.set_margin_end(8);
-        header.set_margin_top(4);
-        header.set_margin_bottom(4);
-        let hcell = |text: &str, w: i32| {
+        // --- Строка 0: заголовок (жирный; ширина ячеек та же, что у данных). ---
+        let head = |text: &str, w: i32, expand: bool| {
             Label::builder()
-                .label(text)
+                .label(format!("<b>{text}</b>"))
+                .use_markup(true)
                 .width_chars(w)
                 .max_width_chars(w)
                 .xalign(0.0)
+                .hexpand(expand)
                 .build()
         };
-        header.append(&hcell("Профиль", 16));
-        header.append(&vsep());
-        // «Отчёт» — эластичная колонка и в заголовке ТОЖЕ (hexpand): иначе
-        // заголовки после «Отчёта» не уезжают вместе с данными вправо и
-        // повисают не над своими колонками.
-        header.append(
-            &Label::builder()
-                .label("Отчёт")
-                .width_chars(22)
-                .max_width_chars(22)
-                .xalign(0.0)
-                .hexpand(true)
-                .build(),
-        );
-        header.append(&vsep());
-        header.append(&hcell("Период", 10));
-        header.append(&vsep());
-        // «Формат»: в строках данных слева иконка (20px) — в заголовке
-        // такой же по ширине спейсер, текст стоит на одной линии.
+        // Заголовок «Формат» — с тем же отступом слева, что иконка в данных.
         let fmt_head = GtkBox::new(Orientation::Horizontal, 6);
         let spacer = GtkBox::new(Orientation::Horizontal, 0);
         spacer.set_size_request(20, -1);
         fmt_head.append(&spacer);
-        fmt_head.append(&hcell("Формат", 8));
-        header.append(&fmt_head);
-        header.append(&vsep());
-        header.append(&hcell("Размер", 10));
-        header.append(&vsep());
-        header.append(&hcell("Скачан", 16));
-        header.append(&vsep());
-        // «Действия» — прижаты вправо расширившимся «Отчётом» (как в данных).
-        let actions_hdr = Label::builder().label("Действия").xalign(0.0).build();
-        header.append(&actions_hdr);
-        list_box.append(&header);
+        fmt_head.append(&head("Формат", 8, false));
 
+        put(&grid, &head("Профиль", 16, false), CELLS[0], 0);
+        vline(&grid, CELLS[0] + 1, 0);
+        // «Отчёт» — эластичная колонка (hexpand и в заголовке, и в данных):
+        // лишняя ширина окна уходит в неё, остальные колонки стоят на месте.
+        put(&grid, &head("Отчёт", 22, true), CELLS[1], 0);
+        vline(&grid, CELLS[1] + 1, 0);
+        put(&grid, &head("Период", 10, false), CELLS[2], 0);
+        vline(&grid, CELLS[2] + 1, 0);
+        put(&grid, &fmt_head, CELLS[3], 0);
+        vline(&grid, CELLS[3] + 1, 0);
+        put(&grid, &head("Размер", 10, false), CELLS[4], 0);
+        vline(&grid, CELLS[4] + 1, 0);
+        put(&grid, &head("Скачан", 16, false), CELLS[5], 0);
+        vline(&grid, CELLS[5] + 1, 0);
+        put(&grid, &head("Действия", 0, false), CELLS[6], 0);
+        hline(&grid, 1);
+
+        let mut row = 2i32;
         for e in entries {
-            let row = GtkBox::new(Orientation::Horizontal, 12);
-            row.set_margin_start(8);
-            row.set_margin_end(8);
-            row.set_margin_top(2);
-            row.set_margin_bottom(2);
-            row.set_css_classes(&["doc-list-row"]);
-
             // Профиль — имя (фиксированная ширина, длинные — с обрезкой).
-            row.append(
+            put(
+                &grid,
                 &Label::builder()
                     .label(&e.profile_name)
                     .width_chars(16)
@@ -458,16 +472,19 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .xalign(0.0)
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
                     .build(),
+                CELLS[0],
+                row,
             );
-            row.append(&vsep());
+            vline(&grid, CELLS[0] + 1, row);
+
             // Человекочитаемое имя отчёта (с fallback на type_id); tooltip —
             // технический type_id для точной идентификации.
             let report_label = e
                 .report_display_name
                 .clone()
                 .unwrap_or_else(|| e.report_type.clone());
-            // Отчёт — эластичная колонка: забирает лишнюю ширину строки.
-            row.append(
+            put(
+                &grid,
                 &Label::builder()
                     .label(&report_label)
                     .tooltip_text(&e.report_type)
@@ -477,23 +494,29 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .hexpand(true)
                     .ellipsize(gtk4::pango::EllipsizeMode::End)
                     .build(),
+                CELLS[1],
+                row,
             );
-            row.append(&vsep());
+            vline(&grid, CELLS[1] + 1, row);
+
             let period_str = e
                 .period
                 .as_deref()
                 .map_or_else(|| "—".to_string(), super::disp_date);
-            row.append(
+            put(
+                &grid,
                 &Label::builder()
                     .label(&period_str)
                     .width_chars(10)
                     .max_width_chars(10)
                     .xalign(0.0)
                     .build(),
+                CELLS[2],
+                row,
             );
-            row.append(&vsep());
-            // Формат: иконка типа файла (PNG из gresource) + короткий текст —
-            // визуально принадлежит именно этой колонке.
+            vline(&grid, CELLS[2] + 1, row);
+
+            // Формат: иконка типа файла (PNG из gresource) + короткий текст.
             let fmt_box = GtkBox::new(Orientation::Horizontal, 6);
             fmt_box.append(
                 &Image::builder()
@@ -509,36 +532,45 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .xalign(0.0)
                     .build(),
             );
-            row.append(&fmt_box);
-            row.append(&vsep());
+            put(&grid, &fmt_box, CELLS[3], row);
+            vline(&grid, CELLS[3] + 1, row);
+
             let size_str = human_size(u64::try_from(e.file_size).unwrap_or(0));
-            row.append(
+            put(
+                &grid,
                 &Label::builder()
                     .label(&size_str)
                     .width_chars(10)
                     .max_width_chars(10)
                     .xalign(0.0)
                     .build(),
+                CELLS[4],
+                row,
             );
-            row.append(&vsep());
+            vline(&grid, CELLS[4] + 1, row);
+
             let dt_str = e
                 .downloaded_at
                 .with_timezone(&chrono::Local)
                 .format("%d.%m.%Y %H:%M")
                 .to_string();
-            row.append(
+            put(
+                &grid,
                 &Label::builder()
                     .label(&dt_str)
                     .width_chars(16)
                     .max_width_chars(16)
                     .xalign(0.0)
                     .build(),
+                CELLS[5],
+                row,
             );
+            vline(&grid, CELLS[5] + 1, row);
 
             // Действия: 📂 открыть, 📁 папка, 📋 путь, 🗑 удалить — компактной
-            // группой у правого края (без растягивания пустотой).
+            // группой (ширина колонки — по кнопкам).
             let actions_box = GtkBox::new(Orientation::Horizontal, 2);
-            actions_box.set_halign(gtk4::Align::End);
+            actions_box.set_halign(gtk4::Align::Start);
             let file_path = e.file_path.clone();
 
             let open_btn = super::icon_only_button("document-open-symbolic", "Открыть файл");
@@ -598,8 +630,13 @@ fn render_archive(entries: &[ArchiveEntry]) {
             }
             actions_box.append(&del_btn);
 
-            row.append(&actions_box);
-            list_box.append(&row);
+            put(&grid, &actions_box, CELLS[6], row);
+
+            row += 1;
+            if row < 2 + entries.len() as i32 {
+                hline(&grid, row);
+                row += 1;
+            }
         }
     });
 }
