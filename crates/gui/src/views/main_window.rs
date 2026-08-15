@@ -303,7 +303,13 @@ pub fn build_and_present(
     menu.append(Some("Справка"), Some("app.help"));
     menu.append(Some("О программе"), Some("app.about"));
     menu.append(Some("Выход"), Some("app.quit"));
-    let app_icon = Image::builder().icon_name("mdwf").pixel_size(22).build();
+    // Иконка приложения в кнопке меню — PNG напрямую из gresource
+    // (from_resource не зависит от icon theme: в теме дев-машины MSYS2
+    // имени «mdwf» нет — from_icon_name давал белый лист, урок #39).
+    let app_icon = Image::builder()
+        .resource("/org/mdwf/icons/app.png")
+        .pixel_size(22)
+        .build();
     let menu_btn = gtk4::MenuButton::builder()
         .tooltip_text("Меню приложения")
         .menu_model(&menu)
