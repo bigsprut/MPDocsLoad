@@ -9,8 +9,8 @@
 - **HEAD:** последний коммит `master` = origin/master, рабочее дерево
   чистое. Неотслеживаемые `MDWF/downloads/**` — артефакты живых прогонов
   (в репо не нужны). Выпущен релиз **v1.5.0** (2026-08-15): CHANGELOG
-  `[1.5.0]`, тег + GitHub Release с `MDWFSetup-1.5.0.exe`; ствол = 1.5.0
-  (следующая фича → bump 1.6.0-unreleased).
+  `[1.5.0]`, тег + GitHub Release с `MDWFSetup-1.5.0.exe`. Ствол =
+  **1.6.0-unreleased** (первая фича: путь к файлу в журнале, `b8f7a73`).
 - **CI ЗЕЛЁНЫЙ** (первый стабильный прогон: run 31876509552):
   `.github/workflows/ci.yml` — windows-latest + msys2/setup-msys2@v2
   (mingw64: gtk4/libadwaita/pkgconf/gcc), шаги `cargo test --workspace` +
@@ -212,6 +212,7 @@ crates/
 
 Последние коммиты на `master` (свежие сверху):
 ```
+b8f7a73 feat: путь к файлу в сообщениях журнала о скачивании (GUI + CLI + расписания)
 2f7f82a fix(build): build-setup.sh — версия из [workspace.package] + //D-эскейп ISCC
 43365e1 chore(release): [Unreleased] → [1.5.0] — 2026-08-15
 a1728a1 fix: чистый clippy 1.97 (CI) — enumerate/Default/Duration/map_or
