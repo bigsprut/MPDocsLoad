@@ -14,7 +14,9 @@
 ;   - Деинсталлятор удаляет {app} (данные пользователя в %APPDATA%\mdwf остаются).
 
 #define MyAppName      "MDWF"
-#define MyAppVersion   "1.4.0"
+#ifndef MyAppVersion
+#define MyAppVersion   "1.5.0"
+#endif
 #define MyAppPublisher "MDWF"
 #define MyAppExeName   "mdwf-gui.exe"
 #define BuildDir       "..\dist\mdwf"

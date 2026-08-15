@@ -3,6 +3,14 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/), версионирование —
 SemVer. Подробная история коммитов — `PROJECT_STATUS.md` §6.
 
+## [Unreleased] — станет 1.5.0
+
+### Добавлено
+
+- `mdwf-gui --self-test <сценарий.json>` — event-level headless-драйвер
+  GUI: прогон сценариев через тот же app-loop без окна/скриншотов, отчёт
+  JSON с программными проверками (тестовая инфраструктура).
+
 ## [1.4.0] — 2026-08-15
 
 ### Добавлено

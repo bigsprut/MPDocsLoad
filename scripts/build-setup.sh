@@ -59,7 +59,10 @@ echo "  найден: $ISCC"
 
 echo ""
 echo "=== [3/3] Компиляция инсталлятора ==="
-"$ISCC" "$REPO_ROOT/installer/mdwf.iss"
+# Версия — единственный источник: [workspace.package] Cargo.toml.
+APP_VERSION="$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*//')"
+echo "  версия: $APP_VERSION"
+"$ISCC" "/DMyAppVersion=$APP_VERSION" "$REPO_ROOT/installer/mdwf.iss"
 
 echo ""
 echo "============================================================"
