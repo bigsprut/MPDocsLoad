@@ -39,6 +39,8 @@ thread_local! {
     static W_DATE_TO: Rc<RefCell<Option<gtk4::Entry>>> = Rc::new(RefCell::new(None));
     static W_LIST: Rc<RefCell<Option<ListBox>>> = Rc::new(RefCell::new(None));
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
+    /// Последний показанный набор записей (источник для кнопки «Экспорт»).
+    static ENTRIES: Rc<RefCell<Vec<ArchiveEntry>>> = Rc::new(RefCell::new(Vec::new()));
     /// Карта: отображаемое имя профиля → имя (уникальный ключ в БД).
     /// Заполняется из ProfilesLoaded; используется для резолва выбора combo.
     static PROFILES: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
@@ -173,6 +175,10 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     let apply_btn = super::icon_button("Применить", "edit-find-symbolic");
     apply_btn.set_tooltip_text(Some("Применить фильтры и обновить список"));
     filters.append(&apply_btn);
+
+    let export_btn = super::icon_button("Экспорт", "document-save-symbolic");
+    export_btn.set_tooltip_text(Some("Сохранить показанный список в Excel или CSV"));
+    filters.append(&export_btn);
     root.append(&filters);
 
     // --- Результат/статус вкладки ---
@@ -231,6 +237,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             });
         });
     }
+
+    // «Экспорт»: текущий список → xlsx/CSV через системный диалог Save.
+    export_btn.connect_clicked(|_| export_current_list());
 
     // Автосохранение фильтров при смене combo. RESTORING защищает от сохранения
     // во время программного set_active при restore сохранённого состояния.
@@ -353,6 +362,8 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
 
 /// Рендерит список архивных записей в ListBox.
 fn render_archive(entries: &[ArchiveEntry]) {
+    // Памятка текущего списка — для кнопки «Экспорт».
+    ENTRIES.with(|e| *e.borrow_mut() = entries.to_vec());
     W_LIST.with(|lw| {
         let Some(list_box) = lw.borrow().clone() else {
             return;
@@ -449,7 +460,11 @@ fn render_archive(entries: &[ArchiveEntry]) {
                     .xalign(0.0)
                     .build(),
             );
-            let dt_str = e.downloaded_at.format("%d.%m.%Y %H:%M").to_string();
+            let dt_str = e
+                .downloaded_at
+                .with_timezone(&chrono::Local)
+                .format("%d.%m.%Y %H:%M")
+                .to_string();
             row.append(
                 &Label::builder()
                     .label(&dt_str)
@@ -525,9 +540,65 @@ fn render_archive(entries: &[ArchiveEntry]) {
     });
 }
 
+/// «Экспорт»: сохранить текущий список Архива в xlsx или CSV (диалог Save;
+/// формат — по расширению выбранного имени файла).
+fn export_current_list() {
+    let entries = ENTRIES.with(|e| e.borrow().clone());
+    if entries.is_empty() {
+        notify("Нечего экспортировать: список пуст.");
+        return;
+    }
+    let dlg = gtk4::FileChooserDialog::builder()
+        .title("Экспорт списка Архива")
+        .action(gtk4::FileChooserAction::Save)
+        .modal(true)
+        .build();
+    dlg.add_button("Отмена", gtk4::ResponseType::Cancel);
+    dlg.add_button("Сохранить", gtk4::ResponseType::Accept);
+
+    let xlsx_filter = gtk4::FileFilter::new();
+    xlsx_filter.set_name(Some("Таблица Excel (.xlsx)"));
+    xlsx_filter.add_pattern("*.xlsx");
+    dlg.add_filter(&xlsx_filter);
+    let csv_filter = gtk4::FileFilter::new();
+    csv_filter.set_name(Some("CSV для Excel (разделитель «;»)"));
+    csv_filter.add_pattern("*.csv");
+    dlg.add_filter(&csv_filter);
+
+    dlg.set_current_name(&format!(
+        "mdwf-архив-{}.xlsx",
+        chrono::Local::now().format("%Y-%m-%d")
+    ));
+    // Стартовая папка — «Документы» (рядом обычно лежат выгрузки).
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        let docs = std::path::Path::new(&home).join("Documents");
+        let _ = dlg.set_current_folder(Some(&gtk4::gio::File::for_path(docs)));
+    }
+
+    dlg.connect_response(move |d, resp| {
+        if resp == gtk4::ResponseType::Accept {
+            if let Some(path) = d.file().and_then(|f| f.path()) {
+                let is_csv = path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
+                let data = if is_csv {
+                    Ok(super::archive_export::to_csv(&entries).into_bytes())
+                } else {
+                    super::archive_export::to_xlsx(&entries)
+                };
+                match data.and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+                    Ok(()) => notify(&format!("Список сохранён: {}", path.display())),
+                    Err(e) => notify(&format!("Не удалось сохранить: {e}")),
+                }
+            }
+        }
+        d.destroy();
+    });
+    dlg.show();
+}
+
 /// Возвращает выбранный профиль (None = «(все)»).
-fn selected_profile() -> Option<String> {
-    let combo = W_PROFILE_COMBO.with(|w| w.borrow().clone())?;
+fn selected_profile() -> Option<String> {    let combo = W_PROFILE_COMBO.with(|w| w.borrow().clone())?;
     let text = combo.active_text()?.to_string();
     if text == "(все)" || text.is_empty() {
         return None;
@@ -600,7 +671,9 @@ fn ext_icon_resource(ext: &str) -> &'static str {
 }
 
 /// Человекочитаемый размер файла.
-fn human_size(bytes: u64) -> String {
+/// Человекочитаемый размер («1,2 МБ», «456 Б»). Используется и экспортом
+/// Архива (archive_export) — формат в файле совпадает с таблицей на экране.
+pub(crate) fn human_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * 1024;
     if bytes >= MB {
@@ -741,4 +814,9 @@ const ARCHIVE_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
         "📂 — открыть файл; 📁 — показать папку; 📋 — копировать путь.",
         "🗑 — удалить запись и файл с диска (с подтверждением).",
     ]),
+    crate::widgets::tab_help::HelpBlock::H("Экспорт"),
+    crate::widgets::tab_help::HelpBlock::T(
+        "Кнопка «Экспорт» сохраняет показанный (с учётом фильтров) список в таблицу Excel (.xlsx) или CSV. \
+         Формат — по расширению имени файла в диалоге; в файле те же колонки, что на экране, плюс путь к каждому файлу.",
+    ),
 ];

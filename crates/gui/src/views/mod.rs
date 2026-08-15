@@ -30,6 +30,7 @@ pub(crate) fn icon_only_button(icon_name: &str, tooltip: &str) -> gtk4::Button {
 
 pub mod about;
 pub mod archive;
+pub(crate) mod archive_export;
 pub mod download;
 pub mod help;
 pub mod logs;
