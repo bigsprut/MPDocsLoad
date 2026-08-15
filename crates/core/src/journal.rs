@@ -152,6 +152,18 @@ pub fn describe_report_period(period: Option<&str>) -> Option<String> {
     }
 }
 
+/// Суффикс со списком путей для сообщения журнала о скачивании (общий для
+/// GUI и CLI — формат не должен расходиться). Пустой список → пустая строка;
+/// иначе « — {путь}» / « — {путь1}; {путь2}; …». Лента журнала переносит
+/// строки (wrap), длинные списки не обрезаем — путь и есть ценная информация.
+#[must_use]
+pub fn paths_suffix(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    format!(" — {}", paths.join("; "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +277,19 @@ mod tests {
         assert_eq!(
             LogOrigin::ScheduleCliRun("fb_smoke".into()).as_str(),
             "расписание «fb_smoke», запуск из CLI"
+        );
+    }
+
+    #[test]
+    fn paths_suffix_shape() {
+        assert_eq!(paths_suffix(&[]), "");
+        assert_eq!(
+            paths_suffix(&["D:/x/a.xlsx".to_string()]),
+            " — D:/x/a.xlsx"
+        );
+        assert_eq!(
+            paths_suffix(&["D:/x/a.xlsx".to_string(), "D:/x/b.csv".to_string()]),
+            " — D:/x/a.xlsx; D:/x/b.csv"
         );
     }
 }

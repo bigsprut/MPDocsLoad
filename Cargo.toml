@@ -27,7 +27,7 @@ default-members = ["crates/gui", "crates/cli"]
 #   gtk4 = "0.9" требует glib/gio = "0.20" (в спеке указано 0.19 — несовместимо).
 # -----------------------------------------------------------------------------
 [workspace.package]
-version = "1.5.0"
+version = "1.6.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"

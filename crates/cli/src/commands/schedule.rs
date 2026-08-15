@@ -218,7 +218,7 @@ impl JobExecutor for CliJobExecutor<'_> {
                 Ok(files) => {
                     // Записываем на диск + каталог (раньше файлы выбрасывались —
                     // фоновые запуски по задаче Windows теряли выгрузки).
-                    let saved = match crate::commands::download::persist(
+                    let saved_paths = match crate::commands::download::persist(
                         self.ctx,
                         &files,
                         &profile.provider_id,
@@ -226,7 +226,7 @@ impl JobExecutor for CliJobExecutor<'_> {
                         report_type,
                         &params,
                     ) {
-                        Ok(n) => n,
+                        Ok(p) => p,
                         Err(e) => {
                             journal_write(
                                 self.ctx,
@@ -244,12 +244,17 @@ impl JobExecutor for CliJobExecutor<'_> {
                     } else {
                         format!(" — внимание: {note}")
                     };
-                    total_files += saved;
+                    total_files += saved_paths.len();
                     journal_write(
                         self.ctx,
                         "success",
                         &origin,
-                        &format!("{subject}: скачано {} файл(ов){note_suffix}", files.len()),
+                        &format!(
+                            "{subject}: скачано {} файл(ов){}{}",
+                            files.len(),
+                            mdwf_core::journal::paths_suffix(&saved_paths),
+                            note_suffix
+                        ),
                     );
                 }
                 Err(e) => {

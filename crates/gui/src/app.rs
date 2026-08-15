@@ -1145,12 +1145,19 @@ async fn do_download(
             } else {
                 format!(" — внимание: {note}")
             };
+            // Путь к файлу(ам) — в само сообщение журнала: фоновые запуски
+            // расписаний видно только по журналу, путь сразу отвечает «куда».
             log_event(
                 domain,
                 origin,
                 fwd,
                 crate::channels::LogKind::Success,
-                format!("{subject}: скачано {} файл(ов){note_suffix}", files.len()),
+                format!(
+                    "{subject}: скачано {} файл(ов){}{}",
+                    files.len(),
+                    mdwf_core::journal::paths_suffix(&paths),
+                    note_suffix
+                ),
             );
             Ok(crate::channels::DownloadResult {
                 files,

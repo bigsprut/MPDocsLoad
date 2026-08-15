@@ -23,8 +23,10 @@
     { "event": "ReportsLoaded", "contains": "ok: 2 отчётов" },
     { "event": "DownloadFinished", "contains": "ok: 1 файл" },
     { "event": "Log", "contains": "скачано 1 файл(ов)" },
+    { "event": "Log", "contains": "smoke.data" },
     { "event": "Log", "contains": "вручную (GUI)" },
     { "event": "ArchiveListed", "contains": "ok: 1 записей" },
-    { "journal_contains": "скачано 1 файл(ов)" }
+    { "journal_contains": "скачано 1 файл(ов)" },
+    { "journal_contains": "smoke.data" }
   ]
 }

@@ -86,15 +86,21 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
                 } else {
                     format!(" — внимание: {note}")
                 };
-                let saved = persist(ctx, &files, &profile.provider_id, &args.profile, report_type, &params)?;
-                println!("  скачано файлов: {}; записано: {}", files.len(), saved);
+                let saved_paths =
+                    persist(ctx, &files, &profile.provider_id, &args.profile, report_type, &params)?;
+                println!("  скачано файлов: {}; записано: {}", files.len(), saved_paths.len());
                 journal_write(
                     ctx,
                     "success",
                     &origin,
-                    &format!("{subject}: скачано {} файл(ов){note_suffix}", files.len()),
+                    &format!(
+                        "{subject}: скачано {} файл(ов){}{}",
+                        files.len(),
+                        mdwf_core::journal::paths_suffix(&saved_paths),
+                        note_suffix
+                    ),
                 );
-                total += saved;
+                total += saved_paths.len();
             }
             Err(e) => {
                 println!("  ошибка выгрузки: {e}");
@@ -115,6 +121,8 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
 }
 
 /// Записывает файлы на диск через FileStore и регистрирует в каталоге.
+/// Возвращает ПОЛНЫЕ пути сохранённых файлов (нужны сообщению журнала —
+/// «скачано N файл(ов) — путь»); длина = число файлов.
 /// pub(crate): переиспользуется исполнителем расписаний (schedule run).
 pub(crate) fn persist(
     ctx: &Context,
@@ -123,7 +131,7 @@ pub(crate) fn persist(
     profile_name: &str,
     report_type: &str,
     params: &ReportParams,
-) -> Result<usize> {
+) -> Result<Vec<String>> {
     let profile = ctx
         .catalog
         .get_profile_by_name(profile_name)?
@@ -132,7 +140,7 @@ pub(crate) fn persist(
         .id
         .ok_or_else(|| anyhow::anyhow!("профиль без id"))?;
 
-    let mut count = 0usize;
+    let mut paths = Vec::new();
     for f in files {
         let content = f
             .content
@@ -177,8 +185,8 @@ pub(crate) fn persist(
             document_date: f.document_date.clone(),
         };
         ctx.catalog.record_download(&new_dl)?;
-        count += 1;
+        paths.push(full_path.display().to_string());
     }
     let _ = Utc::now(); // suppress unused
-    Ok(count)
+    Ok(paths)
 }
