@@ -436,13 +436,8 @@ fn render_archive(entries: &[ArchiveEntry]) {
                 .hexpand(expand)
                 .build()
         };
-        // Заголовок «Формат» — с тем же отступом слева, что иконка в данных.
-        let fmt_head = GtkBox::new(Orientation::Horizontal, 6);
-        let spacer = GtkBox::new(Orientation::Horizontal, 0);
-        spacer.set_size_request(20, -1);
-        fmt_head.append(&spacer);
-        fmt_head.append(&head("Формат", 8, false));
-
+        // Все заголовки — от левого края своей колонки (одинаковое
+        // выравнивание); «Формат» выравнивается по иконке в данных.
         put(&grid, &head("Профиль", 16, false), CELLS[0], 0);
         vline(&grid, CELLS[0] + 1, 0);
         // «Отчёт» — эластичная колонка (hexpand и в заголовке, и в данных):
@@ -451,7 +446,7 @@ fn render_archive(entries: &[ArchiveEntry]) {
         vline(&grid, CELLS[1] + 1, 0);
         put(&grid, &head("Период", 10, false), CELLS[2], 0);
         vline(&grid, CELLS[2] + 1, 0);
-        put(&grid, &fmt_head, CELLS[3], 0);
+        put(&grid, &head("Формат", 8, false), CELLS[3], 0);
         vline(&grid, CELLS[3] + 1, 0);
         put(&grid, &head("Размер", 10, false), CELLS[4], 0);
         vline(&grid, CELLS[4] + 1, 0);
