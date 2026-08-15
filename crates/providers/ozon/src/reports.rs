@@ -1082,10 +1082,29 @@ impl OzonAsyncReport {
         let bytes = self.client.download_file(&file_url).await?;
         let period = params.period.clone().unwrap_or_else(|| "current".into());
         let ext = detect_format(&bytes);
+        // realization_posting: API отдаёт CSV, но в кабинете этот отчёт
+        // скачивается Excel-файлом → конвертируем в xlsx (лист как в ЛК +
+        // детали; мэппинг колонок сверен с живым ЛК). Ошибка конвертации —
+        // честный CSV, данные не теряются.
+        let (name_ext, out_bytes): (&str, Vec<u8>) =
+            if self.type_id == "ozon.realization_posting" && ext == "csv" {
+                match crate::xlsx::realization_posting_csv_to_xlsx(&bytes, &period) {
+                    Ok(x) => ("xlsx", x),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "realization_posting: конвертация в xlsx не удалась, сохраняю CSV"
+                        );
+                        ("csv", bytes)
+                    }
+                }
+            } else {
+                (ext, bytes)
+            };
         return Ok(vec![DownloadedFile::with_content(
-            format!("{}_{}.{}", self.type_id, period, ext),
-            ext,
-            bytes,
+            format!("{}_{}.{}", self.type_id, period, name_ext),
+            name_ext,
+            out_bytes,
         )]);
         } // 'create
     }

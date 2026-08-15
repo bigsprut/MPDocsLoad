@@ -732,6 +732,253 @@ fn infer_headers_vec(arr: &Vec<Value>) -> Vec<(&'static str, &'static str)> {
     infer_headers(&refs)
 }
 
+// ===== realization_posting: серверный CSV → Excel (как в ЛК) =====
+//
+// API /v1/report/realization/posting отдаёт CSV, но в кабинете этот же отчёт
+// скачивается Excel-файлом — конвертируем. Мэппинг колонок СВЕРЕН с живым
+// ЛК-файлом (июль 2026, итоги сошлись копейка в копейку):
+//   «Реализовано на сумму»      = delivery_commission_amount (= price × qty),
+//   «выплаты по механикам»      = delivery_commission_bank_coinvestment,
+//   «Возвращено на сумму»       = return_commission_amount,
+//   «выплаты (возврат)»         = return_commission_bank_coinvestment,
+//   «цена реализации»           = *_price_per_instance (НЕ цена продавца!).
+
+/// Тип значения колонки листа «Отчёт».
+#[derive(Clone, Copy, PartialEq)]
+enum RpKind {
+    /// Числом, без суммы в «Итого» (№ п/п, SKU, цены за шт.).
+    Num,
+    /// Числом + суммируется в «Итого» (количества, суммы, выплаты).
+    Sum,
+    /// Строкой (артикул/штрих-код с ведущим нулём/номер отправления).
+    Str,
+    /// Дата «2026-7-7» → «07.07.2026».
+    Date,
+}
+
+/// Конвертирует CSV позаказного отчёта о реализации в .xlsx:
+/// лист 1 «Отчёт о реализации» (колонки как в ЛК + строка «Итого»),
+/// лист 2 «Детали (API)» (все исходные поля, русские заголовки).
+pub fn realization_posting_csv_to_xlsx(csv: &[u8], period: &str) -> CoreResult<Vec<u8>> {
+    const COLS: &[(&str, &str, RpKind)] = &[
+        ("row_number", "№ п/п", RpKind::Num),
+        ("item_name", "Название товара", RpKind::Str),
+        ("item_offer_id", "Артикул", RpKind::Str),
+        ("item_sku", "SKU", RpKind::Num),
+        ("item_barcode", "Штрих-код товара", RpKind::Str),
+        ("delivery_commission_quantity", "Реализовано: кол-во", RpKind::Sum),
+        ("delivery_commission_price_per_instance", "Реализовано: цена реализации, руб.", RpKind::Num),
+        ("delivery_commission_amount", "Реализовано: на сумму, руб.", RpKind::Sum),
+        ("delivery_commission_bank_coinvestment", "Реализовано: выплаты по механикам, руб.", RpKind::Sum),
+        ("return_commission_quantity", "Возвращено: кол-во", RpKind::Sum),
+        ("return_commission_price_per_instance", "Возвращено: цена реализации, руб.", RpKind::Num),
+        ("return_commission_amount", "Возвращено: на сумму, руб.", RpKind::Sum),
+        ("return_commission_bank_coinvestment", "Возвращено: выплаты по механикам, руб.", RpKind::Sum),
+        ("order_posting_number", "Отправление: номер", RpKind::Str),
+        ("order_created_date", "Отправление: дата", RpKind::Date),
+        ("legal_entity_document_number", "Продажа юрлицу: № счёт-фактуры", RpKind::Str),
+        ("legal_entity_document_sale_date", "Продажа юрлицу: дата", RpKind::Date),
+    ];
+
+    let text = String::from_utf8_lossy(csv.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(csv));
+    let rows = parse_csv(text.as_ref());
+    let Some(header) = rows.first() else {
+        return Err(CoreError::Internal(
+            "realization_posting: пустой CSV от сервера".into(),
+        ));
+    };
+    let col = |name: &str| header.iter().position(|h| h == name);
+
+    let bold = Format::new().set_bold();
+    let mut wb = Workbook::new();
+
+    // --- Лист 1: «Отчёт о реализации» (как в ЛК) ---
+    let s1 = wb.add_worksheet();
+    s1.set_name("Отчёт о реализации")
+        .map_err(|e| CoreError::Internal(format!("xlsx sheet name: {e}")))?;
+    s1.write_string_with_format(0, 0, format!("Отчёт о реализации (позаказный). Период: {period}"), &bold)
+        .map_err(|e| CoreError::Internal(format!("xlsx: {e}")))?;
+    for (c, (_, title, _)) in COLS.iter().enumerate() {
+        s1.write_string_with_format(1, c as u16, *title, &bold)
+            .map_err(|e| CoreError::Internal(format!("xlsx header: {e}")))?;
+    }
+    let mut totals = vec![0f64; COLS.len()];
+    for (ri, row) in rows.iter().enumerate().skip(1) {
+        let out_row = (ri + 1) as u32;
+        for (c, (field, _, kind)) in COLS.iter().enumerate() {
+            let raw = col(field).and_then(|i| row.get(i)).map(String::as_str);
+            match kind {
+                RpKind::Str => {
+                    if let Some(t) = raw {
+                        let _ = s1.write_string(out_row, c as u16, t);
+                    }
+                }
+                RpKind::Date => {
+                    if let Some(t) = raw {
+                        let _ = s1.write_string(out_row, c as u16, normalize_ymd(t));
+                    }
+                }
+                RpKind::Num | RpKind::Sum => {
+                    if let Some(t) = raw {
+                        write_cell(s1, out_row, c as u16, Some(t));
+                        if *kind == RpKind::Sum {
+                            if let Ok(v) = t.parse::<f64>() {
+                                totals[c] += v;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // «Итого»: только осмысленные суммы (количества/суммы/выплаты); SKU,
+    // № п/п и цены за штуку не суммируются.
+    let total_row = (rows.len() + 1) as u32;
+    let _ = s1.write_string_with_format(total_row, 0, "Итого", &bold);
+    for (c, (_, _, kind)) in COLS.iter().enumerate() {
+        if *kind == RpKind::Sum {
+            let _ = s1.write_number_with_format(total_row, c as u16, totals[c], &bold);
+        }
+    }
+    s1.set_freeze_panes(2, 0).ok();
+    let _ = s1.autofit();
+
+    // --- Лист 2: «Детали (API)» — все исходные поля, ничего не теряем ---
+    let s2 = wb.add_worksheet();
+    s2.set_name("Детали (API)")
+        .map_err(|e| CoreError::Internal(format!("xlsx sheet name: {e}")))?;
+    for (c, h) in header.iter().enumerate() {
+        s2.write_string_with_format(0, c as u16, rp_field_ru(h), &bold)
+            .map_err(|e| CoreError::Internal(format!("xlsx header: {e}")))?;
+    }
+    for (ri, row) in rows.iter().enumerate().skip(1) {
+        for (c, v) in row.iter().enumerate() {
+            // Штрих-коды/артикулы/отправления — строкой (ведущие нули),
+            // остальное через write_cell (числа числами).
+            if matches!(
+                header.get(c).map(String::as_str),
+                Some("item_barcode" | "item_offer_id" | "order_posting_number")
+            ) {
+                let _ = s2.write_string(ri as u32, c as u16, v);
+            } else {
+                write_cell(s2, ri as u32, c as u16, Some(v));
+            }
+        }
+    }
+    s2.set_freeze_panes(1, 0).ok();
+    let _ = s2.autofit();
+
+    wb.save_to_buffer()
+        .map_err(|e| CoreError::Internal(format!("xlsx write: {e}")))
+}
+
+/// Русское имя поля CSV позаказной реализации (для листа «Детали»).
+/// Незнакомые поля (Ozon добавит новые) остаются с исходным именем.
+fn rp_field_ru(field: &str) -> &str {
+    match field {
+        "row_number" => "№ п/п",
+        "commission_ratio" => "Коэффициент комиссии",
+        "seller_price_per_instance" => "Цена продавца за шт., руб.",
+        "order_posting_number" => "Номер отправления",
+        "order_created_date" => "Дата создания заказа",
+        "item_sku" => "SKU",
+        "item_barcode" => "Штрих-код товара",
+        "item_name" => "Название товара",
+        "item_offer_id" => "Артикул",
+        "legal_entity_document_number" => "№ счёт-фактуры (юрлицо)",
+        "legal_entity_document_sale_date" => "Дата счёт-фактуры (юрлицо)",
+        "delivery_commission_amount" => "Доставка: сумма, руб.",
+        "delivery_commission_bank_coinvestment" => "Доставка: соинвестирование банка, руб.",
+        "delivery_commission_bonus" => "Доставка: бонус, руб.",
+        "delivery_commission_commission" => "Доставка: комиссия, руб.",
+        "delivery_commission_compensation" => "Доставка: компенсация, руб.",
+        "delivery_commission_pick_up_point_coinvestment" => "Доставка: соинвестирование ПВЗ, руб.",
+        "delivery_commission_price_per_instance" => "Доставка: цена за шт., руб.",
+        "delivery_commission_quantity" => "Доставка: количество",
+        "delivery_commission_standard_fee" => "Доставка: стандартный тариф, руб.",
+        "delivery_commission_stars" => "Доставка: звёзды",
+        "delivery_commission_total" => "Доставка: итого, руб.",
+        "return_commission_amount" => "Возврат: сумма, руб.",
+        "return_commission_bank_coinvestment" => "Возврат: соинвестирование банка, руб.",
+        "return_commission_bonus" => "Возврат: бонус, руб.",
+        "return_commission_commission" => "Возврат: комиссия, руб.",
+        "return_commission_compensation" => "Возврат: компенсация, руб.",
+        "return_commission_pick_up_point_coinvestment" => "Возврат: соинвестирование ПВЗ, руб.",
+        "return_commission_price_per_instance" => "Возврат: цена за шт., руб.",
+        "return_commission_quantity" => "Возврат: количество",
+        "return_commission_standard_fee" => "Возврат: стандартный тариф, руб.",
+        "return_commission_stars" => "Возврат: звёзды",
+        "return_commission_total" => "Возврат: итого, руб.",
+        other => intern(other),
+    }
+}
+
+/// Мини-парсер CSV (RFC 4180): кавычки, запятые и переводы строк внутри
+/// кавычек, пустые поля. Ozon realization_posting — разделитель «,».
+fn parse_csv(text: &str) -> Vec<Vec<String>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    field.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(ch);
+            }
+        } else {
+            match ch {
+                '"' => in_quotes = true,
+                ',' => {
+                    row.push(std::mem::take(&mut field));
+                }
+                '\r' => {}
+                '\n' => {
+                    row.push(std::mem::take(&mut field));
+                    let blank_line = row.len() == 1 && row[0].is_empty();
+                    if blank_line {
+                        row.clear();
+                    } else {
+                        rows.push(std::mem::take(&mut row));
+                    }
+                }
+                _ => field.push(ch),
+            }
+        }
+    }
+    row.push(field);
+    if !(row.len() == 1 && row[0].is_empty()) {
+        rows.push(row);
+    }
+    rows
+}
+
+/// «2026-7-7»/«2026-07-07» → «07.07.2026»; не-дата — как есть.
+fn normalize_ymd(src: &str) -> String {
+    let trimmed = src.trim();
+    let parts: Vec<&str> = trimmed.split('-').collect();
+    if parts.len() != 3 {
+        return trimmed.to_string();
+    }
+    match (
+        parts[0].parse::<i32>(),
+        parts[1].parse::<u32>(),
+        parts[2].parse::<u32>(),
+    ) {
+        (Ok(year), Ok(month), Ok(day)) if (1..=12).contains(&month) && (1..=31).contains(&day) => {
+            format!("{day:02}.{month:02}.{year}")
+        }
+        _ => trimmed.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,5 +1046,46 @@ mod tests {
         let v = json!({"a":{"b":{"c":42}}});
         assert_eq!(extract_path(&v, "a.b.c"), Some("42".into()));
         assert_eq!(extract_path(&v, "a.x"), None);
+    }
+
+    #[test]
+    fn rp_csv_parser_quotes_and_newlines() {
+        let rows = parse_csv("a,b,c\r\n1,\"x,y\",3\n\"много\nстрок\",,\r\n");
+        assert_eq!(rows.len(), 3, "строки");
+        assert_eq!(rows[0], vec!["a", "b", "c"]);
+        assert_eq!(rows[1], vec!["1", "x,y", "3"]);
+        assert_eq!(rows[2], vec!["много\nстрок", "", ""]);
+    }
+
+    #[test]
+    fn rp_normalize_date() {
+        assert_eq!(normalize_ymd("2026-7-7"), "07.07.2026");
+        assert_eq!(normalize_ymd("2026-07-31"), "31.07.2026");
+        // Не-даты не трогаем.
+        assert_eq!(normalize_ymd("abc"), "abc");
+        assert_eq!(normalize_ymd("2026-13-01"), "2026-13-01");
+    }
+
+    #[test]
+    fn rp_xlsx_is_zip_and_built() {
+        // Мини-CSV с основными полями (включая штрих-код с ведущим нулём).
+        let csv = "row_number,item_name,item_offer_id,item_sku,item_barcode,\
+delivery_commission_quantity,delivery_commission_price_per_instance,\
+delivery_commission_amount,delivery_commission_bank_coinvestment,\
+return_commission_quantity,return_commission_price_per_instance,\
+return_commission_amount,return_commission_bank_coinvestment,\
+order_posting_number,order_created_date,legal_entity_document_number,\
+legal_entity_document_sale_date\n\
+1,Товар,\"A-1\",1528621656,04610279152162,1,3084.360000,3084.360000,30.840000,0,0.000000,0.000000,0.000000,0148735686-0201-1,2026-7-7,,\n\
+2,\"Товар, второй\",\"A-2\",1528634794,04610279152131,1,3318.440000,3318.440000,33.180000,1,2211.630000,2211.630000,22.120000,73841641-0021-1,2026-07-15,,\n";
+        let bytes = realization_posting_csv_to_xlsx(csv.as_bytes(), "2026-07").unwrap();
+        // Настоящий xlsx — ZIP (урок #29).
+        assert!(bytes.starts_with(b"PK"), "должен быть ZIP");
+        assert!(bytes.len() > 2000);
+    }
+
+    #[test]
+    fn rp_empty_csv_errors() {
+        assert!(realization_posting_csv_to_xlsx(b"", "2026-07").is_err());
     }
 }
