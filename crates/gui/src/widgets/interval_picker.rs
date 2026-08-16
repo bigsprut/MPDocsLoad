@@ -39,12 +39,24 @@ const MONTH_NAMES: [&str; 12] = [
 /// Колбэк выбора интервала: (from, to) строками `"ДД.ММ.ГГГГ"` (формат полей дат).
 type SelectFn = Rc<dyn Fn(&str, &str)>;
 
+/// Хендл виджета: сам виджет + синхронизация с текущим диапазоном дат.
+pub struct IntervalPicker {
+    /// Корневой виджет (для вставки в Popover).
+    pub widget: gtk4::Widget,
+    /// `sync(from, to)` — позиционирует виджет под текущий период: выбирает
+    /// вкладку (месяц/квартал/полугодие/год) и год спиннером. Вызывается
+    /// хостом при открытии popover — иначе виджет показывает вкладку
+    /// прошлого выбора, хотя даты уже сменили вручную (жалоба юзера).
+    /// Нестандартный диапазон → вкладка «Месяц» и год from.
+    pub sync: Rc<dyn Fn(chrono::NaiveDate, chrono::NaiveDate)>,
+}
+
 /// Строит виджет выбора стандартного интервала.
 /// `on_select(from, to)` вызывается со строками `"ДД.ММ.ГГГГ"` при клике на конкретный
-/// интервал (неделя/месяц/квартал/год) в активной вкладке.
+/// интервал (месяц/квартал/полугодие/год) в активной вкладке.
 #[must_use]
-pub fn make_interval_picker<F: Fn(&str, &str) + 'static>(on_select: F) -> gtk4::Widget {
-    let on_select: SelectFn = Rc::new(on_select);
+pub fn make_interval_picker<F: Fn(&str, &str) + 'static>(on_select: F) -> IntervalPicker {
+    let on_select: SelectFn = Rc::new(on_select) as SelectFn;
     let cur_year = chrono::Local::now().date_naive().year();
 
     let root = gtk4::Box::builder()
@@ -92,7 +104,60 @@ pub fn make_interval_picker<F: Fn(&str, &str) + 'static>(on_select: F) -> gtk4::
     root.append(&switcher);
     root.append(&stack);
 
-    root.upcast::<gtk4::Widget>()
+    // Синхронизация с текущим диапазоном: вкладка по классификации периода
+    // + год спиннером (клампится в доступный диапазон ±5 самим SpinButton).
+    let sync = {
+        let stack = stack.clone();
+        let spin = spin.clone();
+        Rc::new(move |from: chrono::NaiveDate, to: chrono::NaiveDate| {
+            let (tab, year) = classify_range(from, to);
+            stack.set_visible_child_name(tab);
+            spin.set_value(f64::from(year));
+        }) as Rc<dyn Fn(chrono::NaiveDate, chrono::NaiveDate)>
+    };
+
+    IntervalPicker {
+        widget: root.upcast::<gtk4::Widget>(),
+        sync,
+    }
+}
+
+/// Классификация диапазона для позиционирования виджета: (имя вкладки стека,
+/// год). Границы включительные; проверки в порядке «крупнее → мельче»
+/// (диапазоны стандартных периодов не пересекаются).
+fn classify_range(from: chrono::NaiveDate, to: chrono::NaiveDate) -> (&'static str, i32) {
+    use chrono::Datelike;
+    if from.year() == to.year() {
+        let y = from.year();
+        let last_of = |m: u32| {
+            chrono::NaiveDate::from_ymd_opt(y, m, 1)
+                .and_then(|d| {
+                    d.checked_add_months(chrono::Months::new(1))
+                        .and_then(|n| n.pred_opt())
+                })
+                .or_else(|| chrono::NaiveDate::from_ymd_opt(y, 12, 31))
+        };
+        if (from.month(), from.day()) == (1, 1) && (to.month(), to.day()) == (12, 31) {
+            return ("year", y);
+        }
+        if (from.month(), from.day()) == (1, 1) && (to.month(), to.day()) == (6, 30)
+            || (from.month(), from.day()) == (7, 1) && (to.month(), to.day()) == (12, 31)
+        {
+            return ("half", y);
+        }
+        if from.day() == 1
+            && matches!(from.month(), 1 | 4 | 7 | 10)
+            && to.month() == from.month() + 2
+            && last_of(to.month()) == Some(to)
+        {
+            return ("quarter", y);
+        }
+        if from.day() == 1 && to.month() == from.month() && last_of(from.month()) == Some(to) {
+            return ("month", y);
+        }
+    }
+    // Нестандартный диапазон — вкладка по умолчанию.
+    ("month", from.year())
 }
 
 // ============ Сетки значений ============
@@ -230,3 +295,34 @@ fn year_range(year: i32) -> (NaiveDate, NaiveDate) {
 // Подавление неиспользуемого импорта glib (нужен для trait-ов виджетов косвенно).
 #[allow(unused_imports)]
 use glib as _glib;
+
+#[cfg(test)]
+mod tests {
+    use super::classify_range;
+    use chrono::NaiveDate;
+
+    fn d(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn classify_standard_periods() {
+        assert_eq!(classify_range(d("2026-01-01"), d("2026-12-31")), ("year", 2026));
+        assert_eq!(classify_range(d("2026-01-01"), d("2026-06-30")), ("half", 2026));
+        assert_eq!(classify_range(d("2026-07-01"), d("2026-12-31")), ("half", 2026));
+        assert_eq!(classify_range(d("2026-04-01"), d("2026-06-30")), ("quarter", 2026));
+        assert_eq!(classify_range(d("2026-02-01"), d("2026-02-28")), ("month", 2026));
+    }
+
+    #[test]
+    fn classify_arbitrary_and_edges() {
+        // Произвольный диапазон — «Месяц» и год начала.
+        assert_eq!(classify_range(d("2025-03-04"), d("2026-03-06")), ("month", 2025));
+        // Месяц, но не с 1-го — не «месяц».
+        assert_eq!(classify_range(d("2026-02-02"), d("2026-02-28")), ("month", 2026));
+        // Високосный февраль — корректный последний день.
+        assert_eq!(classify_range(d("2028-02-01"), d("2028-02-29")), ("month", 2028));
+        // Год, но граница 30.12 — не «год».
+        assert_eq!(classify_range(d("2026-01-01"), d("2026-12-30")), ("month", 2026));
+    }
+}

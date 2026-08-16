@@ -170,23 +170,118 @@ pub(crate) fn make_date_picker(entry: &gtk4::Entry, date_format: &str) -> gtk4::
     // стреляет day_selected, но НЕ должен писать в Entry / закрывать popover —
     // это делает только выбор даты пользователем.
     let suppressing = Rc::new(RefCell::new(false));
+    // Флаг навигации по месяцам/годам: GTK при смене месяца САМ переносит
+    // выделение на тот же номер дня в новом месяце и стреляет day_selected —
+    // это не выбор пользователя (жалоба: «после смены января на февраль 28-е
+    // не выбирается» — клик по уже «выбранному» номеру дня сигнала не даёт).
+    // После навигации сбрасываем выделение на 1-е число показанного месяца,
+    // а «мёртвые» клики (по уже выделенному дню) ловит GestureClick-фоллбэк.
+    let navigating = Rc::new(RefCell::new(false));
+    // Клик уже обработан (day_selected применил дату) — фоллбэку делать нечего.
+    let applied = Rc::new(RefCell::new(false));
 
     // При выборе даты ПОЛЬЗОВАТЕЛЕМ — записываем в Entry и закрываем popover.
     let entry_clone = entry.clone();
     let fmt = date_format.to_string();
     let popover_clone = popover.clone();
     let suppressing_sel = suppressing.clone();
+    let navigating_sel = navigating.clone();
+    let applied_sel = applied.clone();
     calendar.connect_day_selected(move |cal| {
         if *suppressing_sel.borrow() {
             *suppressing_sel.borrow_mut() = false;
+            return;
+        }
+        if *navigating_sel.borrow() {
+            // Перенос выделения при навигации — не выбор (сбросит idle ниже).
             return;
         }
         let selected = cal.date();
         if let Ok(formatted) = selected.format(&fmt) {
             entry_clone.set_text(&formatted);
             popover_clone.popdown();
+            *applied_sel.borrow_mut() = true;
         }
     });
+
+    // Навигация (стрелки месяца/года в шапке календаря): после неё в idle —
+    // сброс выделения на 1-е число показанного месяца (подавленно), иначе
+    // «старый» номер дня в новом месяце не кликается.
+    {
+        let calendar_nav = calendar.clone();
+        let suppressing_nav = suppressing.clone();
+        let navigating_nav = navigating.clone();
+        let on_nav = move || {
+            *navigating_nav.borrow_mut() = true;
+            let cal = calendar_nav.clone();
+            let sup = suppressing_nav.clone();
+            let nav = navigating_nav.clone();
+            glib::source::idle_add_local_once(move || {
+                let d = cal.date();
+                let first = naive_to_calendar_date(d.year(), d.month() as u32, 1);
+                if let Some(first) = first {
+                    *sup.borrow_mut() = true;
+                    cal.select_day(&first);
+                    *sup.borrow_mut() = false;
+                }
+                *nav.borrow_mut() = false;
+            });
+        };
+        calendar.connect_next_month({
+            let f = on_nav.clone();
+            move |_| f()
+        });
+        calendar.connect_prev_month({
+            let f = on_nav.clone();
+            move |_| f()
+        });
+        calendar.connect_next_year({
+            let f = on_nav.clone();
+            move |_| f()
+        });
+        calendar.connect_prev_year({
+            let f = on_nav;
+            move |_| f()
+        });
+    }
+
+    // Фоллбэк для «мёртвых» кликов: клик по УЖЕ выделенному дню не стреляет
+    // day_selected — применяем текущую дату вручную. Пиксельный фильтр:
+    // реагируем только на область дней (ниже шапки с месяцем и строки
+    // названий дней, правее колонки номеров недель).
+    {
+        let entry_fb = entry.clone();
+        let popover_fb = popover.clone();
+        let cal_fb = calendar.clone();
+        let fmt_fb = date_format.to_string();
+        let navigating_fb = navigating.clone();
+        let applied_fb = applied.clone();
+        let click = gtk4::GestureClick::new();
+        click.set_button(gtk4::gdk::BUTTON_PRIMARY);
+        click.connect_pressed({
+            let applied_p = applied.clone();
+            move |_, _, _, _| {
+                *applied_p.borrow_mut() = false;
+            }
+        });
+        click.connect_released(move |_, _n, x, y| {
+            if *applied_fb.borrow() || *navigating_fb.borrow() {
+                *applied_fb.borrow_mut() = false;
+                return;
+            }
+            // Область дней: ниже шапки+строки дней (~56px), правее
+            // номеров недель (~30px).
+            if y < 56.0 || x < 30.0 {
+                return;
+            }
+            let selected = cal_fb.date();
+            if let Ok(formatted) = selected.format(&fmt_fb) {
+                entry_fb.set_text(&formatted);
+                popover_fb.popdown();
+            }
+        });
+        calendar.add_controller(click);
+    }
 
     // При ОТКРЫТИИ popover синхронизируем календарь с ТЕКУЩИМ значением Entry —
     // дату в поле могли сменить извне (виджет интервала / restore) — календарь
@@ -225,9 +320,19 @@ fn parse_date_for_calendar(s: &str) -> Option<glib::DateTime> {
             None
         }
     })?;
+    naive_to_calendar(naive)
+}
+
+/// chrono::NaiveDate → glib::DateTime (полдень UTC — как показывает календарь).
+fn naive_to_calendar(naive: chrono::NaiveDate) -> Option<glib::DateTime> {
     let dt = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
         naive.and_hms_opt(12, 0, 0)?,
         chrono::Utc,
     );
     glib::DateTime::from_iso8601(&dt.format("%+").to_string(), None).ok()
+}
+
+/// (год, месяц, день) → glib::DateTime для календаря.
+fn naive_to_calendar_date(y: i32, m: u32, d: u32) -> Option<glib::DateTime> {
+    naive_to_calendar(chrono::NaiveDate::from_ymd_opt(y, m, d)?)
 }

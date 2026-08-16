@@ -341,7 +341,24 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             update_mode_hint();
             schedule_save();
         });
-        interval_popover.set_child(Some(&picker));
+        interval_popover.set_child(Some(&picker.widget));
+        // При открытии — позиционируем виджет на ТЕКУЩИЙ период полей дат
+        // (вкладка месяц/квартал/полугодие/год + год), а не на прошлый выбор.
+        {
+            let sync = picker.sync.clone();
+            let df = date_from.clone();
+            let dt = date_to.clone();
+            interval_popover.connect_notify_local(Some("visible"), move |popw, _| {
+                if popw.is_visible() {
+                    if let (Some(f), Some(t)) = (
+                        super::parse_date_flex(&df.text()),
+                        super::parse_date_flex(&dt.text()),
+                    ) {
+                        sync(f, t);
+                    }
+                }
+            });
+        }
     }
     interval_btn.set_popover(Some(&interval_popover));
 

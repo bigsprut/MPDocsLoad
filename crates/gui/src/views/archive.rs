@@ -153,7 +153,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
     let interval_btn = gtk4::MenuButton::new();
     interval_btn.set_child(Some(&super::icon_label_child("Интервал", "x-office-calendar-symbolic")));
-    interval_btn.set_tooltip_text(Some("Стандартный интервал: неделя / месяц / квартал / год (заполнит поля ниже)"));
+    interval_btn.set_tooltip_text(Some("Стандартный интервал: месяц / квартал / полугодие / год (заполнит поля ниже)"));
     let interval_popover = gtk4::Popover::new();
     {
         let pop = interval_popover.clone();
@@ -167,7 +167,23 @@ pub fn build(cs: &CommandSender) -> GtkBox {
             // Автоприменение при выборе стандартного интервала.
             send_list_archive(selected_profile(), selected_report());
         });
-        interval_popover.set_child(Some(&picker));
+        interval_popover.set_child(Some(&picker.widget));
+        // При открытии — позиционируем виджет на текущий период полей дат.
+        {
+            let sync = picker.sync.clone();
+            let df = date_from.clone();
+            let dt = date_to.clone();
+            interval_popover.connect_notify_local(Some("visible"), move |popw, _| {
+                if popw.is_visible() {
+                    if let (Some(f), Some(t)) = (
+                        super::parse_date_flex(&df.text()),
+                        super::parse_date_flex(&dt.text()),
+                    ) {
+                        sync(f, t);
+                    }
+                }
+            });
+        }
     }
     interval_btn.set_popover(Some(&interval_popover));
 
