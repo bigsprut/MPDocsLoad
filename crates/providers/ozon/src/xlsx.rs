@@ -22,7 +22,7 @@ pub fn workbook_bytes(type_id: &str, json: &Value) -> CoreResult<Vec<u8>> {
     let mut wb = Workbook::new();
     match type_id {
         "ozon.buyout" => sheet_from_array_report(&mut wb, "Выкупы", json, "products", headers_buyout()),
-        "ozon.analytics_turnover" => sheet_from_array_report(&mut wb, "Оборачиваемость", json, "items", headers_analytics_turnover()),
+        "ozon.analytics_turnover" => sheet_from_array_report(&mut wb, "Оборотная ведомость", json, "items", headers_analytics_turnover()),
         "ozon.analytics_stocks" => sheet_from_array_report(&mut wb, "Остатки", json, "items", headers_analytics_stocks()),
         "ozon.cash_flow" => sheet_from_array_report(&mut wb, "Движение средств", json, "items", headers_cash_flow()),
         "ozon.realization" => sheet_from_array_report(&mut wb, "Реализация", json, "result.rows", headers_realization()),

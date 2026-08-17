@@ -413,10 +413,10 @@ static REPORT_DEFS: &[ReportDef] = &[
     },
     ReportDef {
         type_id: "ozon.analytics_turnover",
-        display_name: "Оборачиваемость товара",
+        display_name: "Оборотная ведомость по товарам",
         category: ReportCategory::Finance,
         period_kind: PeriodKind::None,
-        description: "Оборачиваемость товара (без привязки к периоду — срез).",
+        description: "Оборотная ведомость по товарам (без привязки к периоду — срез).",
         cabinet: Some("FBO → Управление остатками"),
         url: Some("https://seller.ozon.ru/app/fbo-stocks/stocks-management"),
         params: DefParams::None,
