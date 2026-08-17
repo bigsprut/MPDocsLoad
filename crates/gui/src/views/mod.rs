@@ -309,6 +309,15 @@ pub(crate) fn make_date_picker(entry: &gtk4::Entry, date_format: &str) -> gtk4::
     menu_btn
 }
 
+/// Открывает URL в браузере по ассоциации системы (кнопки «Открыть в ЛК»).
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
+    gtk4::gio::AppInfo::launch_default_for_uri(
+        url,
+        None::<&gtk4::gio::AppLaunchContext>,
+    )
+        .map_err(|e| e.to_string())
+}
+
 /// Парсит текст из Entry в glib::DateTime для предустановки календаря.
 /// Поддерживает ДД.ММ.ГГГГ, YYYY-MM-DD (совместимость) и YYYY-MM.
 fn parse_date_for_calendar(s: &str) -> Option<glib::DateTime> {

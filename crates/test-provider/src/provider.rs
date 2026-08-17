@@ -193,6 +193,7 @@ impl TestProvider {
                 description: Some(format!("Тестовый отчёт «{}» (mock).", r.display_name)),
                 max_range_days: None,
                 cabinet_path: None,
+            cabinet_url: None,
             })
             .collect();
         let capabilities = Capabilities {

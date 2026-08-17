@@ -43,6 +43,9 @@ thread_local! {
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     static W_RESULT_BOX: Rc<RefCell<Option<GtkBox>>> = Rc::new(RefCell::new(None));
     static W_MODE_HINT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
+    /// URL раздела ЛК текущего отчёта + кнопка «Открыть в ЛК» (у инфо-панели).
+    static W_LK_BTN: Rc<RefCell<Option<gtk4::Button>>> = Rc::new(RefCell::new(None));
+    static LK_URL: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
     static W_LIST_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_PERIOD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
     static W_DOWNLOAD_BTN: Rc<RefCell<Option<Button>>> = Rc::new(RefCell::new(None));
@@ -303,9 +306,27 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .label("")
         .css_classes(["dim-label"])
         .halign(gtk4::Align::Start)
+        .hexpand(true)
         .wrap(true)
         .build();
-    root.append(&mode_hint);
+    // Кнопка «Открыть в ЛК» — рядом с инфо-панелью, видна когда у текущего
+    // отчёта известен URL раздела кабинета (обновляется в update_mode_hint).
+    let lk_btn = super::icon_button("Открыть в ЛК", "insert-link-symbolic");
+    lk_btn.set_tooltip_text(Some("Открыть раздел этого отчёта в личном кабинете"));
+    lk_btn.set_visible(false);
+    lk_btn.set_valign(gtk4::Align::Center);
+    lk_btn.connect_clicked(|_| {
+        let url = LK_URL.with(|u| u.borrow().clone());
+        if !url.is_empty() {
+            if let Err(e) = super::open_url(&url) {
+                eprintln!("open_url: {e}");
+            }
+        }
+    });
+    let info_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    info_row.append(&mode_hint);
+    info_row.append(&lk_btn);
+    root.append(&info_row);
 
     // --- Строка 2: период (диапазон + интервал) ---
     // Фильтры разложены на ДВЕ строки: одна длинная задавала минимальную
@@ -456,6 +477,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_RESULT.with(|w| *w.borrow_mut() = Some(result_label.clone()));
     W_RESULT_BOX.with(|w| *w.borrow_mut() = Some(result_box.clone()));
     W_MODE_HINT.with(|w| *w.borrow_mut() = Some(mode_hint.clone()));
+    W_LK_BTN.with(|w| *w.borrow_mut() = Some(lk_btn.clone()));
     W_LIST_BTN.with(|w| *w.borrow_mut() = Some(list_btn.clone()));
     W_PERIOD_BTN.with(|w| *w.borrow_mut() = Some(period_btn.clone()));
     W_DOWNLOAD_BTN.with(|w| *w.borrow_mut() = Some(download_btn.clone()));
@@ -849,6 +871,18 @@ fn update_mode_hint() {
     let (is_browsable, name) = info
         .as_ref()
         .map_or((false, String::new()), |r| (r.is_browsable, r.display_name.clone()));
+    // URL раздела ЛК текущего отчёта → кнопка «Открыть в ЛК».
+    LK_URL.with(|u| {
+        *u.borrow_mut() = info
+            .as_ref()
+            .and_then(|r| r.cabinet_url.clone())
+            .unwrap_or_default();
+    });
+    W_LK_BTN.with(|w| {
+        if let Some(b) = w.borrow().as_ref() {
+            b.set_visible(info.as_ref().and_then(|r| r.cabinet_url.as_deref()).is_some());
+        }
+    });
 
     W_MODE_HINT.with(|w| {
         if let Some(l) = w.borrow().as_ref() {

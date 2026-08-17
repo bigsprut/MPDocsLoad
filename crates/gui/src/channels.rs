@@ -406,6 +406,8 @@ pub struct ReportInfo {
     pub max_range_days: Option<u32>,
     /// Где отчёт находится в ЛК маркетплейса (для списка «Отчёты» и инфо-панели).
     pub cabinet_path: Option<String>,
+    /// Прямая ссылка на раздел ЛК (кнопка «Открыть в ЛК» в GUI).
+    pub cabinet_url: Option<String>,
 }
 
 /// Пара type_id → человекочитаемое имя для combo «Отчёт» в Архиве.

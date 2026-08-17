@@ -190,6 +190,7 @@ fn desc_period(
         period_kind,
         description: Some(description.into()),
         cabinet_path: None,
+            cabinet_url: None,
         max_range_days: None,
     }
 }
@@ -212,6 +213,7 @@ fn desc_browsable(
         period_kind,
         description: Some(description.into()),
         cabinet_path: None,
+            cabinet_url: None,
         max_range_days: None,
     }
 }

@@ -73,6 +73,11 @@ pub struct ReportDescriptor {
     /// (документация не указывает) — НЕ выдумывать.
     #[serde(default)]
     pub cabinet_path: Option<String>,
+    /// Прямая ссылка на раздел ЛК в браузере (кнопка «Открыть в ЛК»).
+    /// Источник — таблица пользователя, сверенная по живому кабинету
+    /// (2026-08-18). None — ссылка не задана (кнопка не показывается).
+    #[serde(default)]
+    pub cabinet_url: Option<String>,
 }
 
 /// Какой период принимает отчёт по API (для UI и логики «Скачать по периоду»).
@@ -110,6 +115,13 @@ impl ReportDescriptor {
     #[must_use]
     pub fn with_cabinet_path(mut self, path: &str) -> Self {
         self.cabinet_path = Some(path.to_string());
+        self
+    }
+
+    /// Устанавливает прямую ссылку на раздел ЛК (кнопка «Открыть в ЛК»).
+    #[must_use]
+    pub fn with_cabinet_url(mut self, url: &str) -> Self {
+        self.cabinet_url = Some(url.to_string());
         self
     }
 }

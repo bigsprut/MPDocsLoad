@@ -163,19 +163,43 @@ pub fn on_reports_loaded(res: &Result<Vec<ReportInfo>, String>) {
             for r in reports {
                 // Показываем только человекочитаемое имя; технический type_id —
                 // в tooltip для справки (не в основном тексте).
-                let row = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+                // Слева — имя + dim-строка «ЛК: …», справа — кнопка-ссылка
+                // «Открыть в ЛК» (если для отчёта известен URL раздела).
+                let text_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
                 let label = Label::builder()
                     .label(&r.display_name)
                     .halign(gtk4::Align::Start)
                     .build();
-                row.append(&label);
+                text_box.append(&label);
                 if let Some(cab) = &r.cabinet_path {
                     let cab_label = Label::builder()
                         .label(format!("ЛК: {cab}"))
                         .halign(gtk4::Align::Start)
                         .css_classes(["dim-label"])
                         .build();
-                    row.append(&cab_label);
+                    text_box.append(&cab_label);
+                }
+                let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+                let spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+                spacer.set_hexpand(true);
+                row.append(&text_box);
+                row.append(&spacer);
+                if let Some(url) = r.cabinet_url.clone() {
+                    let lk_btn = super::icon_only_button(
+                        "insert-link-symbolic",
+                        "Открыть раздел в личном кабинете",
+                    );
+                    lk_btn.set_tooltip_text(Some("Открыть раздел в личном кабинете"));
+                    lk_btn.set_valign(gtk4::Align::Center);
+                    {
+                        let url = url.clone();
+                        lk_btn.connect_clicked(move |_| {
+                            if let Err(e) = super::open_url(&url) {
+                                eprintln!("open_url: {e}");
+                            }
+                        });
+                    }
+                    row.append(&lk_btn);
                 }
                 let mode = if r.is_browsable {
                     "список документов"
