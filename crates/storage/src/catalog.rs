@@ -235,8 +235,14 @@ impl Catalog {
     /// Открывает (или создаёт) каталог по пути.
     pub fn open(path: &Path) -> CoreResult<Self> {
         let conn = Connection::open(path).map_err(map_sqlite_err)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .map_err(map_sqlite_err)?;
+        // busy_timeout ДО journal_mode: смена режима требует краткого
+        // эксклюзивного лока, и при параллельном открытии каталога вторым
+        // процессом (GUI + задача планировщика, параллельные e2e) без
+        // ожидания сразу прилетает «database is locked».
+        conn.execute_batch(
+            "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;",
+        )
+        .map_err(map_sqlite_err)?;
         let cat = Self {
             conn: Arc::new(Mutex::new(conn)),
         };
