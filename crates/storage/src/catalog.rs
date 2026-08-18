@@ -157,6 +157,11 @@ pub struct ArchiveEntry {
     /// Заполняется app-слоем (storage не имеет доступа к реестру провайдеров);
     /// из БД приходит None. View показывает его, с fallback на `report_type`.
     pub report_display_name: Option<String>,
+    /// Прямая ссылка на раздел ЛК этого отчёта (ReportDescriptor.cabinet_url).
+    /// Заполняется app-слоем, из БД — None. Есть только у Ozon-отчётов
+    /// (у WB — cabinet_path без ссылок); кнопка «Открыть в ЛК» в Архиве.
+    #[serde(default)]
+    pub cabinet_url: Option<String>,
     /// Период отчёта (параметр запроса: YYYY-MM/YYYY-MM-DD) — для Ozon.
     /// Для WB-документов NULL (нет периода запроса); вместо него смотрим `document_date`.
     pub period: Option<String>,
@@ -574,8 +579,9 @@ impl Catalog {
                     provider_id: row.get(3)?,
                     report_type: row.get(4)?,
                     // Storage не имеет доступа к реестру провайдеров — app-слой
-                    // заполнит человекочитаемое имя после выборки.
+                    // заполнит человекочитаемое имя и ссылку ЛК после выборки.
                     report_display_name: None,
+                    cabinet_url: None,
                     // Колонка отображения: период запроса (Ozon) ИЛИ дата документа (WB).
                     period: period.or(document_date.clone()),
                     file_path: row.get(6)?,

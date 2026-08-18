@@ -460,11 +460,14 @@ pub(crate) async fn run_command_loop(
                 })();
                 match outcome {
                     Some(mut entries) => {
-                        // Обогащаем человекочитаемыми именами отчётов (storage не
-                        // имеет доступа к реестру провайдеров — делаем здесь).
+                        // Обогащаем человекочитаемыми именами отчётов и ссылками
+                        // ЛК (storage не имеет доступа к реестру провайдеров —
+                        // делаем здесь).
                         let dm = report_display_name_map(&domain);
+                        let um = cabinet_url_map(&domain);
                         for e in &mut entries {
                             e.report_display_name = dm.get(&e.report_type).cloned();
+                            e.cabinet_url = um.get(&e.report_type).cloned();
                         }
                         fwd.forward(UiEvent::ArchiveListed(Ok(entries)));
                     }
@@ -1401,6 +1404,21 @@ fn report_display_name_map(
     for p in domain.registry.list() {
         for r in &p.capabilities().reports {
             map.insert(r.type_id.clone(), r.display_name.clone());
+        }
+    }
+    map
+}
+
+/// Карта type_id → ссылка на раздел ЛК (кнопка «Открыть в ЛК» в Архиве).
+/// Есть только у Ozon-отчётов — у WB ссылок нет (только cabinet_path),
+/// поэтому WB-строки архива кнопку не получают.
+fn cabinet_url_map(domain: &Domain) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for p in domain.registry.list() {
+        for r in &p.capabilities().reports {
+            if let Some(u) = &r.cabinet_url {
+                map.insert(r.type_id.clone(), u.clone());
+            }
         }
     }
     map

@@ -109,6 +109,7 @@ mod tests {
             provider_id: "ozon".into(),
             report_type: report.into(),
             report_display_name: Some("Отчёт по реализации".into()),
+            cabinet_url: None,
             period: Some("2026-07".into()),
             file_path: "D:/документы; файлы/x.csv".into(),
             file_size: size,

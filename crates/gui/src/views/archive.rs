@@ -646,6 +646,20 @@ fn render_archive(entries: &[ArchiveEntry]) {
             }
             actions_box.append(&copy_btn);
 
+            // 🔗 Открыть раздел отчёта в ЛК — только если у отчёта есть ссылка
+            // (все 21 Ozon; у WB ссылок нет — кнопка не показывается).
+            if let Some(url) = e.cabinet_url.clone() {
+                let lk_btn = super::icon_only_button("insert-link-symbolic", "Открыть в ЛК");
+                lk_btn.set_tooltip_text(Some("Открыть раздел этого отчёта в личном кабинете"));
+                lk_btn.connect_clicked(move |_| {
+                    if let Err(err) = super::open_url(&url) {
+                        eprintln!("open_url: {err}");
+                        super::show_url_error(&url, &err);
+                    }
+                });
+                actions_box.append(&lk_btn);
+            }
+
             // 🗑 Удалить запись и файл (деструктивно, с подтверждением).
             let del_btn = super::icon_only_button("user-trash-symbolic", "Удалить запись и файл");
             del_btn.add_css_class("destructive-action");
