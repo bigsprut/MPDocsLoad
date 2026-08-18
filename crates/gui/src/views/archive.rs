@@ -37,7 +37,12 @@ thread_local! {
     /// Поля произвольного интервала дат (source of truth для DATE_RANGE).
     static W_DATE_FROM: Rc<RefCell<Option<gtk4::Entry>>> = Rc::new(RefCell::new(None));
     static W_DATE_TO: Rc<RefCell<Option<gtk4::Entry>>> = Rc::new(RefCell::new(None));
-    static W_LIST: Rc<RefCell<Option<gtk4::Grid>>> = Rc::new(RefCell::new(None));
+    static W_LIST: Rc<RefCell<Option<gtk4::ColumnView>>> = Rc::new(RefCell::new(None));
+    /// Модель строк таблицы архива (ListStore из BoxedAnyObject(ArchiveEntry)).
+    /// Живёт постоянно: обновление списка = refill модели, а не пересборка
+    /// виджета — ширины колонок, выставленные перетаскиванием, переживают
+    /// обновление данных.
+    static W_STORE: Rc<RefCell<Option<gtk4::gio::ListStore>>> = Rc::new(RefCell::new(None));
     static W_RESULT: Rc<RefCell<Option<Label>>> = Rc::new(RefCell::new(None));
     /// Скролл таблицы: для сохранения позиции прокрутки при удалении записи
     /// (список перерисовывается — без восстановления прокрутка уходит в начало).
@@ -221,14 +226,20 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         .build();
     root.append(&result_label);
 
-    // --- Таблица архивных записей: GtkGrid (заголовок + все строки в ОДНОЙ
-    // сетке) — колонки физически общие: заголовок всегда над своей колонкой,
-    // линии-разделители стоят ровно. ---
-    let grid = gtk4::Grid::new();
-    grid.set_column_spacing(12);
+    // --- Таблица архивных записей: GtkColumnView. Границы колонок тянутся
+    // мышью (set_resizable), заголовки встроены и всегда над своими колонками;
+    // при расширении колонки обрезанный текст показывается целиком (у ячеек
+    // нет капа ширины — natural size по содержимому). Виджет и модель живут
+    // постоянно, обновление данных = refill модели. ---
+    let store = gtk4::gio::ListStore::new::<glib::BoxedAnyObject>();
+    let view = make_archive_table(store.clone());
+    view.set_margin_start(8);
+    view.set_margin_end(8);
+    view.set_margin_top(4);
+    view.set_margin_bottom(4);
 
     let scroll = ScrolledWindow::new();
-    scroll.set_child(Some(&grid));
+    scroll.set_child(Some(&view));
     scroll.set_policy(PolicyType::Automatic, PolicyType::Automatic);
     scroll.set_vexpand(true);
     root.append(&scroll);
@@ -240,7 +251,8 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     W_REPORT_COMBO.with(|w| *w.borrow_mut() = Some(report_combo.clone()));
     W_DATE_FROM.with(|w| *w.borrow_mut() = Some(date_from.clone()));
     W_DATE_TO.with(|w| *w.borrow_mut() = Some(date_to.clone()));
-    W_LIST.with(|w| *w.borrow_mut() = Some(grid));
+    W_STORE.with(|w| *w.borrow_mut() = Some(store));
+    W_LIST.with(|w| *w.borrow_mut() = Some(view));
     W_RESULT.with(|w| *w.borrow_mut() = Some(result_label));
 
     // Правка полей дат (вручную или календарём) → пересобираем DATE_RANGE.
@@ -393,17 +405,14 @@ pub fn on_archive_state_loaded(state: Option<&ArchiveState>) {
     RESTORING.with(|r| *r.borrow_mut() = false);
 }
 
-/// Рендерит таблицу Архива: заголовок и все строки — в ОДНОМ GtkGrid.
-/// Колонки сетки физически общие на все строки: заголовок всегда стоит ровно
-/// над своей колонкой, вертикальные линии-разделители — строго по границам
-/// колонок (прежде строки были независимыми HBox — заголовки «уезжали»).
-/// Раскладка: чётные колонки — данные (7 шт), нечётные — вертикальные линии;
-/// строка 0 — заголовок, далее данные, между ними горизонтальные линии.
+/// Заполняет таблицу Архива данными. Виджет/колонки/модель живут постоянно —
+/// ширины колонок, выставленные перетаскиванием границ, переживают обновление
+/// списка; при удалении записи сохраняем и возвращаем позицию прокрутки.
 fn render_archive(entries: &[ArchiveEntry]) {
     // Памятка текущего списка — для кнопки «Экспорт».
     ENTRIES.with(|e| *e.borrow_mut() = entries.to_vec());
     // Прокрутка: при удалении записи (флаг) сохраняем позицию и возвращаем
-    // после перерисовки — иначе список прыгает в начало и место удаления
+    // после обновления — иначе список прыгает в начало и место удаления
     // приходится искать заново.
     let saved_scroll = if PRESERVE_SCROLL.with(|p| p.replace(false)) {
         W_SCROLL.with(|w| {
@@ -415,286 +424,266 @@ fn render_archive(entries: &[ArchiveEntry]) {
     } else {
         None
     };
-    W_LIST.with(|gw| {
-        // Колонки данных (чётные): Профиль, Отчёт, Период, Формат, Размер,
-        // Скачан, Действия; между ними (нечётные) — вертикальные линии.
-        const CELLS: [i32; 7] = [0, 2, 4, 6, 8, 10, 12];
-        const SPAN: i32 = 13;
-
-        // Прикрепить ячейку в строку row (с внутренними отступами строки).
-        fn put(grid: &gtk4::Grid, w: &impl IsA<gtk4::Widget>, col: i32, row: i32) {
-            w.set_margin_top(3);
-            w.set_margin_bottom(3);
-            grid.attach(w, col, row, 1, 1);
-        }
-        // Вертикальная линия между колонками (вся высота строки).
-        fn vline(grid: &gtk4::Grid, col: i32, row: i32) {
-            let sep = vsep();
-            grid.attach(&sep, col, row, 1, 1);
-        }
-        // Горизонтальная линия на всю ширину таблицы.
-        fn hline(grid: &gtk4::Grid, row: i32) {
-            let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
-            grid.attach(&sep, 0, row, SPAN, 1);
-        }
-
-        let Some(grid) = gw.borrow().clone() else {
-            return;
-        };
-        grid.set_margin_start(8);
-        grid.set_margin_end(8);
-        grid.set_margin_top(4);
-        grid.set_margin_bottom(4);
-        // Очищаем старое содержимое.
-        while let Some(child) = grid.first_child() {
-            grid.remove(&child);
-        }
-
-        if entries.is_empty() {
-            grid.attach(
-                &Label::new(Some("Ничего не найдено по заданным фильтрам.")),
-                0,
-                0,
-                1,
-                1,
-            );
-            return;
-        }
-
-        // --- Строка 0: заголовок (жирный; ширина ячеек та же, что у данных). ---
-        let head = |text: &str, w: i32, expand: bool| {
-            Label::builder()
-                .label(format!("<b>{text}</b>"))
-                .use_markup(true)
-                .width_chars(w)
-                .max_width_chars(w)
-                .xalign(0.0)
-                .hexpand(expand)
-                .build()
-        };
-        // Все заголовки — от левого края своей колонки (одинаковое
-        // выравнивание); «Формат» выравнивается по иконке в данных.
-        put(&grid, &head("Профиль", 16, false), CELLS[0], 0);
-        vline(&grid, CELLS[0] + 1, 0);
-        // «Отчёт» — эластичная колонка (hexpand и в заголовке, и в данных):
-        // лишняя ширина окна уходит в неё, остальные колонки стоят на месте.
-        put(&grid, &head("Отчёт", 22, true), CELLS[1], 0);
-        vline(&grid, CELLS[1] + 1, 0);
-        put(&grid, &head("Период", 10, false), CELLS[2], 0);
-        vline(&grid, CELLS[2] + 1, 0);
-        put(&grid, &head("Формат", 8, false), CELLS[3], 0);
-        vline(&grid, CELLS[3] + 1, 0);
-        put(&grid, &head("Размер", 10, false), CELLS[4], 0);
-        vline(&grid, CELLS[4] + 1, 0);
-        put(&grid, &head("Скачан", 16, false), CELLS[5], 0);
-        vline(&grid, CELLS[5] + 1, 0);
-        put(&grid, &head("Действия", 0, false), CELLS[6], 0);
-        hline(&grid, 1);
-
-        let mut row = 2i32;
+    let view = W_LIST.with(|w| w.borrow().clone());
+    let store = W_STORE.with(|w| w.borrow().clone());
+    let scroll = W_SCROLL.with(|w| w.borrow().clone());
+    let (Some(view), Some(store), Some(scroll)) = (view, store, scroll) else {
+        return;
+    };
+    store.remove_all();
+    if entries.is_empty() {
+        scroll.set_child(Some(&Label::new(Some(
+            "Ничего не найдено по заданным фильтрам.",
+        ))));
+    } else {
+        scroll.set_child(Some(&view));
         for e in entries {
-            // Профиль — имя (фиксированная ширина, длинные — с обрезкой).
-            put(
-                &grid,
-                &Label::builder()
-                    .label(&e.profile_name)
-                    .width_chars(16)
-                    .max_width_chars(16)
-                    .xalign(0.0)
-                    .ellipsize(gtk4::pango::EllipsizeMode::End)
-                    .build(),
-                CELLS[0],
-                row,
-            );
-            vline(&grid, CELLS[0] + 1, row);
-
-            // Человекочитаемое имя отчёта (с fallback на type_id); tooltip —
-            // технический type_id для точной идентификации.
-            let report_label = e
-                .report_display_name
-                .clone()
-                .unwrap_or_else(|| e.report_type.clone());
-            put(
-                &grid,
-                &Label::builder()
-                    .label(&report_label)
-                    .tooltip_text(&e.report_type)
-                    .width_chars(22)
-                    .max_width_chars(22)
-                    .xalign(0.0)
-                    .hexpand(true)
-                    .ellipsize(gtk4::pango::EllipsizeMode::End)
-                    .build(),
-                CELLS[1],
-                row,
-            );
-            vline(&grid, CELLS[1] + 1, row);
-
-            let period_str = e
-                .period
-                .as_deref()
-                .map_or_else(|| "—".to_string(), super::disp_date);
-            put(
-                &grid,
-                &Label::builder()
-                    .label(&period_str)
-                    .width_chars(10)
-                    .max_width_chars(10)
-                    .xalign(0.0)
-                    .build(),
-                CELLS[2],
-                row,
-            );
-            vline(&grid, CELLS[2] + 1, row);
-
-            // Формат: иконка типа файла (PNG из gresource) + короткий текст.
-            let fmt_box = GtkBox::new(Orientation::Horizontal, 6);
-            fmt_box.append(
-                &Image::builder()
-                    .resource(ext_icon_resource(&e.file_format))
-                    .pixel_size(20)
-                    .build(),
-            );
-            fmt_box.append(
-                &Label::builder()
-                    .label(super::ext_label(&e.file_format))
-                    .width_chars(8)
-                    .max_width_chars(8)
-                    .xalign(0.0)
-                    .build(),
-            );
-            put(&grid, &fmt_box, CELLS[3], row);
-            vline(&grid, CELLS[3] + 1, row);
-
-            let size_str = human_size(u64::try_from(e.file_size).unwrap_or(0));
-            put(
-                &grid,
-                &Label::builder()
-                    .label(&size_str)
-                    .width_chars(10)
-                    .max_width_chars(10)
-                    .xalign(0.0)
-                    .build(),
-                CELLS[4],
-                row,
-            );
-            vline(&grid, CELLS[4] + 1, row);
-
-            let dt_str = e
-                .downloaded_at
-                .with_timezone(&chrono::Local)
-                .format("%d.%m.%Y %H:%M")
-                .to_string();
-            put(
-                &grid,
-                &Label::builder()
-                    .label(&dt_str)
-                    .width_chars(16)
-                    .max_width_chars(16)
-                    .xalign(0.0)
-                    .build(),
-                CELLS[5],
-                row,
-            );
-            vline(&grid, CELLS[5] + 1, row);
-
-            // Действия: 📂 открыть, 📁 папка, 📋 путь, 🗑 удалить — компактной
-            // группой (ширина колонки — по кнопкам).
-            let actions_box = GtkBox::new(Orientation::Horizontal, 2);
-            actions_box.set_halign(gtk4::Align::Start);
-            let file_path = e.file_path.clone();
-
-            let open_btn = super::icon_only_button("document-open-symbolic", "Открыть файл");
-            open_btn.set_tooltip_text(Some("Открыть файл"));
-            {
-                let path = file_path.clone();
-                open_btn.connect_clicked(move |_| {
-                    if let Err(err) = crate::views::open_file(&path) {
-                        notify(&format!("Не удалось открыть: {err}"));
-                    }
-                });
-            }
-            actions_box.append(&open_btn);
-
-            let folder_btn = super::icon_only_button("folder-symbolic", "Открыть папку с файлом");
-            folder_btn.set_tooltip_text(Some("Открыть папку с файлом"));
-            {
-                let path = file_path.clone();
-                folder_btn.connect_clicked(move |_| {
-                    // Берём родительский каталог пути.
-                    let folder = std::path::Path::new(&path)
-                        .parent()
-                        .map_or_else(|| path.clone(), |p| p.to_string_lossy().to_string());
-                    if let Err(err) = crate::views::open_folder(&folder) {
-                        notify(&format!("Не удалось открыть папку: {err}"));
-                    }
-                });
-            }
-            actions_box.append(&folder_btn);
-
-            let copy_btn = super::icon_only_button("edit-copy-symbolic", "Копировать путь в буфер обмена");
-            copy_btn.set_tooltip_text(Some("Копировать путь в буфер обмена"));
-            {
-                let path = file_path.clone();
-                copy_btn.connect_clicked(move |_| {
-                    let display = gtk4::gdk::Display::default();
-                    if let Some(d) = display {
-                        d.clipboard().set_text(&path);
-                        notify("Путь скопирован в буфер обмена.");
-                    }
-                });
-            }
-            actions_box.append(&copy_btn);
-
-            // 🔗 Открыть раздел отчёта в ЛК — только если у отчёта есть ссылка
-            // (все 21 Ozon; у WB ссылок нет — кнопка не показывается).
-            if let Some(url) = e.cabinet_url.clone() {
-                let lk_btn = super::icon_only_button("insert-link-symbolic", "Открыть в ЛК");
-                lk_btn.set_tooltip_text(Some("Открыть раздел этого отчёта в личном кабинете"));
-                lk_btn.connect_clicked(move |_| {
-                    if let Err(err) = super::open_url(&url) {
-                        eprintln!("open_url: {err}");
-                        super::show_url_error(&url, &err);
-                    }
-                });
-                actions_box.append(&lk_btn);
-            }
-
-            // 🗑 Удалить запись и файл (деструктивно, с подтверждением).
-            let del_btn = super::icon_only_button("user-trash-symbolic", "Удалить запись и файл");
-            del_btn.add_css_class("destructive-action");
-            {
-                let id = e.id;
-                let path = file_path.clone();
-                let file_name = std::path::Path::new(&path)
-                    .file_name()
-                    .map_or_else(|| path.clone(), |s| s.to_string_lossy().to_string());
-                del_btn.connect_clicked(move |_| {
-                    show_delete_confirm(id, &file_name, &path);
-                });
-            }
-            actions_box.append(&del_btn);
-
-            put(&grid, &actions_box, CELLS[6], row);
-
-            row += 1;
-            if row < 2 + entries.len() as i32 {
-                hline(&grid, row);
-                row += 1;
-            }
+            store.append(&glib::BoxedAnyObject::new(e.clone()));
         }
+    }
+    // Возврат прокрутки после обновления (после пересчёта раскладки — в idle;
+    // set_value сам клампится в допустимый диапазон).
+    if let Some(v) = saved_scroll {
+        let adj = scroll.vadjustment();
+        glib::source::idle_add_local_once(move || {
+            adj.set_value(v);
+        });
+    }
+}
 
-        // Возврат прокрутки после перерисовки (после пересчёта раскладки —
-        // в idle; set_value сам клампится в допустимый диапазон).
-        if let Some(v) = saved_scroll {
-            let adj = W_SCROLL.with(|w| w.borrow().as_ref().map(gtk4::ScrolledWindow::vadjustment));
-            if let Some(adj) = adj {
-                glib::source::idle_add_local_once(move || {
-                    adj.set_value(v);
-                });
-            }
+// ===== Таблица архива: GtkColumnView с перетаскиваемыми границами колонок =====
+
+/// Извлекает ArchiveEntry из элемента модели.
+fn entry_of(item: &glib::Object) -> ArchiveEntry {
+    item.clone()
+        .downcast::<glib::BoxedAnyObject>()
+        .expect("элемент модели архива")
+        .borrow::<ArchiveEntry>()
+        .clone()
+}
+
+/// Текстовая колонка. Ячейка — Label с обрезкой («…») и ПОЛНЫМ текстом в
+/// подсказке; капа ширины у ячейки нет — при расширении колонки текст
+/// показывается целиком, начальная ширина задаётся fixed_width.
+fn text_column(
+    title: &str,
+    width: Option<i32>,
+    expand: bool,
+    cell: impl Fn(&ArchiveEntry) -> (String, Option<String>) + 'static,
+) -> gtk4::ColumnViewColumn {
+    let factory = gtk4::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let label = Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .margin_top(4)
+            .margin_bottom(4)
+            .build();
+        item.set_child(Some(&label));
+    });
+    factory.connect_bind(move |_, item| {
+        let e = entry_of(&item.item().expect("item модели"));
+        let (text, tooltip) = cell(&e);
+        let label = item
+            .child()
+            .and_downcast::<Label>()
+            .expect("Label колонки архива");
+        label.set_label(&text);
+        match tooltip {
+            Some(t) => label.set_tooltip_text(Some(&t)),
+            None => label.set_tooltip_text(None),
         }
     });
+    let col = gtk4::ColumnViewColumn::new(Some(title), Some(factory));
+    col.set_resizable(true);
+    if let Some(w) = width {
+        col.set_fixed_width(w);
+    }
+    col.set_expand(expand);
+    col
+}
+
+/// Колонка «Формат»: иконка типа файла (PNG из gresource) + короткий текст.
+fn format_column() -> gtk4::ColumnViewColumn {
+    let factory = gtk4::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let b = GtkBox::new(Orientation::Horizontal, 6);
+        b.set_margin_top(4);
+        b.set_margin_bottom(4);
+        b.append(&Image::new());
+        b.append(&Label::builder().xalign(0.0).build());
+        item.set_child(Some(&b));
+    });
+    factory.connect_bind(|_, item| {
+        let e = entry_of(&item.item().expect("item модели"));
+        let b = item
+            .child()
+            .and_downcast::<GtkBox>()
+            .expect("Box колонки формата");
+        let img = b
+            .first_child()
+            .and_downcast::<Image>()
+            .expect("иконка формата");
+        let lbl = img
+            .next_sibling()
+            .and_downcast::<Label>()
+            .expect("подпись формата");
+        img.set_resource(Some(ext_icon_resource(&e.file_format)));
+        lbl.set_label(&super::ext_label(&e.file_format));
+    });
+    let col = gtk4::ColumnViewColumn::new(Some("Формат"), Some(factory));
+    col.set_resizable(true);
+    col.set_fixed_width(120);
+    col
+}
+
+/// Колонка «Действия»: 📂 открыть, 📁 папка, 📋 путь, 🔗 в ЛК, 🗑 удалить.
+/// Кнопки пересобираются при каждой привязке записи (list items пере-
+/// используются при прокрутке).
+fn actions_column() -> gtk4::ColumnViewColumn {
+    let factory = gtk4::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let b = GtkBox::new(Orientation::Horizontal, 2);
+        b.set_halign(gtk4::Align::Start);
+        b.set_margin_top(4);
+        b.set_margin_bottom(4);
+        item.set_child(Some(&b));
+    });
+    factory.connect_bind(|_, item| {
+        let e = entry_of(&item.item().expect("item модели"));
+        let b = item
+            .child()
+            .and_downcast::<GtkBox>()
+            .expect("Box действий архива");
+        while let Some(child) = b.first_child() {
+            b.remove(&child);
+        }
+        build_action_buttons(&b, &e);
+    });
+    let col = gtk4::ColumnViewColumn::new(Some("Действия"), Some(factory));
+    col.set_fixed_width(220);
+    col
+}
+
+/// Кнопки действий строки архива (колонка «Действия»).
+fn build_action_buttons(b: &gtk4::Box, e: &ArchiveEntry) {
+    let file_path = e.file_path.clone();
+
+    let open_btn = super::icon_only_button("document-open-symbolic", "Открыть файл");
+    open_btn.set_tooltip_text(Some("Открыть файл"));
+    {
+        let path = file_path.clone();
+        open_btn.connect_clicked(move |_| {
+            if let Err(err) = crate::views::open_file(&path) {
+                notify(&format!("Не удалось открыть: {err}"));
+            }
+        });
+    }
+    b.append(&open_btn);
+
+    let folder_btn = super::icon_only_button("folder-symbolic", "Открыть папку с файлом");
+    folder_btn.set_tooltip_text(Some("Открыть папку с файлом"));
+    {
+        let path = file_path.clone();
+        folder_btn.connect_clicked(move |_| {
+            let folder = std::path::Path::new(&path)
+                .parent()
+                .map_or_else(|| path.clone(), |p| p.to_string_lossy().to_string());
+            if let Err(err) = crate::views::open_folder(&folder) {
+                notify(&format!("Не удалось открыть папку: {err}"));
+            }
+        });
+    }
+    b.append(&folder_btn);
+
+    let copy_btn = super::icon_only_button("edit-copy-symbolic", "Копировать путь в буфер обмена");
+    copy_btn.set_tooltip_text(Some("Копировать путь в буфер обмена"));
+    {
+        let path = file_path.clone();
+        copy_btn.connect_clicked(move |_| {
+            let display = gtk4::gdk::Display::default();
+            if let Some(d) = display {
+                d.clipboard().set_text(&path);
+                notify("Путь скопирован в буфер обмена.");
+            }
+        });
+    }
+    b.append(&copy_btn);
+
+    // 🔗 Открыть раздел отчёта в ЛК — только если у отчёта есть ссылка
+    // (все 21 Ozon; у WB ссылок нет — кнопка не показывается).
+    if let Some(url) = e.cabinet_url.clone() {
+        let lk_btn = super::icon_only_button("insert-link-symbolic", "Открыть в ЛК");
+        lk_btn.set_tooltip_text(Some("Открыть раздел этого отчёта в личном кабинете"));
+        lk_btn.connect_clicked(move |_| {
+            if let Err(err) = super::open_url(&url) {
+                eprintln!("open_url: {err}");
+                super::show_url_error(&url, &err);
+            }
+        });
+        b.append(&lk_btn);
+    }
+
+    // 🗑 Удалить запись и файл (деструктивно, с подтверждением).
+    let del_btn = super::icon_only_button("user-trash-symbolic", "Удалить запись и файл");
+    del_btn.add_css_class("destructive-action");
+    {
+        let id = e.id;
+        let path = file_path.clone();
+        let file_name = std::path::Path::new(&path)
+            .file_name()
+            .map_or_else(|| path.clone(), |s| s.to_string_lossy().to_string());
+        del_btn.connect_clicked(move |_| {
+            show_delete_confirm(id, &file_name, &path);
+        });
+    }
+    b.append(&del_btn);
+}
+
+/// Собирает таблицу архива: ColumnView + 7 колонок. Границы колонок тянутся
+/// мышью; «Отчёт» — эластичная, без фиксированной ширины: полное название
+/// видно целиком, когда окно достаточно широкое.
+fn make_archive_table(store: gtk4::gio::ListStore) -> gtk4::ColumnView {
+    let selection = gtk4::NoSelection::new(Some(store));
+    let view = gtk4::ColumnView::new(Some(selection));
+
+    // Профиль: полное имя — в подсказке (колонка узкая, имя обрезается).
+    view.append_column(&text_column("Профиль", Some(150), false, |e| {
+        (e.profile_name.clone(), Some(e.profile_name.clone()))
+    }));
+    // Отчёт: без фиксированной ширины + expand — лишняя ширина окна уходит
+    // сюда; полное название + технический type_id — в подсказке.
+    view.append_column(&text_column("Отчёт", None, true, |e| {
+        let name = e
+            .report_display_name
+            .clone()
+            .unwrap_or_else(|| e.report_type.clone());
+        let tip = format!("{name}\n({})", e.report_type);
+        (name, Some(tip))
+    }));
+    view.append_column(&text_column("Период", Some(95), false, |e| {
+        (
+            e.period
+                .as_deref()
+                .map_or_else(|| "—".to_string(), super::disp_date),
+            None,
+        )
+    }));
+    view.append_column(&format_column());
+    view.append_column(&text_column("Размер", Some(90), false, |e| {
+        (human_size(u64::try_from(e.file_size).unwrap_or(0)), None)
+    }));
+    view.append_column(&text_column("Скачан", Some(150), false, |e| {
+        (
+            e.downloaded_at
+                .with_timezone(&chrono::Local)
+                .format("%d.%m.%Y %H:%M")
+                .to_string(),
+            None,
+        )
+    }));
+    view.append_column(&actions_column());
+    view
 }
 
 /// «Экспорт»: сохранить текущий список Архива в xlsx или CSV (диалог Save;
@@ -825,15 +814,6 @@ fn ext_icon_resource(ext: &str) -> &'static str {
         "zip" | "rar" | "7z" | "gz" | "tar" => "/org/mdwf/icons/file-zip.png",
         _ => "/org/mdwf/icons/file-generic.png",
     }
-}
-
-/// Вертикальная линия-разделитель колонок Архива (высотой в строку):
-/// сетка таблицы «рамками» — горизонтали даёт ListBox (show_separators),
-/// вертикали — эти сепараторы между ячейками (заголовок и строки alike).
-fn vsep() -> gtk4::Separator {
-    let s = gtk4::Separator::new(gtk4::Orientation::Vertical);
-    s.set_valign(gtk4::Align::Fill);
-    s
 }
 
 /// Человекочитаемый размер («1,2 МБ», «456 Б»). Используется и экспортом
