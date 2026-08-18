@@ -89,7 +89,7 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
                 let saved_paths =
                     persist(ctx, &files, &profile.provider_id, &args.profile, report_type, &params)?;
                 println!("  скачано файлов: {}; записано: {}", files.len(), saved_paths.len());
-                journal_write(
+                crate::commands::journal_write_report(
                     ctx,
                     "success",
                     &origin,
@@ -99,6 +99,8 @@ pub async fn run(ctx: &Context, args: DownloadArgs) -> Result<ExitCode> {
                         mdwf_core::journal::paths_suffix(&saved_paths),
                         note_suffix
                     ),
+                    saved_paths.first().map_or("", |s| s.as_str()),
+                    report_type,
                 );
                 total += saved_paths.len();
             }

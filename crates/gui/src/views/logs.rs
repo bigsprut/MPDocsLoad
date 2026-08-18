@@ -184,8 +184,62 @@ fn make_row(entry: &LogEntry) -> ListBoxRow {
         box_.append(&origin);
     }
     box_.append(&msg);
+    // Действия над записью (как в «Архиве»): 📂 открыть файл, 📁 папку, 🔗
+    // раздел ЛК отчёта. Только у записей выгрузок (есть file_path/report_type).
+    if !entry.file_path.is_empty() || entry.cabinet_url.is_some() {
+        let actions = GtkBox::new(Orientation::Horizontal, 2);
+        actions.set_valign(gtk4::Align::Center);
+        if !entry.file_path.is_empty() {
+            let path = entry.file_path.clone();
+            let open_btn = super::icon_only_button("document-open-symbolic", "Открыть файл");
+            open_btn.set_tooltip_text(Some("Открыть файл"));
+            open_btn.connect_clicked(move |_| {
+                if let Err(e) = crate::views::open_file(&path) {
+                    log_action_error(&format!("Не удалось открыть файл: {e}"));
+                }
+            });
+            actions.append(&open_btn);
+
+            let path = entry.file_path.clone();
+            let folder_btn = super::icon_only_button("folder-symbolic", "Открыть папку");
+            folder_btn.set_tooltip_text(Some("Открыть папку с файлом"));
+            folder_btn.connect_clicked(move |_| {
+                let folder = std::path::Path::new(&path)
+                    .parent()
+                    .map_or_else(|| path.clone(), |p| p.to_string_lossy().to_string());
+                if let Err(e) = crate::views::open_folder(&folder) {
+                    log_action_error(&format!("Не удалось открыть папку: {e}"));
+                }
+            });
+            actions.append(&folder_btn);
+        }
+        if let Some(url) = entry.cabinet_url.clone() {
+            let lk_btn = super::icon_only_button("insert-link-symbolic", "Открыть в ЛК");
+            lk_btn.set_tooltip_text(Some("Открыть раздел этого отчёта в личном кабинете"));
+            lk_btn.connect_clicked(move |_| {
+                if let Err(e) = super::open_url(&url) {
+                    eprintln!("open_url: {e}");
+                    super::show_url_error(&url, &e);
+                }
+            });
+            actions.append(&lk_btn);
+        }
+        box_.append(&actions);
+    }
     row.set_child(Some(&box_));
     row
+}
+
+/// Диалог ошибки действия из Журнала (файл/папка не открылись).
+fn log_action_error(text: &str) {
+    use libadwaita as adw;
+    use libadwaita::prelude::MessageDialogExt;
+    let dialog = adw::MessageDialog::builder()
+        .heading("Не удалось открыть")
+        .body(text)
+        .build();
+    dialog.add_response("ok", "Понятно");
+    dialog.present();
 }
 
 /// Контекстная помощь вкладки «Журнал» (кнопка «?» в заголовке).

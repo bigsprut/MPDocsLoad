@@ -21,11 +21,29 @@ pub(crate) fn journal_write(
     origin: &mdwf_core::LogOrigin,
     message: &str,
 ) {
+    journal_write_report(ctx, kind, origin, message, "", "");
+}
+
+/// Запись журнала с контекстом выгрузки (кнопки действий в Журнале GUI:
+/// «открыть файл/папку», ссылка ЛК) — первый файл + type_id отчёта.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn journal_write_report(
+    ctx: &Context,
+    kind: &str,
+    origin: &mdwf_core::LogOrigin,
+    message: &str,
+    file_path: &str,
+    report_type: &str,
+) {
     use chrono::Utc;
-    if let Err(e) =
-        ctx.catalog
-            .add_journal_entry(Utc::now(), kind, &origin.as_str(), message)
-    {
+    if let Err(e) = ctx.catalog.add_journal_entry(
+        Utc::now(),
+        kind,
+        &origin.as_str(),
+        message,
+        file_path,
+        report_type,
+    ) {
         eprintln!("журнал: не удалось записать в БД: {e}");
     }
 }

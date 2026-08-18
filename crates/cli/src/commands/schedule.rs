@@ -245,7 +245,7 @@ impl JobExecutor for CliJobExecutor<'_> {
                         format!(" — внимание: {note}")
                     };
                     total_files += saved_paths.len();
-                    journal_write(
+                    crate::commands::journal_write_report(
                         self.ctx,
                         "success",
                         &origin,
@@ -255,6 +255,8 @@ impl JobExecutor for CliJobExecutor<'_> {
                             mdwf_core::journal::paths_suffix(&saved_paths),
                             note_suffix
                         ),
+                        saved_paths.first().map_or("", |s| s.as_str()),
+                        report_type,
                     );
                 }
                 Err(e) => {

@@ -352,13 +352,20 @@ impl LogKind {
 /// Одна запись журнала приложения. `created_at` — момент события в UTC;
 /// отображается локальным временем (сегодня — «ЧЧ:ММ:СС», старше — с датой).
 /// `origin` — источник события (mdwf_core::LogOrigin), '' у старых записей.
-/// Персистится в SQLite (таблица `journal`, кап [`mdwf_storage::JOURNAL_KEEP`]).
+/// `file_path`/`report_type` — контекст события (кнопки «открыть файл/папка/
+/// ссылка ЛК» в Журнале), '' у событий без файла; `cabinet_url` — резолвится
+/// из реестра провайдеров при загрузке/создании (в БД не хранится — ссылки
+/// меняются со временем). Персистится в SQLite (таблица `journal`, кап
+/// [`mdwf_storage::JOURNAL_KEEP`]).
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub kind: LogKind,
     pub origin: String,
     pub message: String,
+    pub file_path: String,
+    pub report_type: String,
+    pub cabinet_url: Option<String>,
 }
 
 /// Краткая информация о провайдере для UI.

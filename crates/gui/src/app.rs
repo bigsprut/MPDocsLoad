@@ -719,6 +719,8 @@ pub(crate) async fn run_command_loop(
                 match result {
                     Ok(rows) => {
                         // Свежие первыми (как отдаёт БД); битые created_at пропускаем.
+                        // Ссылки ЛК резолвим из реестра на лету (не персистим).
+                        let um = cabinet_url_map(&domain);
                         let entries: Vec<crate::channels::LogEntry> = rows
                             .into_iter()
                             .filter_map(|r| {
@@ -729,6 +731,13 @@ pub(crate) async fn run_command_loop(
                                         kind: crate::channels::LogKind::from_db_code(&r.kind),
                                         origin: r.origin,
                                         message: r.message,
+                                        cabinet_url: if r.report_type.is_empty() {
+                                            None
+                                        } else {
+                                            um.get(&r.report_type).cloned()
+                                        },
+                                        file_path: r.file_path,
+                                        report_type: r.report_type,
                                     })
                             })
                             .collect();
@@ -1151,7 +1160,8 @@ async fn do_download(
             };
             // Путь к файлу(ам) — в само сообщение журнала: фоновые запуски
             // расписаний видно только по журналу, путь сразу отвечает «куда».
-            log_event(
+            // Контекст (первый файл + отчёт) — для кнопок действий в Журнале.
+            log_event_report(
                 domain,
                 origin,
                 fwd,
@@ -1162,6 +1172,8 @@ async fn do_download(
                     mdwf_core::journal::paths_suffix(&paths),
                     note_suffix
                 ),
+                paths.first().map_or("", |s| s.as_str()),
+                report_type,
             );
             Ok(crate::channels::DownloadResult {
                 files,
@@ -1182,6 +1194,7 @@ async fn do_download(
 }
 
 /// Шлёт запись в журнал (вкладка «Журнал») с локальной меткой времени ЧЧ:ММ:СС.
+/// Событие без контекста файла (запуски, ошибки, расписания).
 fn log_event(
     domain: &Domain,
     origin: &mdwf_core::LogOrigin,
@@ -1189,14 +1202,41 @@ fn log_event(
     kind: crate::channels::LogKind,
     message: impl Into<String>,
 ) {
+    log_event_report(domain, origin, fwd, kind, message, "", "");
+}
+
+/// Запись журнала с контекстом выгрузки: `file_path` (первый файл — кнопки
+/// «открыть файл/папку») и `report_type` (резолв ссылки ЛК — кнопка перехода
+/// в кабинет, как в «Отчётах»/«Архиве»).
+fn log_event_report(
+    domain: &Domain,
+    origin: &mdwf_core::LogOrigin,
+    fwd: &EventForwarder,
+    kind: crate::channels::LogKind,
+    message: impl Into<String>,
+    file_path: &str,
+    report_type: &str,
+) {
     let message = message.into();
+    // Ссылка ЛК не персистится (меняется со временем) — резолвим на выдаче.
+    let cabinet_url = if report_type.is_empty() {
+        None
+    } else {
+        cabinet_url_map(domain).get(report_type).cloned()
+    };
     // Персист: журнал переживает перезапуск (таблица `journal`, кап 500),
     // вместе с источником события (вручную/CLI/расписание).
     // Best-effort — сбой записи не должен глушить UI-событие.
     let created_at = chrono::Utc::now();
     if let Some(cat) = domain.catalog.read().as_ref() {
-        if let Err(e) = cat.add_journal_entry(created_at, kind.as_str(), &origin.as_str(), &message)
-        {
+        if let Err(e) = cat.add_journal_entry(
+            created_at,
+            kind.as_str(),
+            &origin.as_str(),
+            &message,
+            file_path,
+            report_type,
+        ) {
             tracing::warn!(error = %e, "журнал: не удалось записать в БД");
         }
     }
@@ -1205,6 +1245,9 @@ fn log_event(
         kind,
         origin: origin.as_str(),
         message,
+        file_path: file_path.to_string(),
+        report_type: report_type.to_string(),
+        cabinet_url,
     }));
 }
 

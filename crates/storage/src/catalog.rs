@@ -16,7 +16,7 @@ use mdwf_core::{CoreError, CoreResult, Profile};
 /// v3: добавлена колонка `downloads.document_id` (значок «уже загружен»).
 /// v4: добавлена колонка `downloads.document_date` (дата документа WB для
 /// фильтра периода Архива).
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Кап журнала событий (в БД и в ленте «Журнала» GUI): храним последние N записей.
 pub const JOURNAL_KEEP: usize = 500;
@@ -190,6 +190,8 @@ pub struct SavedFilter {
 /// Запись журнала событий приложения (вкладка «Журнал» GUI).
 /// `created_at` — RFC3339 UTC (парсится при загрузке в GUI).
 /// `origin` — источник события (см. LogOrigin в mdwf-core), '' для старых строк.
+/// `file_path`/`report_type` — контекст действия (кнопки «открыть файл/папку/
+/// ссылка ЛК» в Журнале), '' у записей без файла (v7; старые строки — '').
 #[derive(Debug, Clone)]
 pub struct JournalRow {
     pub id: i64,
@@ -197,29 +199,49 @@ pub struct JournalRow {
     pub kind: String,
     pub origin: String,
     pub message: String,
+    pub file_path: String,
+    pub report_type: String,
 }
 
-/// Idempotent миграция v6: колонка `journal.origin` (источник события журнала)
-/// для БД, где таблица journal создана схемой v5 (без origin).
-fn migrate_add_journal_origin(conn: &Connection) -> CoreResult<()> {
+/// Idempotent-добавление колонки, если её нет в таблице (паттерн миграций
+/// journal.origin/downloads.*).
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> CoreResult<()> {
     let has_col: bool = conn
-        .prepare("PRAGMA table_info(journal)")
+        .prepare(&format!("PRAGMA table_info({table})"))
         .and_then(|mut stmt| {
             let rows = stmt.query_map([], |row| {
                 let name: String = row.get(1)?;
                 Ok(name)
             })?;
-            Ok(rows.filter_map(Result::ok).any(|name| name == "origin"))
+            Ok(rows.filter_map(Result::ok).any(|name| name == column))
         })
         .map_err(map_sqlite_err)?;
     if !has_col {
         conn.execute(
-            "ALTER TABLE journal ADD COLUMN origin TEXT NOT NULL DEFAULT ''",
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
             [],
         )
         .map_err(map_sqlite_err)?;
     }
     Ok(())
+}
+
+/// Idempotent миграция v6: колонка `journal.origin` (источник события журнала)
+/// для БД, где таблица journal создана схемой v5 (без origin).
+fn migrate_add_journal_origin(conn: &Connection) -> CoreResult<()> {
+    add_column_if_missing(conn, "journal", "origin", "TEXT NOT NULL DEFAULT ''")
+}
+
+/// Idempotent миграция v7: колонки `journal.file_path`/`journal.report_type` —
+/// контекст события для кнопок действий в Журнале (открыть файл/папку/ЛК).
+fn migrate_add_journal_actions(conn: &Connection) -> CoreResult<()> {
+    add_column_if_missing(conn, "journal", "file_path", "TEXT NOT NULL DEFAULT ''")?;
+    add_column_if_missing(conn, "journal", "report_type", "TEXT NOT NULL DEFAULT ''")
 }
 
 /// Каталог на SQLite. Потокобезопасный через Mutex (rusqlite::Connection не Sync).
@@ -330,6 +352,9 @@ impl Catalog {
         migrate_add_document_date(&conn)?;
         // Миграция v6: колонка journal.origin (источник события журнала).
         migrate_add_journal_origin(&conn)?;
+        // Миграция v7: колонки journal.file_path/report_type (кнопки действий
+        // в Журнале: открыть файл/папку/ссылку ЛК).
+        migrate_add_journal_actions(&conn)?;
         if ver < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(map_sqlite_err)?;
@@ -862,17 +887,29 @@ impl Catalog {
     /// Добавляет запись журнала (вкладка «Журнал» GUI) и держит таблицу
     /// в пределах [`JOURNAL_KEEP`] последних записей (кап, как в ленте UI).
     /// `origin` — источник события (журнал фиксирует, ПОЧЕМУ оно произошло).
+    /// `file_path`/`report_type` — контекст для кнопок действий в Журнале
+    /// ('' у событий без файла).
     pub fn add_journal_entry(
         &self,
         created_at: DateTime<Utc>,
         kind: &str,
         origin: &str,
         message: &str,
+        file_path: &str,
+        report_type: &str,
     ) -> CoreResult<()> {
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT INTO journal (created_at, kind, origin, message) VALUES (?1, ?2, ?3, ?4)",
-            params![created_at.to_rfc3339(), kind, origin, message],
+            "INSERT INTO journal (created_at, kind, origin, message, file_path, report_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                created_at.to_rfc3339(),
+                kind,
+                origin,
+                message,
+                file_path,
+                report_type
+            ],
         )
         .map_err(map_sqlite_err)?;
         conn.execute(
@@ -889,7 +926,8 @@ impl Catalog {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id, created_at, kind, COALESCE(origin, ''), message
+                "SELECT id, created_at, kind, COALESCE(origin, ''), message,
+                        COALESCE(file_path, ''), COALESCE(report_type, '')
                  FROM journal ORDER BY id DESC LIMIT ?1",
             )
             .map_err(map_sqlite_err)?;
@@ -901,6 +939,8 @@ impl Catalog {
                     kind: row.get(2)?,
                     origin: row.get(3)?,
                     message: row.get(4)?,
+                    file_path: row.get(5)?,
+                    report_type: row.get(6)?,
                 })
             })
             .map_err(map_sqlite_err)?;
@@ -1485,8 +1525,15 @@ mod tests {
         for i in 0..3 {
             let kind = if i % 2 == 0 { "info" } else { "success" };
             let origin = if i == 0 { "" } else { "вручную (GUI)" };
-            cat.add_journal_entry(t0, kind, origin, &format!("событие {i}"))
-                .unwrap();
+            cat.add_journal_entry(
+                t0,
+                kind,
+                origin,
+                &format!("событие {i}"),
+                if i == 1 { "D:/файл.xlsx" } else { "" },
+                if i == 1 { "ozon.balance" } else { "" },
+            )
+            .unwrap();
         }
         let rows = cat.list_journal(10).unwrap();
         assert_eq!(rows.len(), 3);
@@ -1495,6 +1542,12 @@ mod tests {
         assert_eq!(rows[0].kind, "info");
         assert_eq!(rows[0].origin, "вручную (GUI)");
         assert_eq!(rows[2].origin, "");
+        // Контекст действий (v7): у записи 1 есть файл/отчёт, у прочих — пусто.
+        let with_ctx = &rows[2 - 1];
+        assert_eq!(with_ctx.file_path, "D:/файл.xlsx");
+        assert_eq!(with_ctx.report_type, "ozon.balance");
+        assert_eq!(rows[0].file_path, "");
+        assert_eq!(rows[0].report_type, "");
         // created_at хранится RFC3339 и парсится обратно.
         let parsed = DateTime::parse_from_rfc3339(&rows[0].created_at);
         assert!(parsed.is_ok());
@@ -1513,7 +1566,8 @@ mod tests {
         let t0 = Utc::now();
         // 600 записей > капа 500 — остаются последние 500.
         for i in 0..600 {
-            cat.add_journal_entry(t0, "info", "CLI", &format!("e{i}")).unwrap();
+            cat.add_journal_entry(t0, "info", "CLI", &format!("e{i}"), "", "")
+                .unwrap();
         }
         let rows = cat.list_journal(1000).unwrap();
         assert_eq!(rows.len(), JOURNAL_KEEP);
