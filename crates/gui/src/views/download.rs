@@ -320,6 +320,7 @@ pub fn build(cs: &CommandSender) -> GtkBox {
         if !url.is_empty() {
             if let Err(e) = super::open_url(&url) {
                 eprintln!("open_url: {e}");
+                super::show_url_error(&url, &e);
             }
         }
     });

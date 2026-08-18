@@ -309,13 +309,81 @@ pub(crate) fn make_date_picker(entry: &gtk4::Entry, date_format: &str) -> gtk4::
     menu_btn
 }
 
-/// Открывает URL в браузере по ассоциации системы (кнопки «Открыть в ЛК»).
+/// Открывает URL в браузере по умолчанию (кнопки «Открыть в ЛК»).
+///
+/// Windows: `cmd /C start "" "<url>"` — тот же нативный путь, что
+/// open_file/open_folder. Прежний вариант только через
+/// `gio::AppInfo::launch_default_for_uri` на части машин не резолвил
+/// ассоциацию браузера из реестра и молча ничего не открывал (баг на
+/// клиентской машине; на дев-машине ассоциация другая — потому работало).
+/// URL квотируется явно через `raw_arg`: ссылки содержат `&`, без кавычек
+/// cmd разрезает их на команды, а std::process квотирует только аргументы
+/// с пробелами. Если cmd недоступен — запасной путь через gio.
 pub(crate) fn open_url(url: &str) -> Result<(), String> {
-    gtk4::gio::AppInfo::launch_default_for_uri(
-        url,
-        None::<&gtk4::gio::AppLaunchContext>,
-    )
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // 0x0800_0000 = CREATE_NO_WINDOW: не мигать консолью у GUI-приложения.
+        let spawned = std::process::Command::new("cmd")
+            .creation_flags(0x0800_0000)
+            .raw_arg("/C")
+            .raw_arg("start")
+            .raw_arg("\"\"")
+            .raw_arg(format!("\"{url}\""))
+            .spawn()
+            .and_then(|mut child| child.wait());
+        match spawned {
+            Ok(st) if st.success() => Ok(()),
+            cmd_err => {
+                let gio = gtk4::gio::AppInfo::launch_default_for_uri(
+                    url,
+                    None::<&gtk4::gio::AppLaunchContext>,
+                );
+                match gio {
+                    Ok(()) => Ok(()),
+                    Err(gio_err) => {
+                        let detail = match cmd_err {
+                            Ok(st) => format!("start завершился с кодом {}", st.code().unwrap_or(-1)),
+                            Err(ref e) => e.to_string(),
+                        };
+                        Err(format!("запуск браузера не удался ({detail}; gio: {gio_err})"))
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        gtk4::gio::AppInfo::launch_default_for_uri(
+            url,
+            None::<&gtk4::gio::AppLaunchContext>,
+        )
         .map_err(|e| e.to_string())
+    }
+}
+
+/// Диалог ошибки открытия ссылки: причина + кнопка «Копировать ссылку»
+/// (браузер мог не запуститься — ссылку можно открыть вручную).
+pub(crate) fn show_url_error(url: &str, err: &str) {
+    use libadwaita as adw;
+    use libadwaita::prelude::MessageDialogExt;
+    let dialog = adw::MessageDialog::builder()
+        .heading("Не удалось открыть ссылку")
+        .body(format!(
+            "{err}.\n\nМожно скопировать ссылку и открыть её в браузере вручную."
+        ))
+        .build();
+    dialog.add_response("close", "Закрыть");
+    dialog.add_response("copy", "Копировать ссылку");
+    let u = url.to_string();
+    dialog.connect_response(None, move |_dlg, response: &str| {
+        if response == "copy" {
+            if let Some(d) = gtk4::gdk::Display::default() {
+                d.clipboard().set_text(&u);
+            }
+        }
+    });
+    dialog.present();
 }
 
 /// Парсит текст из Entry в glib::DateTime для предустановки календаря.

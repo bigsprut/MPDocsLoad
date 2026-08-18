@@ -196,6 +196,7 @@ pub fn on_reports_loaded(res: &Result<Vec<ReportInfo>, String>) {
                         lk_btn.connect_clicked(move |_| {
                             if let Err(e) = super::open_url(&url) {
                                 eprintln!("open_url: {e}");
+                                super::show_url_error(&url, &e);
                             }
                         });
                     }
