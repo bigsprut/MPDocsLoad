@@ -174,7 +174,7 @@ static REPORT_DEFS: &[ReportDef] = &[
         display_name: "Отчёт о выкупленных товарах",
         category: ReportCategory::Finance,
         period_kind: PeriodKind::Range,
-        description: "Отчёт о выкупленных товарах за период (ЕАЭС, диапазон ≤31 дня).",
+        description: "Отчёт о выкупленных товарах за период (диапазон ≤31 дня).",
         cabinet: Some("Финансы → Документы → Выкупы маркетплейсом"),
         url: Some("https://seller.ozon.ru/app/finances/documents?type=marketplaceBuyout"),
         params: DefParams::DateRange,
