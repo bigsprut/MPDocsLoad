@@ -3,7 +3,7 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/), версионирование —
 SemVer. Подробная история коммитов — `PROJECT_STATUS.md` §6.
 
-## [Unreleased] — станет 1.6.0
+## [1.6.0] — 2026-08-18
 
 ### Добавлено
 
