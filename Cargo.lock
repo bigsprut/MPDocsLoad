@@ -2045,6 +2045,7 @@ dependencies = [
  "mdwf-storage",
  "mdwf-test-provider",
  "parking_lot",
+ "reqwest",
  "rust_xlsxwriter",
  "serde",
  "serde_json",

@@ -82,7 +82,8 @@ struct EnsureProfile {
 struct Step {
     /// Команда: load_providers | load_profiles | load_reports | select_shop |
     /// download | check_profile | load_journal | clear_journal | list_archive |
-    /// list_schedules | add_schedule | delete_schedule | run_schedule_now.
+    /// list_schedules | add_schedule | delete_schedule | run_schedule_now |
+    /// check_updates.
     cmd: String,
     #[serde(default)]
     provider: Option<String>,
@@ -104,6 +105,9 @@ struct Step {
     /// За какой месяц выгружает расписание (add_schedule; default 0).
     #[serde(default)]
     period_offset: Option<i32>,
+    /// Ручная проверка обновлений (check_updates; default true).
+    #[serde(default)]
+    manual: Option<bool>,
     /// Выбранные документы для Browsable-отчётов (download; WB serviceName и пр.).
     #[serde(default)]
     documents: Vec<DocSelStep>,
@@ -440,6 +444,9 @@ fn build_command(step: &Step) -> Result<UiCommand> {
         }
         "load_journal" => Ok(UiCommand::LoadJournal),
         "clear_journal" => Ok(UiCommand::ClearJournal),
+        "check_updates" => Ok(UiCommand::CheckUpdates {
+            manual: step.manual.unwrap_or(true),
+        }),
         "list_archive" => Ok(UiCommand::ListArchive {
             profile_name: None,
             report_type: None,
@@ -489,6 +496,7 @@ fn event_kind(ev: &UiEvent) -> &'static str {
         UiEvent::Log(_) => "Log",
         UiEvent::JournalLoaded(_) => "JournalLoaded",
         UiEvent::JournalCleared => "JournalCleared",
+        UiEvent::UpdatesChecked { .. } => "UpdatesChecked",
         UiEvent::SchedulesListed(_) => "SchedulesListed",
         UiEvent::AutostartChanged(_) => "AutostartChanged",
         UiEvent::WinSchedulerChanged(_) => "WinSchedulerChanged",
@@ -558,6 +566,14 @@ fn event_summary(ev: &UiEvent) -> String {
         UiEvent::Log(e) => format!("[{}] {}", e.origin, e.message),
         UiEvent::JournalLoaded(v) => format!("{} записей из БД", v.len()),
         UiEvent::JournalCleared => "журнал очищен".into(),
+        UiEvent::UpdatesChecked { manual, result } => format!(
+            "manual={manual}, {}",
+            match result {
+                Ok(Some(i)) => format!("новая версия {} (текущая {})", i.latest, i.current),
+                Ok(None) => "версия актуальна".into(),
+                Err(e) => format!("ошибка: {e}"),
+            }
+        ),
         UiEvent::SchedulesListed(r) => match r {
             Ok(v) => format!("ok: {} расписаний", v.len()),
             Err(e) => format!("err: {e}"),

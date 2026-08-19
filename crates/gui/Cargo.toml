@@ -42,6 +42,8 @@ chrono.workspace = true
 rust_xlsxwriter.workspace = true
 # Чтение xlsx для склейки месячных выгрузок в один файл (кнопка «Склеить…»).
 calamine.workspace = true
+# Проверка обновлений через GitHub Releases API (публичное репо, анонимно).
+reqwest.workspace = true
 # Named mutex (Windows) / lock file (Unix) для single-instance + AppMutex Inno.
 # Внутри — CreateMutexW (safe-обёртка; крейт forbid(unsafe_code), напрямую нельзя).
 # Имя mutex = SINGLE_INSTANCE_NAME в main.rs = AppMutex в installer/mdwf.iss.

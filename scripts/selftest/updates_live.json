@@ -1,0 +1,12 @@
+{
+  "name": "updates_live",
+  "isolated": true,
+  "steps": [
+    {
+      "cmd": "check_updates",
+      "manual": true,
+      "wait_event": "UpdatesChecked",
+      "timeout_ms": 20000
+    }
+  ]
+}

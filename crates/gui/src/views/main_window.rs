@@ -300,6 +300,7 @@ pub fn build_and_present(
     // (тот же путь, что и отладочный MDWF_START_VIEW; прежний способ через
     // поиск Stack в дереве не срабатывал — пункты «не работали»).
     let menu = gtk4::gio::Menu::new();
+    menu.append(Some("Проверить обновления"), Some("app.updates"));
     menu.append(Some("Справка"), Some("app.help"));
     menu.append(Some("О программе"), Some("app.about"));
     menu.append(Some("Выход"), Some("app.quit"));
@@ -321,8 +322,8 @@ pub fn build_and_present(
     toolbar.set_content(Some(&root));
     toolbar.add_bottom_bar(&bottom);
 
-    // Действия приложения: about, quit, help.
-    setup_app_actions(app, &sidebar, &rows_by_name, &window);
+    // Действия приложения: updates, about, quit, help.
+    setup_app_actions(app, cs, &sidebar, &rows_by_name, &window);
 
     // Цикл обработки событий UI: читаем из async_channel receiver в main context.
     {
@@ -346,18 +347,29 @@ pub fn build_and_present(
     window.present();
 }
 
-/// Регистрирует действия приложения `app.about`, `app.help`, `app.quit`.
-/// Переключение вкладок — ВЫБОРОМ СТРОКИ SIDEBAR (проверенный путь:
+/// Регистрирует действия приложения `app.updates`, `app.about`, `app.help`,
+/// `app.quit`. Переключение вкладок — ВЫБОРОМ СТРОКИ SIDEBAR (проверенный путь:
 /// он же используется хуком MDWF_START_VIEW); прежний вариант с поиском
 /// Stack и set_visible_child_name из меню не срабатывал.
 fn setup_app_actions(
     app: &adw::Application,
+    cs: &crate::channels::CommandSender,
     sidebar: &ListBox,
     rows_by_name: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<String, ListBoxRow>>,
     >,
     window: &adw::ApplicationWindow,
 ) {
+    // Действие «updates»: проверить обновления вручную (GitHub Releases).
+    let updates_action = gtk4::gio::SimpleAction::new("updates", None);
+    {
+        let cs = cs.clone();
+        updates_action.connect_activate(move |_, _| {
+            cs.send(crate::channels::UiCommand::CheckUpdates { manual: true });
+        });
+    }
+    app.add_action(&updates_action);
+
     // Действие «quit»: закрывает окно и завершает приложение.
     let quit_action = gtk4::gio::SimpleAction::new("quit", None);
     {
@@ -407,6 +419,27 @@ fn dispatch_event(
     match event {
         UiEvent::Notify(msg) => {
             status.set_text(msg);
+        }
+        UiEvent::UpdatesChecked { manual, result } => {
+            match result {
+                Ok(Some(info)) => show_update_dialog(info),
+                Ok(None) => {
+                    if *manual {
+                        status.set_text(&format!(
+                            "Установлена последняя версия ({}).",
+                            info_version()
+                        ));
+                    }
+                    // Автопроверка без новой версии — молча.
+                }
+                Err(e) => {
+                    if *manual {
+                        status.set_text(&format!("Не удалось проверить обновления: {e}"));
+                    } else {
+                        tracing::warn!(error = %e, "автопроверка обновлений не удалась");
+                    }
+                }
+            }
         }
         UiEvent::Log(entry) => {
             crate::views::logs::append(entry.clone());
@@ -599,4 +632,37 @@ fn level_str(level: &mdwf_core::HealthLevel) -> &'static str {
         mdwf_core::HealthLevel::Degraded => "Degraded",
         mdwf_core::HealthLevel::Down => "Down",
     }
+}
+
+/// Текущая версия приложения (для сообщений об обновлениях).
+fn info_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Диалог «доступна новая версия»: «Открыть страницу скачивания» — браузер
+/// через нативный open_url (тот же механизм, что кнопки «Открыть в ЛК»).
+fn show_update_dialog(info: &crate::channels::UpdateInfo) {
+    use libadwaita as adw;
+    use libadwaita::prelude::MessageDialogExt;
+    let dialog = adw::MessageDialog::builder()
+        .heading("Доступна новая версия")
+        .body(format!(
+            "Выпущена версия {} (у вас — {}).\nНа странице релиза можно скачать новый установщик.",
+            info.latest.trim_start_matches('v'),
+            info.current
+        ))
+        .build();
+    dialog.add_response("later", "Позже");
+    dialog.add_response("open", "Открыть страницу скачивания");
+    dialog.set_response_appearance("open", adw::ResponseAppearance::Suggested);
+    let url = info.url.clone();
+    dialog.connect_response(None, move |_dlg, response: &str| {
+        if response == "open" {
+            if let Err(e) = crate::views::open_url(&url) {
+                eprintln!("open_url: {e}");
+                crate::views::show_url_error(&url, &e);
+            }
+        }
+    });
+    dialog.present();
 }

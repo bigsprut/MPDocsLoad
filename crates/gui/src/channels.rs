@@ -186,6 +186,21 @@ pub enum UiCommand {
         file_path: String,
         report_type: String,
     },
+    /// Проверить обновления через GitHub Releases (меню приложения; при
+    /// старте — автоматически). Ответ — UiEvent::UpdatesChecked.
+    CheckUpdates {
+        /// true — запрошено пользователем (показываем итог всегда);
+        /// false — автопроверка при старте (сообщаем только о новой версии).
+        manual: bool,
+    },
+}
+
+/// Сведения о доступном обновлении (GitHub Releases).
+#[derive(Debug, Clone)]
+pub struct UpdateInfo {
+    pub current: String,
+    pub latest: String,
+    pub url: String,
 }
 
 /// Состояние фильтров экрана «Архив» для автосохранения между запусками.
@@ -294,6 +309,13 @@ pub enum UiEvent {
     JournalLoaded(Vec<LogEntry>),
     /// Журнал: очищен (БД + лента).
     JournalCleared,
+    /// Результат проверки обновлений (GitHub Releases): Ok(Some(info)) —
+    /// доступна новая версия, Ok(None) — установлена последняя, Err — сбой
+    /// сети/API. `manual` — пользовательская проверка (показываем итог).
+    UpdatesChecked {
+        manual: bool,
+        result: Result<Option<UpdateInfo>, String>,
+    },
     /// Планировщик: список расписаний (с резолвом имён профиля/отчётов).
     SchedulesListed(Result<Vec<ScheduleView>, String>),
     /// Планировщик: изменился автозапуск с ОС (новое состояние или ошибка).

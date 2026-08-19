@@ -147,6 +147,9 @@ impl App {
             // Журнал: история событий из БД (переживает перезапуск).
             cs.send(UiCommand::LoadJournal);
             cs.send(UiCommand::LoadArchiveState);
+            // Автопроверка обновлений (GitHub Releases, анонимно): при
+            // наличии новой версии — диалог; иначе молча.
+            cs.send(UiCommand::CheckUpdates { manual: false });
         });
 
         Ok(app)
@@ -770,9 +773,75 @@ pub(crate) async fn run_command_loop(
                     &report_type,
                 );
             }
+            UiCommand::CheckUpdates { manual } => {
+                let result = match fetch_latest_release().await {
+                    Ok((latest, url)) => {
+                        let current = env!("CARGO_PKG_VERSION").to_string();
+                        if version_is_newer(&latest, &current) {
+                            Ok(Some(crate::channels::UpdateInfo {
+                                current,
+                                latest,
+                                url,
+                            }))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    Err(e) => Err(e),
+                };
+                fwd.forward(UiEvent::UpdatesChecked { manual, result });
+            }
         }
     }
     warn!("command loop ended");
+}
+
+/// Последний релиз на GitHub (анонимный API — репозиторий публичный).
+/// Возвращает (tag, url страницы релиза). Таймаут короткий: автопроверка
+/// не должна задерживать что-либо.
+async fn fetch_latest_release() -> Result<(String, String), String> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("mdwf/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get("https://api.github.com/repos/bigsprut/MPDocsLoad/releases/latest")
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("сервер ответил HTTP {}", resp.status()));
+    }
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let tag = json["tag_name"]
+        .as_str()
+        .ok_or("в ответе нет tag_name")?
+        .to_string();
+    let url = json["html_url"]
+        .as_str()
+        .unwrap_or("https://github.com/bigsprut/MPDocsLoad/releases/latest")
+        .to_string();
+    Ok((tag, url))
+}
+
+/// «v1.10.3» / «1.9.0» → (1, 10, 3); None — не похоже на версию.
+fn parse_version(s: &str) -> Option<(u64, u64, u64)> {
+    let t = s.trim().trim_start_matches('v');
+    let mut it = t.split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next()?.parse().ok()?;
+    let patch = it.next().unwrap_or("0").parse().unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+/// True, если `latest` строго новее `current` (_semver-тройки_).
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    match (parse_version(latest), parse_version(current)) {
+        (Some(l), Some(c)) => l > c,
+        // Не похоже на версию — не считаем обновлением (защита от мусора).
+        _ => false,
+    }
 }
 
 async fn reload_profiles(domain: &Domain, fwd: &EventForwarder) -> Result<(), ()> {
@@ -1630,5 +1699,27 @@ impl mdwf_core::ProgressCallback for ProgressForwarder {
             fraction: update.fraction,
             message: update.message,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_version, version_is_newer};
+
+    #[test]
+    fn parse_versions_with_prefix_and_defaults() {
+        assert_eq!(parse_version("v1.10.3"), Some((1, 10, 3)));
+        assert_eq!(parse_version("1.9"), Some((1, 9, 0)));
+        assert_eq!(parse_version("x.y.z"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn newer_compares_numerically_not_lexically() {
+        assert!(version_is_newer("v1.10.0", "1.9.9"));
+        assert!(!version_is_newer("v1.6.0", "1.6.0"));
+        assert!(!version_is_newer("v1.5.9", "1.6.0"));
+        // Мусор — не обновление.
+        assert!(!version_is_newer("latest", "1.6.0"));
     }
 }
