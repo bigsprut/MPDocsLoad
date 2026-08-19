@@ -1431,7 +1431,11 @@ pub fn on_download_finished(result: &crate::channels::DownloadResult) {
                 let folder = parent.display().to_string();
                 // Обычный Button (НЕ LinkButton): у LinkButton срабатывает и
                 // авто-открытие URI, и connect_clicked → открывалось 2 проводника.
-                let link = super::icon_button("Открыть папку", "folder-open-symbolic");
+                // folder-symbolic (не folder-open): рядом стоит
+                // document-open-symbolic у «Открыть файл» — две «стрелки
+                // открытия» неразличимы; чистая папка отличима с первого
+                // взгляда и совпадает с иконкой папки в Архиве.
+                let link = super::icon_button("Открыть папку", "folder-symbolic");
                 link.set_has_tooltip(true);
                 link.set_tooltip_text(Some(&folder));
                 link.connect_clicked(move |_| {
