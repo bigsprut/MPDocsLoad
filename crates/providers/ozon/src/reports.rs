@@ -268,10 +268,10 @@ static REPORT_DEFS: &[ReportDef] = &[
     // --- Реестры/документы (async) ---
     ReportDef {
         type_id: "ozon.b2b_sales",
-        display_name: "Продажи юрлицам (PDF)",
+        display_name: "Продажи юрлицам",
         category: ReportCategory::Documents,
         period_kind: PeriodKind::Month,
-        description: "Реестр продаж юрлицам за месяц, PDF (async). Строго месячный.",
+        description: "Реестр продаж юрлицам за месяц (async; формат файла определяет сервер). Строго месячный.",
         cabinet: Some("Финансы → Документы → Продажи юрлицам"),
         url: Some("https://seller.ozon.ru/app/finances/documents?type=b2bSales&tab=salesReports"),
         params: DefParams::DateRange,
