@@ -178,6 +178,14 @@ pub enum UiCommand {
     LoadJournal,
     /// Очистить журнал: БД + лента (кнопка «Очистить»). Ответ — UiEvent::JournalCleared.
     ClearJournal,
+    /// Записать в Журнал событие от имени GUI с контекстом файла/отчёта
+    /// (кнопки действий в записи) — напр., результат «Склеить…» в Архиве.
+    LogCustom {
+        kind: LogKind,
+        message: String,
+        file_path: String,
+        report_type: String,
+    },
 }
 
 /// Состояние фильтров экрана «Архив» для автосохранения между запусками.

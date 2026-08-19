@@ -132,11 +132,16 @@ pub fn build(cs: &CommandSender) -> GtkBox {
     apply_btn.set_tooltip_text(Some("Применить фильтры и обновить список"));
     let export_btn = super::icon_button("Экспорт", "document-save-symbolic");
     export_btn.set_tooltip_text(Some("Сохранить показанный список в Excel или CSV"));
+    let merge_btn = super::icon_button("Склеить…", "emblem-documents-symbolic");
+    merge_btn.set_tooltip_text(Some(
+        "Склеить показанные выгрузки одного отчёта (Excel/CSV) в один файл",
+    ));
     let spacer = GtkBox::new(Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     filters_top.append(&spacer);
     filters_top.append(&apply_btn);
     filters_top.append(&export_btn);
+    filters_top.append(&merge_btn);
 
     // Фильтр по дате — ДВА способа задать интервал (единый источник правды —
     // поля «С:…—…По:» + DATE_RANGE):
@@ -285,6 +290,9 @@ pub fn build(cs: &CommandSender) -> GtkBox {
 
     // «Экспорт»: текущий список → xlsx/CSV через системный диалог Save.
     export_btn.connect_clicked(|_| export_current_list());
+
+    // «Склеить…»: текущая выборка (один отчёт, xlsx/csv) → один Excel.
+    merge_btn.connect_clicked(|_| crate::views::merge::show_dialog());
 
     // Автосохранение фильтров при смене combo. RESTORING защищает от сохранения
     // во время программного set_active при restore сохранённого состояния.
@@ -803,6 +811,21 @@ fn notify(msg: &str) {
     });
 }
 
+/// Текущая выборка Архива (для «Склеить…» — склейка того, что отфильтровано).
+pub(crate) fn current_entries() -> Vec<ArchiveEntry> {
+    ENTRIES.with(|e| e.borrow().clone())
+}
+
+/// Статус Архива из других модулей (merge).
+pub(crate) fn notify_archive(msg: &str) {
+    notify(msg);
+}
+
+/// Sender команд (для записи в Журнал из merge).
+pub(crate) fn cmd_sender() -> Option<CommandSender> {
+    CMD.with(|c| c.borrow().clone())
+}
+
 /// Путь к иконке типа файла в gresource. Регистронезависимо.
 fn ext_icon_resource(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {
@@ -971,5 +994,11 @@ const ARCHIVE_HELP: &[crate::widgets::tab_help::HelpBlock] = &[
     crate::widgets::tab_help::HelpBlock::T(
         "Кнопка «Экспорт» сохраняет показанный (с учётом фильтров) список в таблицу Excel (.xlsx) или CSV. \
          Формат — по расширению имени файла в диалоге; в файле те же колонки, что на экране, плюс путь к каждому файлу.",
+    ),
+    crate::widgets::tab_help::HelpBlock::H("Склейка"),
+    crate::widgets::tab_help::HelpBlock::T(
+        "Кнопка «Склеить…» объединяет показанные выгрузки одного отчёта (Excel/CSV) в один файл: \
+         лист «Данные» — шапка из самого старого файла + строки всех по хронологии, лист «Файлы» — источники. \
+         Сначала установите фильтр «Отчёт» (разные отчёты склеивать нельзя).",
     ),
 ];

@@ -40,6 +40,8 @@ parking_lot.workspace = true
 chrono.workspace = true
 # Экспорт списка Архива в xlsx (кнопка «Экспорт» на вкладке «Архив»).
 rust_xlsxwriter.workspace = true
+# Чтение xlsx для склейки месячных выгрузок в один файл (кнопка «Склеить…»).
+calamine.workspace = true
 # Named mutex (Windows) / lock file (Unix) для single-instance + AppMutex Inno.
 # Внутри — CreateMutexW (safe-обёртка; крейт forbid(unsafe_code), напрямую нельзя).
 # Имя mutex = SINGLE_INSTANCE_NAME в main.rs = AppMutex в installer/mdwf.iss.

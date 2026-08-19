@@ -35,6 +35,7 @@ pub mod download;
 pub mod help;
 pub mod logs;
 pub mod main_window;
+pub mod merge;
 pub mod reports;
 pub mod scheduler;
 pub mod settings;

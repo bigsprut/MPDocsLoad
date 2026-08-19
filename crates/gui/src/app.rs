@@ -754,6 +754,22 @@ pub(crate) async fn run_command_loop(
                 }
                 fwd.forward(UiEvent::JournalCleared);
             }
+            UiCommand::LogCustom {
+                kind,
+                message,
+                file_path,
+                report_type,
+            } => {
+                log_event_report(
+                    &domain,
+                    &mdwf_core::LogOrigin::ManualGui,
+                    &fwd,
+                    kind,
+                    message,
+                    &file_path,
+                    &report_type,
+                );
+            }
         }
     }
     warn!("command loop ended");

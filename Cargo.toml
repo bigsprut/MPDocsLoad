@@ -51,6 +51,9 @@ toml = "0.8"
 
 # --- генерация Excel (.xlsx) для отчётов ---
 rust_xlsxwriter = "0.79"
+# Чтение xlsx (склейка выгрузок в один файл): calamine читает лист как
+# сетку ячеек — не нужно знать схему каждого отчёта.
+calamine = "0.28"
 
 # --- HTTP / сеть ---
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
