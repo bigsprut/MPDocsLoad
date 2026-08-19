@@ -266,10 +266,46 @@ impl Catalog {
         // эксклюзивного лока, и при параллельном открытии каталога вторым
         // процессом (GUI + задача планировщика, параллельные e2e) без
         // ожидания сразу прилетает «database is locked».
-        conn.execute_batch(
-            "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;",
-        )
-        .map_err(map_sqlite_err)?;
+        conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;")
+            .map_err(map_sqlite_err)?;
+        // journal_mode=WAL — ОТДЕЛЬНО и с ретраями: при смене режима SQLite
+        // может вернуть SQLITE_BUSY, НЕ задействуя busy-хэндлер (другой
+        // процесс держит лок в момент открытия). Повторяем с паузой до ~5с —
+        // параллельные e2e-процессы и «GUI + задача планировщика» открываются
+        // спокойно (флэйк CI run 32310572744 — повторный случай урока #68).
+        let is_busy = |e: &rusqlite::Error| {
+            matches!(
+                e,
+                rusqlite::Error::SqliteFailure(code, _)
+                    if code.code == rusqlite::ErrorCode::DatabaseBusy
+            )
+        };
+        let mut last_err = None;
+        let mut opened = false;
+        for attempt in 0..25u32 {
+            match conn.execute_batch("PRAGMA journal_mode=WAL;") {
+                Ok(()) => {
+                    opened = true;
+                    break;
+                }
+                Err(e) if is_busy(&e) => {
+                    if attempt == 0 {
+                        tracing::debug!("каталог: journal_mode занят — ожидаем параллельный процесс");
+                    }
+                    last_err = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Err(e) => return Err(map_sqlite_err(e)),
+            }
+        }
+        if !opened {
+            return Err(map_sqlite_err(last_err.unwrap_or_else(|| {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                    Some("journal_mode=WAL не удался".into()),
+                )
+            })));
+        }
         let cat = Self {
             conn: Arc::new(Mutex::new(conn)),
         };
@@ -1067,6 +1103,41 @@ mod tests {
 
     fn make_cat() -> Catalog {
         Catalog::open_in_memory().expect("open in-memory catalog")
+    }
+
+    /// Параллельное открытие каталога при занятой базе (урок #68, резидуал):
+    /// journal_mode=WAL получает SQLITE_BUSY, пока другой коннект держит
+    /// EXCLUSIVE-лок; Catalog::open обязан пережидать, а не падать.
+    #[test]
+    fn open_retries_journal_mode_while_locked() {
+        let dir = std::env::temp_dir().join(format!("mdwf_open_race_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tempdir");
+        let db = dir.join("race.db");
+        let _ = std::fs::remove_file(&db);
+
+        // Файл в DELETE-режиме: открытие каталога обязано сменить режим.
+        let setup = Connection::open(&db).expect("setup");
+        setup
+            .execute_batch("PRAGMA journal_mode=DELETE; CREATE TABLE t(x);")
+            .expect("prepare");
+
+        // Держим EXCLUSIVE 700мс; параллельный Catalog::open должен подождать.
+        let holder = Connection::open(&db).expect("holder");
+        holder.execute_batch("BEGIN EXCLUSIVE;").expect("lock");
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            holder.execute_batch("COMMIT;").expect("unlock");
+        });
+
+        let start = std::time::Instant::now();
+        let cat = Catalog::open(&db).expect("открылся после ожидания");
+        assert!(
+            start.elapsed() >= std::time::Duration::from_millis(400),
+            "открылся слишком рано — ретраев не было"
+        );
+        drop(cat);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
