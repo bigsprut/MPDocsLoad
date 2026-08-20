@@ -5,9 +5,15 @@
 
 #![cfg(windows)]
 
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 use mdwf_core::{CoreError, CoreResult};
+
+/// CREATE_NO_WINDOW: reg.exe — консольная утилита; из GUI-приложения
+/// (windows-subsystem) каждый вызов без флага мигает консольным окном
+/// (в т.ч. ДВА окна при старте: запрос автозапуска + schtasks).
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const APP_NAME: &str = "MDWF";
@@ -35,6 +41,7 @@ fn current_exe() -> CoreResult<std::path::PathBuf> {
 
 fn reg_add(name: &str, value: &str) -> CoreResult<()> {
     let out = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["add", RUN_KEY, "/v", name, "/t", "REG_SZ", "/d", value, "/f"])
         .output()
         .map_err(|e| CoreError::Internal(format!("reg add: {e}")))?;
@@ -49,6 +56,7 @@ fn reg_add(name: &str, value: &str) -> CoreResult<()> {
 
 fn reg_delete(name: &str) -> CoreResult<()> {
     let out = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["delete", RUN_KEY, "/v", name, "/f"])
         .output()
         .map_err(|e| CoreError::Internal(format!("reg delete: {e}")))?;
@@ -65,6 +73,7 @@ fn reg_delete(name: &str) -> CoreResult<()> {
 
 fn reg_query(name: &str) -> CoreResult<()> {
     let out = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["query", RUN_KEY, "/v", name])
         .output()
         .map_err(|e| CoreError::Internal(format!("reg query: {e}")))?;

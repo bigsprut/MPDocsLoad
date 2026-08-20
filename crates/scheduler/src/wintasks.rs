@@ -9,9 +9,14 @@
 
 #![cfg(windows)]
 
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 use mdwf_core::{CoreError, CoreResult};
+
+/// CREATE_NO_WINDOW: schtasks.exe — консольная утилита; из GUI без флага
+/// мигает консольным окном (запрос состояния при старте — то самое «окно»).
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const TASK_NAME: &str = "MDWF_Scheduler";
 /// Период опроса (минуты). Расписания выполняются с задержкой до POLL_MINUTES.
@@ -24,6 +29,7 @@ pub fn enable_windows_scheduler() -> CoreResult<()> {
     // /TR-действие: "<cli>" schedule run  (exe в кавычках на случай пробелов в пути).
     let action = format!("\"{}\" schedule run --by-task", cli.display());
     let out = Command::new("schtasks")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["/Create", "/TN", TASK_NAME, "/TR"])
         .arg(&action)
         .args(["/SC", "MINUTE", "/MO", &POLL_MINUTES.to_string(), "/F"])
@@ -47,6 +53,7 @@ pub fn disable_windows_scheduler() -> CoreResult<()> {
         return Ok(()); // задачи нет — ничего делать не нужно
     }
     let out = Command::new("schtasks")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["/Delete", "/TN", TASK_NAME, "/F"])
         .output()
         .map_err(|e| CoreError::Internal(format!("schtasks delete: {e}")))?;
@@ -63,6 +70,7 @@ pub fn disable_windows_scheduler() -> CoreResult<()> {
 /// Проверяет, создана ли задача `MDWF_Scheduler`.
 pub fn is_windows_scheduler_enabled() -> bool {
     Command::new("schtasks")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["/Query", "/TN", TASK_NAME])
         .output()
         .is_ok_and(|o| o.status.success())

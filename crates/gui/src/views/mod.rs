@@ -53,8 +53,11 @@ pub(crate) fn open_file(path: &str) -> std::io::Result<()> {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         // cmd /c start "" "<path>" — открывает ассоциированным приложением.
+        // CREATE_NO_WINDOW: у GUI-приложения cmd мигал бы консолью.
         std::process::Command::new("cmd")
+            .creation_flags(0x0800_0000)
             .args(["/C", "start", "", path])
             .spawn()?;
     }
@@ -73,7 +76,10 @@ pub(crate) fn open_file(path: &str) -> std::io::Result<()> {
 pub(crate) fn open_folder(path: &str) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW — без мигания консолью у GUI-приложения.
         std::process::Command::new("cmd")
+            .creation_flags(0x0800_0000)
             .args(["/C", "start", "", path])
             .spawn()?;
     }
