@@ -134,6 +134,28 @@ fn main() -> Result<ExitCode> {
         return Ok(ExitCode::from(u8::from(!pass)));
     }
 
+    // Скрытый фоновый запуск расписаний (--schedule-run): задача Windows
+    // Task Scheduler дёргает mdwf-gui.exe — GUI-subsystem процесс БЕЗ
+    // консоли (консольный mdwf.exe мигал окном при каждом 5-минутном
+    // срабатывании). До single-instance: параллельно с живым GUI легально
+    // (как --self-test); логика — общий CLI-исполнитель (mdwf-cli lib).
+    if std::env::args().any(|a| a == "--schedule-run") {
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,mdwf=debug"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .init();
+        tracing::info!("MDWF скрытый запуск расписаний (v{})", env!("CARGO_PKG_VERSION"));
+        let ctx = mdwf_cli::commands::Context::new()?;
+        let launched = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(mdwf_cli::commands::schedule::run_due_once(&ctx, true))?;
+        tracing::info!("скрытый запуск: выполнено расписаний {launched}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
     // Single-instance + инсталлятор AppMutex: захват named mutex ДО создания
     // adw::Application (иначе gtk::Application-second-instance форвардит activate
     // на «primary» и сразу выходит — при битом single-instance выглядело мёртвым

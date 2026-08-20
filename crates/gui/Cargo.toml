@@ -44,6 +44,10 @@ rust_xlsxwriter.workspace = true
 calamine.workspace = true
 # Проверка обновлений через GitHub Releases API (публичное репо, анонимно).
 reqwest.workspace = true
+# Логика скрытого фонового запуска расписаний (--schedule-run, lib-часть CLI:
+# исполнитель + Context; задача Task Scheduler ходит через GUI-бинарник,
+# чтобы не мигать консолью).
+mdwf-cli.workspace = true
 # Named mutex (Windows) / lock file (Unix) для single-instance + AppMutex Inno.
 # Внутри — CreateMutexW (safe-обёртка; крейт forbid(unsafe_code), напрямую нельзя).
 # Имя mutex = SINGLE_INSTANCE_NAME в main.rs = AppMutex в installer/mdwf.iss.

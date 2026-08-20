@@ -23,11 +23,14 @@ const TASK_NAME: &str = "MDWF_Scheduler";
 const POLL_MINUTES: u32 = 5;
 
 /// Включает фоновый планировщик: создаёт задачу `MDWF_Scheduler`, запускающую
-/// CLI `schedule run` каждые POLL_MINUTES минут. /F — перезапись существующей.
+/// **GUI-бинарник с флагом `--schedule-run`** каждые POLL_MINUTES минут.
+/// GUI-процесс (windows-subsystem) не показывает консоль — консольный
+/// `mdwf.exe schedule run` мигал окном при каждом срабатывании задачи.
+/// /F — перезапись существующей.
 pub fn enable_windows_scheduler() -> CoreResult<()> {
-    let cli = cli_exe_path()?;
-    // /TR-действие: "<cli>" schedule run  (exe в кавычках на случай пробелов в пути).
-    let action = format!("\"{}\" schedule run --by-task", cli.display());
+    let cli = gui_exe_path()?;
+    // /TR-действие: "<gui>" --schedule-run  (exe в кавычках на случай пробелов в пути).
+    let action = format!("\"{}\" --schedule-run", cli.display());
     let out = Command::new("schtasks")
         .creation_flags(CREATE_NO_WINDOW)
         .args(["/Create", "/TN", TASK_NAME, "/TR"])
@@ -76,14 +79,19 @@ pub fn is_windows_scheduler_enabled() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-/// Путь к CLI-бинарнику (`mdwf.exe`) — в той же директории, что текущий exe.
-/// Текущий exe — GUI (`mdwf-gui.exe`) или сам CLI; в обоих случаях сосед `mdwf.exe`.
-fn cli_exe_path() -> CoreResult<std::path::PathBuf> {
+/// Путь к GUI-бинарнику (`mdwf-gui.exe`) — в той же директории, что текущий
+/// exe (в бандле и dev-target оба бинарника соседствуют). Задача планировщика
+/// ходит через него: скрытый режим `--schedule-run` без консольного окна.
+fn gui_exe_path() -> CoreResult<std::path::PathBuf> {
+    sibling_exe("mdwf-gui.exe")
+}
+
+fn sibling_exe(name: &str) -> CoreResult<std::path::PathBuf> {
     let cur = std::env::current_exe().map_err(|e| CoreError::Internal(format!("current_exe: {e}")))?;
     let dir = cur
         .parent()
         .ok_or_else(|| CoreError::Internal("не удалось определить директорию exe".into()))?;
-    Ok(dir.join("mdwf.exe"))
+    Ok(dir.join(name))
 }
 
 #[cfg(test)]
@@ -91,8 +99,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_path_resolves() {
-        assert!(cli_exe_path().is_ok());
+    fn gui_task_path_resolves() {
+        assert!(gui_exe_path().is_ok());
     }
 
     #[test]

@@ -2036,6 +2036,7 @@ dependencies = [
  "glib-build-tools",
  "gtk4",
  "libadwaita",
+ "mdwf-cli",
  "mdwf-config",
  "mdwf-core",
  "mdwf-providers-ozon",

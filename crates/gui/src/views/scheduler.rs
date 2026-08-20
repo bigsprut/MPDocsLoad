@@ -95,7 +95,17 @@ pub fn build(cs: &CommandSender) -> gtk4::Box {
             .build(),
     );
     let win_sw = Switch::builder().halign(Align::End).build();
-    win_sw.set_active(mdwf_scheduler::is_windows_scheduler_enabled());
+    let win_enabled = mdwf_scheduler::is_windows_scheduler_enabled();
+    // Самолечение задачи: версии ≤1.6.0 запускали консольный mdwf.exe
+    // (мигал окном при каждом срабатывании) — переписываем действие на
+    // скрытый GUI-режим (--schedule-run). /F-idempotent, скрыто
+    // (CREATE_NO_WINDOW), выполняется только если задача уже включена.
+    if win_enabled {
+        if let Err(e) = mdwf_scheduler::enable_windows_scheduler() {
+            tracing::warn!(error = %e, "планировщик: не удалось обновить задачу Windows");
+        }
+    }
+    win_sw.set_active(win_enabled);
     win_sw.connect_active_notify(|sw| {
         if RESTORING.with(|r| *r.borrow()) {
             return;

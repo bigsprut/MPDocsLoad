@@ -114,6 +114,7 @@ mdwf-scheduler = { path = "crates/scheduler", version = "1.4.0" }
 mdwf-providers-ozon = { path = "crates/providers/ozon", version = "1.4.0" }
 mdwf-providers-wildberries = { path = "crates/providers/wildberries", version = "1.4.0" }
 mdwf-test-provider = { path = "crates/test-provider", version = "1.4.0" }
+mdwf-cli = { path = "crates/cli", version = "1.7.0" }
 mdwf-config = { path = "crates/config", version = "1.4.0" }
 mdwf-api = { path = "crates/api", version = "1.4.0" }
 

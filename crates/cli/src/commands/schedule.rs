@@ -83,8 +83,7 @@ pub async fn run(ctx: &Context, action: ScheduleCmd) -> Result<ExitCode> {
         }
         ScheduleCmd::Run { by_task } => {
             println!("Запуск просроченных расписаний...");
-            let executor = Arc::new(CliJobExecutor::new(ctx, by_task));
-            let launched = run_due_schedules(&ctx.catalog, executor.as_ref()).await?;
+            let launched = run_due_once(ctx, by_task).await?;
             println!("Выполнено расписаний: {launched}.");
             Ok(ExitCode::Success)
         }
@@ -106,6 +105,18 @@ pub async fn run(ctx: &Context, action: ScheduleCmd) -> Result<ExitCode> {
             Ok(ExitCode::Success)
         }
     }
+}
+
+/// Один цикл запуска просроченных расписаний (`schedule run`). Общая точка
+/// входа для CLI-команды и скрытого режима GUI (`mdwf-gui --schedule-run`,
+/// задача Windows Task Scheduler): подставляет период из `period_offset`,
+/// сохраняет файлы (FileStore + каталог), пишет журнал с источником
+/// «задача Windows» / «запуск из CLI».
+pub async fn run_due_once(ctx: &Context, by_task: bool) -> Result<usize> {
+    let executor = Arc::new(CliJobExecutor::new(ctx, by_task));
+    run_due_schedules(&ctx.catalog, executor.as_ref())
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 /// Исполнитель задач выгрузки для CLI scheduler (`mdwf schedule run` —
